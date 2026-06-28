@@ -1,7 +1,6 @@
 defmodule Hermit.Vpn.PairWorker do
   use GenServer, restart: :transient
   require Logger
-  alias Hermit.Docker.Client, as: DockerClient
 
   @topic "vpn_pairs"
 
@@ -27,7 +26,11 @@ defmodule Hermit.Vpn.PairWorker do
     :started_at,
     :ts_port,
     ts_retry_count: 0,
-    wg_retry_count: 0
+    wg_retry_count: 0,
+    inbound_module: Hermit.Vpn.Inbound.Tailscale,
+    outbound_module: Hermit.Vpn.Outbound.WireGuard,
+    inbound_config: nil,
+    outbound_config: nil
   ]
 
   # --- Client API ---
@@ -154,6 +157,18 @@ defmodule Hermit.Vpn.PairWorker do
         nil ->
           pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
 
+          inbound_mod =
+            case (pair && pair.inbound_type) || "tailscale" do
+              "tailscale" -> Hermit.Vpn.Inbound.Tailscale
+              _ -> Hermit.Vpn.Inbound.Tailscale
+            end
+
+          outbound_mod =
+            case (pair && pair.outbound_type) || "wireguard" do
+              "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+              _ -> Hermit.Vpn.Outbound.WireGuard
+            end
+
           %__MODULE__{
             id: id,
             wg_container_name: "hermit_wg_#{id}",
@@ -179,7 +194,11 @@ defmodule Hermit.Vpn.PairWorker do
             },
             storage_dir: Path.join(get_storage_base_path(), id),
             started_at: pair && pair.started_at,
-            ts_port: nil
+            ts_port: nil,
+            inbound_module: inbound_mod,
+            outbound_module: outbound_mod,
+            inbound_config: pair && pair.inbound_config,
+            outbound_config: pair && pair.outbound_config
           }
 
         pid ->
@@ -188,6 +207,18 @@ defmodule Hermit.Vpn.PairWorker do
           catch
             _, _ ->
               pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
+
+              inbound_mod =
+                case (pair && pair.inbound_type) || "tailscale" do
+                  "tailscale" -> Hermit.Vpn.Inbound.Tailscale
+                  _ -> Hermit.Vpn.Inbound.Tailscale
+                end
+
+              outbound_mod =
+                case (pair && pair.outbound_type) || "wireguard" do
+                  "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+                  _ -> Hermit.Vpn.Outbound.WireGuard
+                end
 
               %__MODULE__{
                 id: id,
@@ -214,7 +245,11 @@ defmodule Hermit.Vpn.PairWorker do
                 },
                 storage_dir: Path.join(get_storage_base_path(), id),
                 started_at: pair && pair.started_at,
-                ts_port: nil
+                ts_port: nil,
+                inbound_module: inbound_mod,
+                outbound_module: outbound_mod,
+                inbound_config: pair && pair.inbound_config,
+                outbound_config: pair && pair.outbound_config
               }
           end
       end
@@ -234,7 +269,15 @@ defmodule Hermit.Vpn.PairWorker do
             case DynamicSupervisor.start_child(
                    Hermit.Vpn.DynamicSupervisor,
                    {__MODULE__,
-                    %{id: id, wg_config: pair.wg_config, ts_auth_key: pair.ts_auth_key}}
+                    %{
+                      id: id,
+                      wg_config: pair.wg_config,
+                      ts_auth_key: pair.ts_auth_key,
+                      inbound_type: pair.inbound_type,
+                      inbound_config: pair.inbound_config,
+                      outbound_type: pair.outbound_type,
+                      outbound_config: pair.outbound_config
+                    }}
                  ) do
               {:ok, pid} -> {:ok, pid}
               {:ok, pid, _} -> {:ok, pid}
@@ -258,18 +301,40 @@ defmodule Hermit.Vpn.PairWorker do
     storage_dir = Path.join(get_storage_base_path(), id)
     wg_config_path = Path.join(storage_dir, "wg0.conf")
 
-    {wg_status, ts_status, overall_status, started_at} =
+    {wg_status, ts_status, overall_status, started_at, inbound_type, inbound_config,
+     outbound_type,
+     outbound_config} =
       case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
         nil ->
-          {:starting, :starting, :starting_wg, nil}
+          {:starting, :starting, :starting_wg, nil, args[:inbound_type] || "tailscale",
+           args[:inbound_config] || %{"ts_auth_key" => args.ts_auth_key},
+           args[:outbound_type] || "wireguard",
+           args[:outbound_config] ||
+             %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
 
         pair ->
           {
             String.to_atom(pair.wg_status || "stopped"),
             String.to_atom(pair.ts_status || "stopped"),
             String.to_atom(pair.status || "stopped"),
-            pair.started_at
+            pair.started_at,
+            pair.inbound_type || "tailscale",
+            pair.inbound_config || %{},
+            pair.outbound_type || "wireguard",
+            pair.outbound_config || %{}
           }
+      end
+
+    inbound_module =
+      case inbound_type do
+        "tailscale" -> Hermit.Vpn.Inbound.Tailscale
+        _ -> Hermit.Vpn.Inbound.Tailscale
+      end
+
+    outbound_module =
+      case outbound_type do
+        "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+        _ -> Hermit.Vpn.Outbound.WireGuard
       end
 
     state = %__MODULE__{
@@ -298,7 +363,11 @@ defmodule Hermit.Vpn.PairWorker do
       started_at: started_at,
       ts_port: nil,
       ts_retry_count: 0,
-      wg_retry_count: 0
+      wg_retry_count: 0,
+      inbound_module: inbound_module,
+      outbound_module: outbound_module,
+      inbound_config: inbound_config,
+      outbound_config: outbound_config
     }
 
     cond do
@@ -337,7 +406,7 @@ defmodule Hermit.Vpn.PairWorker do
       File.write!(state.wg_config_path, resolved_content)
       File.chmod!(state.wg_config_path, 0o600)
 
-      case DockerClient.create_wg_container(state.wg_container_name, state.storage_dir) do
+      case state.outbound_module.bootstrap(state.id, state.storage_dir, state.outbound_config) do
         {:ok, _} ->
           updated_state = %{state | wg_status: :running, wg_error_reason: nil, wg_retry_count: 0}
           updated_state = broadcast_update(updated_state)
@@ -392,19 +461,16 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call(:pause, _from, state) do
     Logger.info("Pausing VPN pair (both components): #{state.id}")
 
-    # Stop TS
+    # Stop Inbound (Tailscale)
     if state.ts_port do
       Process.unlink(state.ts_port)
       Port.close(state.ts_port)
     end
 
-    pid_path = Path.join([state.storage_dir, "tailscale", "tailscaled.pid"])
-    stop_tailscaled_by_pid(pid_path)
+    state.inbound_module.cleanup(state.id, state.storage_dir)
 
-    # Stop WG
-    if not mock?() and netns_exists?(state.wg_container_name) do
-      System.cmd("ip", ["netns", "exec", state.wg_container_name, "ip", "link", "delete", "wg0"])
-    end
+    # Stop Outbound (WireGuard)
+    state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state = %{
       state
@@ -443,19 +509,16 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call(:restart, _from, state) do
     Logger.info("Restarting VPN pair (both components): #{state.id}")
 
-    # Stop TS
+    # Stop Inbound (Tailscale)
     if state.ts_port do
       Process.unlink(state.ts_port)
       Port.close(state.ts_port)
     end
 
-    pid_path = Path.join([state.storage_dir, "tailscale", "tailscaled.pid"])
-    stop_tailscaled_by_pid(pid_path)
+    state.inbound_module.cleanup(state.id, state.storage_dir)
 
-    # Stop WG
-    if not mock?() and netns_exists?(state.wg_container_name) do
-      System.cmd("ip", ["netns", "exec", state.wg_container_name, "ip", "link", "delete", "wg0"])
-    end
+    # Stop Outbound (WireGuard)
+    state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state = %{
       state
@@ -486,9 +549,7 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:stop_wg}, _from, state) do
     Logger.info("Stopping WireGuard for pair: #{state.id}")
 
-    if not mock?() and netns_exists?(state.wg_container_name) do
-      System.cmd("ip", ["netns", "exec", state.wg_container_name, "ip", "link", "delete", "wg0"])
-    end
+    state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state = %{
       state
@@ -506,9 +567,7 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:restart_wg}, _from, state) do
     Logger.info("Restarting WireGuard for pair: #{state.id}")
 
-    if not mock?() and netns_exists?(state.wg_container_name) do
-      System.cmd("ip", ["netns", "exec", state.wg_container_name, "ip", "link", "delete", "wg0"])
-    end
+    state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state = %{state | wg_status: :starting, wg_error_reason: nil}
     updated_state = broadcast_update(updated_state)
@@ -530,17 +589,7 @@ defmodule Hermit.Vpn.PairWorker do
       updated_state = broadcast_update(updated_state)
 
       if updated_state.wg_status in [:running, :starting] do
-        if not mock?() and netns_exists?(updated_state.wg_container_name) do
-          System.cmd("ip", [
-            "netns",
-            "exec",
-            updated_state.wg_container_name,
-            "ip",
-            "link",
-            "delete",
-            "wg0"
-          ])
-        end
+        state.outbound_module.cleanup(state.id, state.storage_dir)
 
         restarted_state = %{updated_state | wg_status: :starting, wg_error_reason: nil}
         restarted_state = broadcast_update(restarted_state)
@@ -584,8 +633,7 @@ defmodule Hermit.Vpn.PairWorker do
       Port.close(state.ts_port)
     end
 
-    pid_path = Path.join([state.storage_dir, "tailscale", "tailscaled.pid"])
-    stop_tailscaled_by_pid(pid_path)
+    state.inbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state = %{
       state
@@ -608,8 +656,7 @@ defmodule Hermit.Vpn.PairWorker do
       Port.close(state.ts_port)
     end
 
-    pid_path = Path.join([state.storage_dir, "tailscale", "tailscaled.pid"])
-    stop_tailscaled_by_pid(pid_path)
+    state.inbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state = %{state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
     updated_state = broadcast_update(updated_state)
@@ -621,26 +668,23 @@ defmodule Hermit.Vpn.PairWorker do
   @impl true
   def handle_info({:check_wg_health, retries}, state) do
     if state.ts_status == :starting do
-      case DockerClient.get_container_status(state.wg_container_name) do
-        {:ok, %{running: true}} ->
-          trigger_handshake(state.wg_container_name)
+      case state.outbound_module.get_status(state.id, state.storage_dir) do
+        :running ->
+          trigger_handshake("hermit_wg_#{state.id}")
 
-          case DockerClient.get_network_info(state.wg_container_name) do
+          case state.outbound_module.get_metrics(state.id, state.storage_dir) do
             {:ok, %{bytes_received: bytes_received}} when bytes_received > 0 ->
               # Start Tailscale inside the network namespace
-              ts_state_dir = Path.join(state.storage_dir, "tailscale")
-
-              case DockerClient.create_ts_container(
-                     state.ts_container_name,
-                     state.wg_container_name,
-                     state.ts_auth_key,
-                     pair_id: state.id,
-                     state_dir: ts_state_dir
+              case state.inbound_module.bootstrap(
+                     state.id,
+                     "wg0",
+                     state.storage_dir,
+                     state.inbound_config
                    ) do
-                {:ok, _, port} ->
+                {:ok, port} ->
                   # Approve exit node in background Task so it doesn't block startup
                   Task.start(fn ->
-                    DockerClient.approve_exit_node(state.id)
+                    state.inbound_module.approve_exit_node(state.id)
                   end)
 
                   running_state = %{
@@ -683,18 +727,21 @@ defmodule Hermit.Vpn.PairWorker do
   @impl true
   def handle_info(:poll_metrics, state) do
     if state.wg_status == :running do
-      case DockerClient.get_network_info(state.wg_container_name) do
-        {:ok, metrics} ->
+      case state.outbound_module.get_metrics(state.id, state.storage_dir) do
+        {:ok, outbound_metrics} ->
+          inbound_info = state.inbound_module.get_network_info(state.id, state.storage_dir)
+          metrics = Map.merge(outbound_metrics, inbound_info)
+
           updated_state = %{state | metrics: metrics, wg_retry_count: 0}
           updated_state = broadcast_update(updated_state)
           schedule_metrics_poll()
           {:noreply, updated_state}
 
         _error ->
-          # Get metrics failed. Check if container is actually down
-          case DockerClient.get_container_status(state.wg_container_name) do
-            {:ok, %{running: true}} ->
-              # Container is still running, maybe a temporary failure
+          # Get metrics failed. Check if outbound is actually down
+          case state.outbound_module.get_status(state.id, state.storage_dir) do
+            :running ->
+              # Outbound is still running, maybe a temporary failure
               schedule_metrics_poll()
               {:noreply, state}
 
@@ -710,8 +757,7 @@ defmodule Hermit.Vpn.PairWorker do
                   Port.close(state.ts_port)
                 end
 
-                pid_path = Path.join([state.storage_dir, "tailscale", "tailscaled.pid"])
-                stop_tailscaled_by_pid(pid_path)
+                state.inbound_module.cleanup(state.id, state.storage_dir)
 
                 error_state = %{
                   state
@@ -764,8 +810,9 @@ defmodule Hermit.Vpn.PairWorker do
           "Recovering WireGuard for pair: #{state.id} (attempt #{state.wg_retry_count + 1})"
         )
 
-        # Cleanup WG first
-        DockerClient.stop_pair(state.wg_container_name, state.ts_container_name)
+        # Cleanup both inbound and outbound first
+        state.inbound_module.cleanup(state.id, state.storage_dir)
+        state.outbound_module.cleanup(state.id, state.storage_dir)
 
         updated_state = %{
           state
@@ -808,8 +855,7 @@ defmodule Hermit.Vpn.PairWorker do
           Port.close(state.ts_port)
         end
 
-        pid_path = Path.join([state.storage_dir, "tailscale", "tailscaled.pid"])
-        stop_tailscaled_by_pid(pid_path)
+        state.inbound_module.cleanup(state.id, state.storage_dir)
 
         updated_state = %{
           state
@@ -860,7 +906,8 @@ defmodule Hermit.Vpn.PairWorker do
       Port.close(state.ts_port)
     end
 
-    DockerClient.stop_pair(state.wg_container_name, state.ts_container_name)
+    state.inbound_module.cleanup(state.id, state.storage_dir)
+    state.outbound_module.cleanup(state.id, state.storage_dir)
     :ok
   end
 
@@ -911,28 +958,6 @@ defmodule Hermit.Vpn.PairWorker do
   defp get_storage_base_path do
     config = Application.get_env(:hermit, :storage, [])
     Keyword.get(config, :base_path, "/app/storage")
-  end
-
-  defp stop_tailscaled_by_pid(pid_path) do
-    if File.exists?(pid_path) do
-      case File.read(pid_path) do
-        {:ok, pid_str} ->
-          pid = String.trim(pid_str)
-          Logger.info("Killing tailscaled process: #{pid}")
-          System.cmd("kill", [pid])
-          Process.sleep(200)
-          System.cmd("kill", ["-9", pid])
-          File.rm(pid_path)
-
-        _ ->
-          :ok
-      end
-    end
-
-    # Ensure socket file is removed to allow clean restarts
-    socket_dir = Path.dirname(pid_path)
-    socket_path = Path.join(socket_dir, "tailscaled.socket")
-    if File.exists?(socket_path), do: File.rm(socket_path)
   end
 
   defp mock? do

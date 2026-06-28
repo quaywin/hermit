@@ -53,7 +53,8 @@ defmodule HermitWeb.DashboardLive do
         case DynamicSupervisor.start_pair(%{
                id: data.pair_id,
                wg_config: data.wg_config,
-               ts_auth_key: ts_auth_key
+               ts_auth_key: ts_auth_key,
+               login_server: data.login_server
              }) do
           {:ok, _pid} ->
             {:noreply,

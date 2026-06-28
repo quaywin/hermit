@@ -310,4 +310,37 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     GenServer.stop(pid)
   end
+
+  test "initializes inbound and outbound configurations with custom login server" do
+    args = %{
+      id: "test_pair",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345",
+      login_server: "https://my-headscale.com"
+    }
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      wg_config: args.wg_config,
+      ts_auth_key: args.ts_auth_key,
+      inbound_type: "tailscale",
+      inbound_config: %{"ts_auth_key" => args.ts_auth_key, "login_server" => args.login_server},
+      outbound_type: "wireguard",
+      outbound_config: %{"wg_config" => args.wg_config},
+      status: "running",
+      wg_status: "stopped",
+      ts_status: "stopped"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    Process.sleep(200)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.inbound_config["login_server"] == "https://my-headscale.com"
+    assert state.inbound_config["ts_auth_key"] == "tskey-12345"
+
+    GenServer.stop(pid)
+  end
 end

@@ -115,6 +115,26 @@
               />
             </div>
 
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Auth Key (Optional)</label>
+              <.input
+                field={f[:ts_auth_key]}
+                type="password"
+                placeholder="Defaults to Global Settings Key"
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
+              />
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Headscale Login Server (Optional)</label>
+              <.input
+                field={f[:login_server]}
+                type="text"
+                placeholder="e.g., https://your-headscale-domain.com"
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
+              />
+            </div>
+
             <button
               type="submit"
               class="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider py-3 rounded-lg transition-colors cursor-pointer"

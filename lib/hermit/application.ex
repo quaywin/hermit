@@ -50,8 +50,8 @@ defmodule Hermit.Application do
             if pair.status != "stopped" do
               case Hermit.Vpn.DynamicSupervisor.start_pair(%{
                      id: pair.pair_id,
-                     wg_config: pair.wg_config,
-                     ts_auth_key: pair.ts_auth_key
+                     inbound_profile_id: pair.inbound_profile_id,
+                     outbound_profile_id: pair.outbound_profile_id
                    }) do
                 {:ok, _pid} ->
                   :ok

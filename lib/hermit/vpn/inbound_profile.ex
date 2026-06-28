@@ -15,7 +15,7 @@ defmodule Hermit.Vpn.InboundProfile do
     inbound_profile
     |> cast(attrs, [:name, :type, :config])
     |> validate_required([:name, :type])
-    |> validate_inclusion(:type, ["tailscale", "headscale", "zerotier", "proxy"])
+    |> validate_inclusion(:type, ["tailscale", "proxy"])
     |> validate_config()
   end
 
@@ -32,39 +32,39 @@ defmodule Hermit.Vpn.InboundProfile do
           add_error(changeset, :config, "must be a map")
         end
 
-      "headscale" ->
-        ts_auth_key = Map.get(config, "ts_auth_key") || Map.get(config, :ts_auth_key)
-        login_server = Map.get(config, "login_server") || Map.get(config, :login_server)
-
-        changeset =
-          if is_nil(ts_auth_key) || ts_auth_key == "" do
-            add_error(changeset, :config, "Headscale requires ts_auth_key")
-          else
-            changeset
-          end
-
-        if is_nil(login_server) || login_server == "" do
-          add_error(changeset, :config, "Headscale requires login_server")
-        else
-          changeset
-        end
-
-      "zerotier" ->
-        network_id = Map.get(config, "network_id") || Map.get(config, :network_id)
-
-        if is_nil(network_id) || network_id == "" do
-          add_error(changeset, :config, "ZeroTier requires network_id")
-        else
-          changeset
-        end
-
       "proxy" ->
-        port = Map.get(config, "port") || Map.get(config, :port)
+        if is_map(config) do
+          port = Map.get(config, "port") || Map.get(config, :port)
 
-        if is_nil(port) || port == "" do
-          add_error(changeset, :config, "Proxy requires port")
+          cond do
+            is_nil(port) || port == "" || port == 0 || port == "0" ->
+              changeset
+
+            is_integer(port) and port > 0 and port <= 65535 ->
+              changeset
+
+            is_binary(port) ->
+              case Integer.parse(port) do
+                {val, ""} when val > 0 and val <= 65535 ->
+                  changeset
+
+                _ ->
+                  add_error(
+                    changeset,
+                    :config,
+                    "Proxy port must be a valid number between 1 and 65535"
+                  )
+              end
+
+            true ->
+              add_error(
+                changeset,
+                :config,
+                "Proxy port must be a valid number between 1 and 65535"
+              )
+          end
         else
-          changeset
+          add_error(changeset, :config, "must be a map")
         end
 
       _ ->

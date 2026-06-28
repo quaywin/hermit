@@ -193,4 +193,54 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     refute html =~ "newpkey"
     refute html =~ "newpeerkey"
   end
+
+  test "cannot start Wireguard if the outbound profile is already in use by an active tunnel", %{
+    conn: conn
+  } do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-1"}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound",
+        type: "wireguard",
+        config: %{"wg_config" => "[Interface]\nPrivateKey = wgpkey\n"}
+      })
+
+    # Create active tunnel (active_t) using outbound_profile
+    active_pair = %Hermit.Vpn.VpnPair{
+      pair_id: "active_t",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "running",
+      ts_status: "running"
+    }
+
+    _ = Hermit.Repo.insert!(active_pair)
+
+    # Create target tunnel (target_t) which is stopped initially
+    target_pair = %Hermit.Vpn.VpnPair{
+      pair_id: "target_t",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "stopped",
+      wg_status: "stopped",
+      ts_status: "stopped"
+    }
+
+    _ = Hermit.Repo.insert!(target_pair)
+
+    {:ok, view, _html} = live(conn, ~p"/tunnels/target_t")
+
+    # Click "Start Wireguard" button
+    html = view |> element("button", "Start Wireguard") |> render_click()
+
+    assert html =~
+             "Failed to start Wireguard: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
+  end
 end

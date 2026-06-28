@@ -4,8 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: hermit_orchestrator
-    ports:
-      - "${HERMIT_PORT:-3000}:3000"
+    network_mode: host
     privileged: true
     volumes:
       # Mount storage directory for Sandboxed configurations

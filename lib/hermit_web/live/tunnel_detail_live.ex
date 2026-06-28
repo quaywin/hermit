@@ -33,17 +33,29 @@ defmodule HermitWeb.TunnelDetailLive do
   @impl true
   def handle_event("start_wg", _params, socket) do
     id = socket.assigns.id
+    vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
 
-    case PairWorker.start_wg(id) do
-      {:ok, pair} ->
+    case Hermit.Vpn.VpnPair.check_outbound_conflict(vpn_pair.outbound_profile_id, id) do
+      {:error, conflicting_id} ->
         {:noreply,
-         socket
-         |> assign_pair(pair)
-         |> assign(uptime: format_uptime(pair.started_at))
-         |> put_flash(:info, "Wireguard starting...")}
+         put_flash(
+           socket,
+           :error,
+           "Failed to start Wireguard: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+         )}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to start Wireguard: #{inspect(reason)}")}
+      :ok ->
+        case PairWorker.start_wg(id) do
+          {:ok, pair} ->
+            {:noreply,
+             socket
+             |> assign_pair(pair)
+             |> assign(uptime: format_uptime(pair.started_at))
+             |> put_flash(:info, "Wireguard starting...")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Failed to start Wireguard: #{inspect(reason)}")}
+        end
     end
   end
 
@@ -67,17 +79,30 @@ defmodule HermitWeb.TunnelDetailLive do
   @impl true
   def handle_event("restart_wg", _params, socket) do
     id = socket.assigns.id
+    vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
 
-    case PairWorker.restart_wg(id) do
-      {:ok, pair} ->
+    case Hermit.Vpn.VpnPair.check_outbound_conflict(vpn_pair.outbound_profile_id, id) do
+      {:error, conflicting_id} ->
         {:noreply,
-         socket
-         |> assign_pair(pair)
-         |> assign(uptime: format_uptime(pair.started_at))
-         |> put_flash(:info, "Wireguard restarting...")}
+         put_flash(
+           socket,
+           :error,
+           "Failed to restart Wireguard: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+         )}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to restart Wireguard: #{inspect(reason)}")}
+      :ok ->
+        case PairWorker.restart_wg(id) do
+          {:ok, pair} ->
+            {:noreply,
+             socket
+             |> assign_pair(pair)
+             |> assign(uptime: format_uptime(pair.started_at))
+             |> put_flash(:info, "Wireguard restarting...")}
+
+          {:error, reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Failed to restart Wireguard: #{inspect(reason)}")}
+        end
     end
   end
 

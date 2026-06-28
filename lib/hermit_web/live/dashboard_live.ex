@@ -23,6 +23,10 @@ defmodule HermitWeb.DashboardLive do
      |> assign(inbound_profiles: inbound_profiles)
      |> assign(outbound_profiles: outbound_profiles)
      |> assign(active_tab: :tunnels)
+     |> assign(editing_inbound_profile: nil)
+     |> assign(editing_inbound_form: nil)
+     |> assign(editing_outbound_profile: nil)
+     |> assign(editing_outbound_form: nil)
      |> assign_form()
      |> assign_inbound_form()
      |> assign_outbound_form()}
@@ -49,23 +53,39 @@ defmodule HermitWeb.DashboardLive do
 
     case Ecto.Changeset.apply_action(changeset, :insert) do
       {:ok, data} ->
-        case DynamicSupervisor.start_pair(%{
-               id: data.pair_id,
-               inbound_profile_id: data.inbound_profile_id,
-               outbound_profile_id: data.outbound_profile_id
-             }) do
-          {:ok, _pid} ->
+        case Hermit.Vpn.VpnPair.check_outbound_conflict(data.outbound_profile_id, data.pair_id) do
+          {:error, conflicting_id} ->
             {:noreply,
-             socket
-             |> put_flash(:info, "VPN Pair '#{data.pair_id}' started bootstrapping.")
-             |> assign_form()}
+             put_flash(
+               socket,
+               :error,
+               "Cannot start VPN Pair: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+             )}
 
-          {:error, {:already_started, _}} ->
-            {:noreply,
-             put_flash(socket, :error, "VPN Pair with ID '#{data.pair_id}' is already running.")}
+          :ok ->
+            case DynamicSupervisor.start_pair(%{
+                   id: data.pair_id,
+                   inbound_profile_id: data.inbound_profile_id,
+                   outbound_profile_id: data.outbound_profile_id
+                 }) do
+              {:ok, _pid} ->
+                {:noreply,
+                 socket
+                 |> put_flash(:info, "VPN Pair '#{data.pair_id}' started bootstrapping.")
+                 |> assign_form()}
 
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Failed to start VPN Pair: #{inspect(reason)}")}
+              {:error, {:already_started, _}} ->
+                {:noreply,
+                 put_flash(
+                   socket,
+                   :error,
+                   "VPN Pair with ID '#{data.pair_id}' is already running."
+                 )}
+
+              {:error, reason} ->
+                {:noreply,
+                 put_flash(socket, :error, "Failed to start VPN Pair: #{inspect(reason)}")}
+            end
         end
 
       {:error, changeset} ->
@@ -113,6 +133,110 @@ defmodule HermitWeb.DashboardLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, inbound_form: to_form(changeset))}
+    end
+  end
+
+  @impl true
+  def handle_event("edit_inbound", %{"id" => id}, socket) do
+    profile = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, id)
+    changeset = Hermit.Vpn.InboundProfile.changeset(profile, %{})
+
+    {:noreply,
+     socket
+     |> assign(editing_inbound_profile: profile)
+     |> assign(editing_inbound_form: to_form(changeset))}
+  end
+
+  @impl true
+  def handle_event("close_edit_inbound", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(editing_inbound_profile: nil)
+     |> assign(editing_inbound_form: nil)}
+  end
+
+  @impl true
+  def handle_event("validate_edit_inbound", %{"inbound_profile" => params}, socket) do
+    profile = socket.assigns.editing_inbound_profile
+
+    changeset =
+      profile
+      |> Hermit.Vpn.InboundProfile.changeset(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, editing_inbound_form: to_form(changeset))}
+  end
+
+  @impl true
+  def handle_event("save_edit_inbound", %{"inbound_profile" => params}, socket) do
+    profile = socket.assigns.editing_inbound_profile
+    changeset = Hermit.Vpn.InboundProfile.changeset(profile, params)
+
+    case Hermit.Repo.update(changeset) do
+      {:ok, _profile} ->
+        inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Inbound Profile updated successfully.")
+         |> assign(inbound_profiles: inbound_profiles)
+         |> assign(editing_inbound_profile: nil)
+         |> assign(editing_inbound_form: nil)}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, editing_inbound_form: to_form(changeset))}
+    end
+  end
+
+  @impl true
+  def handle_event("edit_outbound", %{"id" => id}, socket) do
+    profile = Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, id)
+    changeset = Hermit.Vpn.OutboundProfile.changeset(profile, %{})
+
+    {:noreply,
+     socket
+     |> assign(editing_outbound_profile: profile)
+     |> assign(editing_outbound_form: to_form(changeset))}
+  end
+
+  @impl true
+  def handle_event("close_edit_outbound", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(editing_outbound_profile: nil)
+     |> assign(editing_outbound_form: nil)}
+  end
+
+  @impl true
+  def handle_event("validate_edit_outbound", %{"outbound_profile" => params}, socket) do
+    profile = socket.assigns.editing_outbound_profile
+
+    changeset =
+      profile
+      |> Hermit.Vpn.OutboundProfile.changeset(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, editing_outbound_form: to_form(changeset))}
+  end
+
+  @impl true
+  def handle_event("save_edit_outbound", %{"outbound_profile" => params}, socket) do
+    profile = socket.assigns.editing_outbound_profile
+    changeset = Hermit.Vpn.OutboundProfile.changeset(profile, params)
+
+    case Hermit.Repo.update(changeset) do
+      {:ok, _profile} ->
+        outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Outbound Profile updated successfully.")
+         |> assign(outbound_profiles: outbound_profiles)
+         |> assign(editing_outbound_profile: nil)
+         |> assign(editing_outbound_form: nil)}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, editing_outbound_form: to_form(changeset))}
     end
   end
 

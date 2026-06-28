@@ -4,6 +4,17 @@ defmodule Hermit.Vpn.PairWorker do
 
   @topic "vpn_pairs"
 
+  @default_metrics %{
+    bytes_received: 0,
+    bytes_sent: 0,
+    ts_ips: [],
+    ts_backend_state: "Offline",
+    ts_user: "Unknown",
+    ts_magic_dns: "",
+    ts_exit_node: false,
+    wg_port: nil
+  }
+
   defstruct [
     :id,
     :wg_container_name,
@@ -30,7 +41,8 @@ defmodule Hermit.Vpn.PairWorker do
     inbound_module: Hermit.Vpn.Inbound.Tailscale,
     outbound_module: Hermit.Vpn.Outbound.WireGuard,
     inbound_config: nil,
-    outbound_config: nil
+    outbound_config: nil,
+    metrics_timer: nil
   ]
 
   # --- Client API ---
@@ -199,8 +211,6 @@ defmodule Hermit.Vpn.PairWorker do
           inbound_mod =
             case inbound_type do
               "tailscale" -> Hermit.Vpn.Inbound.Tailscale
-              "headscale" -> Hermit.Vpn.Inbound.Tailscale
-              "zerotier" -> Hermit.Vpn.Inbound.ZeroTier
               "proxy" -> Hermit.Vpn.Inbound.Proxy
               _ -> Hermit.Vpn.Inbound.Tailscale
             end
@@ -208,7 +218,6 @@ defmodule Hermit.Vpn.PairWorker do
           outbound_mod =
             case outbound_type do
               "wireguard" -> Hermit.Vpn.Outbound.WireGuard
-              "openvpn" -> Hermit.Vpn.Outbound.OpenVPN
               _ -> Hermit.Vpn.Outbound.WireGuard
             end
 
@@ -271,8 +280,6 @@ defmodule Hermit.Vpn.PairWorker do
               inbound_mod =
                 case inbound_type do
                   "tailscale" -> Hermit.Vpn.Inbound.Tailscale
-                  "headscale" -> Hermit.Vpn.Inbound.Tailscale
-                  "zerotier" -> Hermit.Vpn.Inbound.ZeroTier
                   "proxy" -> Hermit.Vpn.Inbound.Proxy
                   _ -> Hermit.Vpn.Inbound.Tailscale
                 end
@@ -280,7 +287,6 @@ defmodule Hermit.Vpn.PairWorker do
               outbound_mod =
                 case outbound_type do
                   "wireguard" -> Hermit.Vpn.Outbound.WireGuard
-                  "openvpn" -> Hermit.Vpn.Outbound.OpenVPN
                   _ -> Hermit.Vpn.Outbound.WireGuard
                 end
 
@@ -371,7 +377,7 @@ defmodule Hermit.Vpn.PairWorker do
       case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
         nil ->
           {:starting, :starting, :starting_wg, nil, args[:inbound_type] || "tailscale",
-           args[:inbound_config] || %{"ts_auth_key" => args.ts_auth_key},
+           args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
            args[:outbound_type] || "wireguard",
            args[:outbound_config] ||
              %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
@@ -408,8 +414,6 @@ defmodule Hermit.Vpn.PairWorker do
     inbound_module =
       case inbound_type do
         "tailscale" -> Hermit.Vpn.Inbound.Tailscale
-        "headscale" -> Hermit.Vpn.Inbound.Tailscale
-        "zerotier" -> Hermit.Vpn.Inbound.ZeroTier
         "proxy" -> Hermit.Vpn.Inbound.Proxy
         _ -> Hermit.Vpn.Inbound.Tailscale
       end
@@ -417,7 +421,6 @@ defmodule Hermit.Vpn.PairWorker do
     outbound_module =
       case outbound_type do
         "wireguard" -> Hermit.Vpn.Outbound.WireGuard
-        "openvpn" -> Hermit.Vpn.Outbound.OpenVPN
         _ -> Hermit.Vpn.Outbound.WireGuard
       end
 
@@ -476,9 +479,12 @@ defmodule Hermit.Vpn.PairWorker do
         {:ok, state, {:continue, :bootstrap_ts}}
 
       true ->
-        if wg_status == :running do
-          schedule_metrics_poll()
-        end
+        state =
+          if wg_status == :running do
+            schedule_metrics_poll(state)
+          else
+            state
+          end
 
         {:ok, state}
     end
@@ -501,27 +507,54 @@ defmodule Hermit.Vpn.PairWorker do
       File.write!(state.wg_config_path, resolved_content)
       File.chmod!(state.wg_config_path, 0o600)
 
-      case state.outbound_module.bootstrap(state.id, state.storage_dir, state.outbound_config) do
-        {:ok, _} ->
-          updated_state = %{state | wg_status: :running, wg_error_reason: nil, wg_retry_count: 0}
-          updated_state = broadcast_update(updated_state)
+      conflict_check =
+        case Hermit.Repo.get(Hermit.Vpn.VpnPair, state.id) do
+          nil -> :ok
+          pair -> Hermit.Vpn.VpnPair.check_outbound_conflict(pair.outbound_profile_id, state.id)
+        end
 
-          if state.ts_status == :starting do
-            send(self(), {:check_wg_health, 10})
-          end
-
-          {:noreply, updated_state}
-
-        {:error, reason} ->
+      case conflict_check do
+        {:error, conflicting_id} ->
           error_state = %{
             state
             | wg_status: :error,
-              wg_error_reason: "WireGuard creation failed: #{inspect(reason)}"
+              wg_error_reason:
+                "Outbound profile is already in use by active tunnel '#{conflicting_id}'."
           }
 
           updated_state = broadcast_update(error_state)
-          maybe_schedule_wg_recovery(updated_state)
           {:noreply, updated_state}
+
+        :ok ->
+          case state.outbound_module.bootstrap(state.id, state.storage_dir, state.outbound_config) do
+            {:ok, _} ->
+              updated_state = %{
+                state
+                | wg_status: :running,
+                  wg_error_reason: nil,
+                  wg_retry_count: 0
+              }
+
+              updated_state = broadcast_update(updated_state)
+              updated_state = schedule_metrics_poll(updated_state)
+
+              if state.ts_status == :starting do
+                send(self(), {:check_wg_health, 10})
+              end
+
+              {:noreply, updated_state}
+
+            {:error, reason} ->
+              error_state = %{
+                state
+                | wg_status: :error,
+                  wg_error_reason: "WireGuard creation failed: #{inspect(reason)}"
+              }
+
+              updated_state = broadcast_update(error_state)
+              maybe_schedule_wg_recovery(updated_state)
+              {:noreply, updated_state}
+          end
       end
     rescue
       e ->
@@ -558,8 +591,7 @@ defmodule Hermit.Vpn.PairWorker do
 
     # Stop Inbound (Tailscale)
     if state.ts_port do
-      Process.unlink(state.ts_port)
-      Port.close(state.ts_port)
+      stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -567,16 +599,18 @@ defmodule Hermit.Vpn.PairWorker do
     # Stop Outbound (WireGuard)
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
-    updated_state = %{
-      state
-      | wg_status: :stopped,
-        ts_status: :stopped,
-        wg_error_reason: nil,
-        ts_error_reason: nil,
-        ts_port: nil,
-        started_at: nil,
-        metrics: %{bytes_received: 0, bytes_sent: 0}
-    }
+    updated_state =
+      %{
+        state
+        | wg_status: :stopped,
+          ts_status: :stopped,
+          wg_error_reason: nil,
+          ts_error_reason: nil,
+          ts_port: nil,
+          started_at: nil,
+          metrics: @default_metrics
+      }
+      |> cancel_metrics_poll()
 
     updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state}
@@ -606,8 +640,7 @@ defmodule Hermit.Vpn.PairWorker do
 
     # Stop Inbound (Tailscale)
     if state.ts_port do
-      Process.unlink(state.ts_port)
-      Port.close(state.ts_port)
+      stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -615,18 +648,20 @@ defmodule Hermit.Vpn.PairWorker do
     # Stop Outbound (WireGuard)
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
-    updated_state = %{
-      state
-      | wg_status: :starting,
-        ts_status: :starting,
-        wg_error_reason: nil,
-        ts_error_reason: nil,
-        ts_port: nil,
-        started_at: nil,
-        metrics: %{bytes_received: 0, bytes_sent: 0},
-        wg_retry_count: 0,
-        ts_retry_count: 0
-    }
+    updated_state =
+      %{
+        state
+        | wg_status: :starting,
+          ts_status: :starting,
+          wg_error_reason: nil,
+          ts_error_reason: nil,
+          ts_port: nil,
+          started_at: nil,
+          metrics: @default_metrics,
+          wg_retry_count: 0,
+          ts_retry_count: 0
+      }
+      |> cancel_metrics_poll()
 
     updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap}}
@@ -644,15 +679,26 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:stop_wg}, _from, state) do
     Logger.info("Stopping WireGuard for pair: #{state.id}")
 
+    # Stop Inbound (Tailscale/Proxy) if running, because it runs inside the WG network namespace.
+    if state.ts_port do
+      stop_inbound_process(state.ts_port)
+    end
+
+    state.inbound_module.cleanup(state.id, state.storage_dir)
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
-    updated_state = %{
-      state
-      | wg_status: :stopped,
-        wg_error_reason: nil,
-        started_at: nil,
-        metrics: %{bytes_received: 0, bytes_sent: 0}
-    }
+    updated_state =
+      %{
+        state
+        | wg_status: :stopped,
+          ts_status: :stopped,
+          wg_error_reason: nil,
+          ts_error_reason: nil,
+          ts_port: nil,
+          started_at: nil,
+          metrics: @default_metrics
+      }
+      |> cancel_metrics_poll()
 
     updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state}
@@ -664,7 +710,10 @@ defmodule Hermit.Vpn.PairWorker do
 
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
-    updated_state = %{state | wg_status: :starting, wg_error_reason: nil}
+    updated_state =
+      %{state | wg_status: :starting, wg_error_reason: nil}
+      |> cancel_metrics_poll()
+
     updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_wg}}
   end
@@ -686,7 +735,10 @@ defmodule Hermit.Vpn.PairWorker do
       if updated_state.wg_status in [:running, :starting] do
         state.outbound_module.cleanup(state.id, state.storage_dir)
 
-        restarted_state = %{updated_state | wg_status: :starting, wg_error_reason: nil}
+        restarted_state =
+          %{updated_state | wg_status: :starting, wg_error_reason: nil}
+          |> cancel_metrics_poll()
+
         restarted_state = broadcast_update(restarted_state)
         {:reply, {:ok, restarted_state}, restarted_state, {:continue, :bootstrap_wg}}
       else
@@ -724,8 +776,7 @@ defmodule Hermit.Vpn.PairWorker do
     Logger.info("Stopping Tailscale for pair: #{state.id}")
 
     if state.ts_port do
-      Process.unlink(state.ts_port)
-      Port.close(state.ts_port)
+      stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -747,8 +798,7 @@ defmodule Hermit.Vpn.PairWorker do
     Logger.info("Restarting Tailscale for pair: #{state.id}")
 
     if state.ts_port do
-      Process.unlink(state.ts_port)
-      Port.close(state.ts_port)
+      stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -792,7 +842,7 @@ defmodule Hermit.Vpn.PairWorker do
                   }
 
                   updated_state = broadcast_update(running_state)
-                  schedule_metrics_poll()
+                  updated_state = schedule_metrics_poll(updated_state)
                   {:noreply, updated_state}
 
                 {:error, reason} ->
@@ -804,6 +854,7 @@ defmodule Hermit.Vpn.PairWorker do
 
                   updated_state = broadcast_update(error_state)
                   maybe_schedule_ts_recovery(updated_state)
+                  updated_state = schedule_metrics_poll(updated_state)
                   {:noreply, updated_state}
               end
 
@@ -824,12 +875,30 @@ defmodule Hermit.Vpn.PairWorker do
     if state.wg_status == :running do
       case state.outbound_module.get_metrics(state.id, state.storage_dir) do
         {:ok, outbound_metrics} ->
-          inbound_info = state.inbound_module.get_network_info(state.id, state.storage_dir)
+          inbound_info =
+            if should_poll_inbound?(state) do
+              info = state.inbound_module.get_network_info(state.id, state.storage_dir)
+              Map.put(info, :inbound_fetched_at, System.system_time(:second))
+            else
+              Map.take(state.metrics || %{}, [
+                :ts_ips,
+                :ts_backend_state,
+                :ts_user,
+                :ts_magic_dns,
+                :ts_exit_node,
+                :proxy_port,
+                :proxy_socks5_url,
+                :proxy_http_url,
+                :proxy_status,
+                :inbound_fetched_at
+              ])
+            end
+
           metrics = Map.merge(outbound_metrics, inbound_info)
 
           updated_state = %{state | metrics: metrics, wg_retry_count: 0}
           updated_state = broadcast_update(updated_state)
-          schedule_metrics_poll()
+          updated_state = schedule_metrics_poll(updated_state)
           {:noreply, updated_state}
 
         _error ->
@@ -837,8 +906,8 @@ defmodule Hermit.Vpn.PairWorker do
           case state.outbound_module.get_status(state.id, state.storage_dir) do
             :running ->
               # Outbound is still running, maybe a temporary failure
-              schedule_metrics_poll()
-              {:noreply, state}
+              updated_state = schedule_metrics_poll(state)
+              {:noreply, updated_state}
 
             _ ->
               # WG namespace is not running/exists!
@@ -848,20 +917,21 @@ defmodule Hermit.Vpn.PairWorker do
                 )
 
                 if state.ts_port do
-                  Process.unlink(state.ts_port)
-                  Port.close(state.ts_port)
+                  stop_inbound_process(state.ts_port)
                 end
 
                 state.inbound_module.cleanup(state.id, state.storage_dir)
 
-                error_state = %{
-                  state
-                  | wg_status: :error,
-                    ts_status: :stopped,
-                    ts_port: nil,
-                    started_at: nil,
-                    wg_error_reason: "WireGuard namespace went down unexpectedly"
-                }
+                error_state =
+                  %{
+                    state
+                    | wg_status: :error,
+                      ts_status: :stopped,
+                      ts_port: nil,
+                      started_at: nil,
+                      wg_error_reason: "WireGuard namespace went down unexpectedly"
+                  }
+                  |> cancel_metrics_poll()
 
                 updated_state = broadcast_update(error_state)
                 maybe_schedule_wg_recovery(updated_state)
@@ -909,14 +979,16 @@ defmodule Hermit.Vpn.PairWorker do
         state.inbound_module.cleanup(state.id, state.storage_dir)
         state.outbound_module.cleanup(state.id, state.storage_dir)
 
-        updated_state = %{
-          state
-          | wg_status: :starting,
-            ts_status: :starting,
-            wg_error_reason: nil,
-            ts_error_reason: nil,
-            wg_retry_count: state.wg_retry_count + 1
-        }
+        updated_state =
+          %{
+            state
+            | wg_status: :starting,
+              ts_status: :starting,
+              wg_error_reason: nil,
+              ts_error_reason: nil,
+              wg_retry_count: state.wg_retry_count + 1
+          }
+          |> cancel_metrics_poll()
 
         updated_state = broadcast_update(updated_state)
         {:noreply, updated_state, {:continue, :bootstrap}}
@@ -946,8 +1018,7 @@ defmodule Hermit.Vpn.PairWorker do
         )
 
         if state.ts_port do
-          Process.unlink(state.ts_port)
-          Port.close(state.ts_port)
+          stop_inbound_process(state.ts_port)
         end
 
         state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -981,11 +1052,27 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:EXIT, pid, reason}, state) do
-    Logger.info(
-      "Received EXIT signal from #{inspect(pid)}, shutting down PairWorker #{state.id}. Reason: #{inspect(reason)}"
-    )
+    if pid == state.ts_port do
+      Logger.error("Inbound proxy PID for pair #{state.id} exited: #{inspect(reason)}")
 
-    {:stop, reason, state}
+      error_state = %{
+        state
+        | ts_status: :error,
+          ts_error_reason: "Inbound proxy exited unexpectedly: #{inspect(reason)}",
+          ts_port: nil,
+          started_at: nil
+      }
+
+      updated_state = broadcast_update(error_state)
+      maybe_schedule_ts_recovery(updated_state)
+      {:noreply, updated_state}
+    else
+      Logger.info(
+        "Received EXIT signal from #{inspect(pid)}, shutting down PairWorker #{state.id}. Reason: #{inspect(reason)}"
+      )
+
+      {:stop, reason, state}
+    end
   end
 
   @impl true
@@ -1107,6 +1194,7 @@ defmodule Hermit.Vpn.PairWorker do
     error_state = %{state | ts_status: :error, ts_error_reason: "WireGuard handshake timeout"}
     updated_state = broadcast_update(error_state)
     maybe_schedule_ts_recovery(updated_state)
+    updated_state = schedule_metrics_poll(updated_state)
     {:noreply, updated_state}
   end
 
@@ -1115,8 +1203,21 @@ defmodule Hermit.Vpn.PairWorker do
     {:noreply, state}
   end
 
-  defp schedule_metrics_poll do
-    Process.send_after(self(), :poll_metrics, 3000)
+  defp schedule_metrics_poll(state) do
+    if state.metrics_timer do
+      Process.cancel_timer(state.metrics_timer)
+    end
+
+    timer = Process.send_after(self(), :poll_metrics, 3000)
+    %{state | metrics_timer: timer}
+  end
+
+  defp cancel_metrics_poll(state) do
+    if state.metrics_timer do
+      Process.cancel_timer(state.metrics_timer)
+    end
+
+    %{state | metrics_timer: nil}
   end
 
   defp maybe_schedule_wg_recovery(state) do
@@ -1196,4 +1297,44 @@ defmodule Hermit.Vpn.PairWorker do
   rescue
     _ -> :ok
   end
+
+  defp stop_inbound_process(nil), do: :ok
+
+  defp stop_inbound_process(port_or_pid) do
+    Process.unlink(port_or_pid)
+
+    if is_port(port_or_pid) do
+      try do
+        Port.close(port_or_pid)
+      rescue
+        _ -> :ok
+      end
+    else
+      try do
+        GenServer.stop(port_or_pid)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp should_poll_inbound?(state) do
+    now = System.system_time(:second)
+    last_poll = Map.get(state.metrics || %{}, :inbound_fetched_at, 0)
+
+    # Poll if we haven't polled in the last 300 seconds (5 minutes), or if cache is missing/not running
+    now - last_poll >= 300 or not has_inbound_info?(state.metrics || %{}, state.inbound_module)
+  end
+
+  defp has_inbound_info?(metrics, Hermit.Vpn.Inbound.Tailscale) do
+    metrics[:ts_ips] != [] and metrics[:ts_backend_state] == "Running"
+  end
+
+  defp has_inbound_info?(metrics, Hermit.Vpn.Inbound.Proxy) do
+    metrics[:proxy_port] != nil and metrics[:proxy_status] == "Running"
+  end
+
+  defp has_inbound_info?(_metrics, _module), do: false
 end

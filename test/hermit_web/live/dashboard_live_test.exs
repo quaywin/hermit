@@ -189,4 +189,197 @@ defmodule HermitWeb.DashboardLiveTest do
     assert has_element?(view, "div.hidden", "Create Inbound Profile")
     refute has_element?(view, "div.hidden", "Create Outbound Profile")
   end
+
+  test "renders edit inbound profile modal, validates, and saves updates", %{conn: conn} do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "inbound_to_edit",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-old"}
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Switch to inbound tab
+    view
+    |> element("button[phx-click=set_tab][phx-value-tab=inbound]")
+    |> render_click()
+
+    # Click edit button
+    html =
+      view
+      |> element("#edit-inbound-#{inbound_profile.id}")
+      |> render_click()
+
+    assert html =~ "Edit Inbound Profile"
+    assert html =~ "inbound_to_edit"
+
+    # Test validation error
+    # First, change type to proxy to render the port input field
+    view
+    |> form("#edit-inbound-profile-form", %{
+      "inbound_profile" => %{"type" => "proxy"}
+    })
+    |> render_change()
+
+    invalid_form = %{
+      "inbound_profile" => %{
+        "name" => "",
+        "type" => "proxy",
+        "config" => %{"port" => "abc"}
+      }
+    }
+
+    html =
+      view
+      |> form("#edit-inbound-profile-form", invalid_form)
+      |> render_change()
+
+    assert html =~ "can&#39;t be blank"
+    assert html =~ "Proxy port must be a valid number between 1 and 65535"
+
+    # Test successful update
+    # First, change type back to tailscale so the tailscale fields are rendered in the DOM
+    view
+    |> form("#edit-inbound-profile-form", %{
+      "inbound_profile" => %{"type" => "tailscale"}
+    })
+    |> render_change()
+
+    valid_form = %{
+      "inbound_profile" => %{
+        "name" => "inbound_updated",
+        "type" => "tailscale",
+        "config" => %{"ts_auth_key" => "tskey-new"}
+      }
+    }
+
+    html =
+      view
+      |> form("#edit-inbound-profile-form", valid_form)
+      |> render_submit()
+
+    assert html =~ "Inbound Profile updated successfully"
+    refute html =~ "Edit Inbound Profile"
+    assert html =~ "inbound_updated"
+
+    # Verify update in DB
+    updated = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, inbound_profile.id)
+    assert updated.name == "inbound_updated"
+    assert updated.config["ts_auth_key"] == "tskey-new"
+  end
+
+  test "renders edit outbound profile modal, validates, and saves updates", %{conn: conn} do
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "outbound_to_edit",
+        type: "wireguard",
+        config: %{"wg_config" => "[Interface]\nPrivateKey = oldkey\n"}
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Switch to outbound tab
+    view
+    |> element("button[phx-click=set_tab][phx-value-tab=outbound]")
+    |> render_click()
+
+    # Click edit button
+    html =
+      view
+      |> element("#edit-outbound-#{outbound_profile.id}")
+      |> render_click()
+
+    assert html =~ "Edit Outbound Profile"
+    assert html =~ "outbound_to_edit"
+
+    # Test validation error
+    invalid_form = %{
+      "outbound_profile" => %{
+        "name" => "",
+        "type" => "wireguard",
+        "config" => %{"wg_config" => ""}
+      }
+    }
+
+    html =
+      view
+      |> form("#edit-outbound-profile-form", invalid_form)
+      |> render_change()
+
+    assert html =~ "can&#39;t be blank"
+    assert html =~ "WireGuard requires wg_config payload"
+
+    # Test successful update
+    valid_form = %{
+      "outbound_profile" => %{
+        "name" => "outbound_updated",
+        "type" => "wireguard",
+        "config" => %{"wg_config" => "[Interface]\nPrivateKey = newkey\n"}
+      }
+    }
+
+    html =
+      view
+      |> form("#edit-outbound-profile-form", valid_form)
+      |> render_submit()
+
+    assert html =~ "Outbound Profile updated successfully"
+    refute html =~ "Edit Outbound Profile"
+    assert html =~ "outbound_updated"
+
+    # Verify update in DB
+    updated = Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, outbound_profile.id)
+    assert updated.name == "outbound_updated"
+    assert updated.config["wg_config"] == "[Interface]\nPrivateKey = newkey\n"
+  end
+
+  test "cannot deploy a pair if the outbound profile is already in use by an active tunnel", %{
+    conn: conn
+  } do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "inbound_profile",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-1"}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "outbound_profile",
+        type: "wireguard",
+        config: %{"wg_config" => "[Interface]\nPrivateKey = k1\n"}
+      })
+
+    # Create an active tunnel (pair_id: active_t) using outbound_profile
+    active_pair = %Hermit.Vpn.VpnPair{
+      pair_id: "active_t",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "running",
+      ts_status: "running"
+    }
+
+    _ = Hermit.Repo.insert!(active_pair)
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Try to deploy a new pair (pair_id: new_t) using the same outbound_profile
+    form_data = %{
+      "form" => %{
+        "pair_id" => "new_t",
+        "inbound_profile_id" => inbound_profile.id,
+        "outbound_profile_id" => outbound_profile.id
+      }
+    }
+
+    html =
+      view
+      |> form("form[phx-submit=save]", form_data)
+      |> render_submit()
+
+    assert html =~
+             "Cannot start VPN Pair: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
+  end
 end

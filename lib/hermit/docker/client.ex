@@ -510,8 +510,9 @@ defmodule Hermit.Docker.Client do
         metrics =
           if pid do
             with {:ok, content} <- File.read("/proc/#{pid}/net/dev"),
-                 parsed when not is_nil(parsed) <- parse_proc_net_dev(content, "wg0") do
-              {:ok, Map.merge(parsed, ts_data)}
+                 interfaces = parse_net_dev(content),
+                 extracted = extract_metrics(interfaces) do
+              {:ok, Map.merge(extracted, ts_data)}
             else
               _ -> :error
             end
@@ -525,65 +526,94 @@ defmodule Hermit.Docker.Client do
 
           :error ->
             # Fallback to system command (more expensive but always works on Linux with netns)
-            case System.cmd("ip", ["netns", "exec", wg_name, "wg", "show", "wg0", "transfer"],
+            # Try reading /proc/net/dev from netns first so we can parse tailscale0 if present
+            case System.cmd("ip", ["netns", "exec", wg_name, "cat", "/proc/net/dev"],
                    stderr_to_stdout: true
                  ) do
               {output, 0} ->
-                data =
-                  output
-                  |> parse_wg_transfer()
-                  |> Map.merge(ts_data)
-
+                interfaces = parse_net_dev(output)
+                extracted = extract_metrics(interfaces)
+                data = Map.merge(extracted, ts_data)
                 {:ok, data}
 
               _ ->
-                {:error, :not_found}
+                # Last resort fallback to wg show transfer
+                case System.cmd("ip", ["netns", "exec", wg_name, "wg", "show", "wg0", "transfer"],
+                       stderr_to_stdout: true
+                     ) do
+                  {output, 0} ->
+                    data =
+                      output
+                      |> parse_wg_transfer()
+                      |> Map.merge(ts_data)
+
+                    {:ok, data}
+
+                  _ ->
+                    {:error, :not_found}
+                end
             end
         end
     end
   end
 
-  defp parse_proc_net_dev(content, interface) do
-    target = "#{interface}:"
+  defp parse_net_dev(content) when is_binary(content) do
+    content
+    |> String.split("\n")
+    |> Enum.reduce(%{}, fn line, acc ->
+      line = String.trim(line)
 
-    line =
-      content
-      |> String.split("\n")
-      |> Enum.find(fn l -> String.contains?(l, target) end)
+      if String.contains?(line, ":") do
+        [iface, stats_str] = String.split(line, ":", parts: 2)
+        iface = String.trim(iface)
 
-    case line do
-      nil ->
-        nil
-
-      l ->
-        clean_line = String.replace(l, target, "")
-
-        case String.split(clean_line, " ", trim: true) do
-          [
-            rx_bytes,
-            _rx_pkts,
-            _rx_errs,
-            _rx_drop,
-            _rx_fifo,
-            _rx_frame,
-            _rx_comp,
-            _rx_multi,
-            tx_bytes | _
-          ] ->
+        case String.split(stats_str, " ", trim: true) do
+          [rx_bytes, _, _, _, _, _, _, _, tx_bytes | _] ->
             case {Integer.parse(rx_bytes), Integer.parse(tx_bytes)} do
               {{rx, ""}, {tx, ""}} ->
-                %{bytes_received: rx, bytes_sent: tx}
+                Map.put(acc, iface, %{rx: rx, tx: tx})
 
               _ ->
-                nil
+                acc
             end
 
           _ ->
-            nil
+            acc
         end
+      else
+        acc
+      end
+    end)
+  end
+
+  defp parse_net_dev(_), do: %{}
+
+  defp extract_metrics(interfaces) when is_map(interfaces) do
+    # Look for tailscale0 interface first
+    tailscale_iface =
+      Enum.find(Map.keys(interfaces), fn name ->
+        String.starts_with?(name, "tailscale")
+      end)
+
+    if tailscale_iface do
+      stats = Map.get(interfaces, tailscale_iface)
+      # For tailscale inbound interface:
+      # Bytes Received (Download) = Tx (sent to client)
+      # Bytes Sent (Upload) = Rx (received from client)
+      %{bytes_received: stats.tx, bytes_sent: stats.rx}
+    else
+      # Fallback to wg0
+      case Map.get(interfaces, "wg0") do
+        %{rx: rx, tx: tx} ->
+          # For wg0 outbound interface:
+          # Bytes Received = Rx (received from internet)
+          # Bytes Sent = Tx (sent to internet)
+          %{bytes_received: rx, bytes_sent: tx}
+
+        nil ->
+          %{bytes_received: 0, bytes_sent: 0}
+      end
     end
-  rescue
-    _ -> nil
   end
 
   @doc """

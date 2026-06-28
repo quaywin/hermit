@@ -134,120 +134,216 @@
         </div>
       </div>
 
-      <!-- Tailscale Status Card -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6 flex flex-col justify-between">
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
-              🦄 Tailscale Connection
-            </h2>
-            <%= case @pair.ts_status do %>
-              <% :running -> %>
-                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  Running
-                </span>
-              <% :starting -> %>
-                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                  Starting
-                </span>
-              <% :stopped -> %>
-                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
-                  <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
-                </span>
-              <% :error -> %>
-                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
-                  <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                </span>
-            <% end %>
-          </div>
-
-          <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
-            <div class="bg-red-950/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400 whitespace-pre-wrap font-mono">
-              {@pair.ts_error_reason}
-            </div>
-          <% end %>
-
-          <div class="space-y-2 text-sm text-slate-300">
-            <div>
-              <span class="text-slate-400 font-semibold">Exit Node Hostname:</span>
-              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">hermit-node-{String.replace(
-                @id,
-                "_",
-                "-"
-              )}</code>
-            </div>
-            <div>
-              <span class="text-slate-400 font-semibold">Daemon Process ID:</span>
-              <%= if @pair.ts_port do %>
-                <span class="text-emerald-400 font-mono">Active (PID via Port)</span>
-              <% else %>
-                <span class="text-slate-500">Offline</span>
+      <!-- Inbound Connection Status Card -->
+      <%= if @pair.inbound_module == Hermit.Vpn.Inbound.Proxy do %>
+        <!-- Proxy Status Card -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6 flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+                🔌 Dual Proxy Connection
+              </h2>
+              <%= case @pair.ts_status do %>
+                <% :running -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Running
+                  </span>
+                <% :starting -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                    Starting
+                  </span>
+                <% :stopped -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                  </span>
+                <% :error -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                  </span>
               <% end %>
             </div>
 
-            <%= if @pair.ts_status == :running do %>
-              <div>
-                <span class="text-slate-400 font-semibold">Connection State:</span>
-                <span class={[
-                  "font-semibold",
-                  @pair.metrics.ts_backend_state == "Running" && "text-emerald-400",
-                  @pair.metrics.ts_backend_state != "Running" && "text-amber-400"
-                ]}>
-                  {@pair.metrics.ts_backend_state}
-                </span>
-              </div>
-              <div>
-                <span class="text-slate-400 font-semibold">Logged-in User:</span>
-                <span class="text-slate-200 font-mono">{@pair.metrics.ts_user}</span>
-              </div>
-              <div>
-                <span class="text-slate-400 font-semibold block mb-0.5">IP Address(es):</span>
-                <div class="flex flex-col gap-1 mt-1">
-                  <%= for ip <- @pair.metrics.ts_ips do %>
-                    <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono w-fit text-cyan-400">{ip}</code>
-                  <% end %>
-                </div>
-              </div>
-              <div>
-                <span class="text-slate-400 font-semibold">MagicDNS Domain:</span>
-                <div class="text-xs font-mono text-slate-400 bg-slate-950 p-2 rounded border border-slate-800 mt-1 truncate">
-                  {@pair.metrics.ts_magic_dns}
-                </div>
-              </div>
-            <% else %>
-              <div class="pt-2 text-xs text-slate-500 italic">
-                Start Tailscale to retrieve detailed connection status.
+            <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
+              <div class="bg-red-950/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400 whitespace-pre-wrap font-mono">
+                {@pair.ts_error_reason}
               </div>
             <% end %>
+
+            <div class="space-y-2 text-sm text-slate-300">
+              <div>
+                <span class="text-slate-400 font-semibold">Proxy Inbound Port:</span>
+                <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono text-cyan-400">
+                  {Map.get(@pair.metrics, :proxy_port) || @pair.inbound_config["port"] ||
+                    "Auto-allocating..."}
+                </code>
+              </div>
+
+              <%= if @pair.ts_status == :running do %>
+                <div>
+                  <span class="text-slate-400 font-semibold">SOCKS5 Proxy URL:</span>
+                  <div class="text-xs font-mono text-emerald-400 bg-slate-950 p-2 rounded border border-slate-800 mt-1 truncate">
+                    {Map.get(@pair.metrics, :proxy_socks5_url, "socks5://127.0.0.1:xxx")}
+                  </div>
+                </div>
+                <div>
+                  <span class="text-slate-400 font-semibold">HTTP Proxy URL:</span>
+                  <div class="text-xs font-mono text-emerald-400 bg-slate-950 p-2 rounded border border-slate-800 mt-1 truncate">
+                    {Map.get(@pair.metrics, :proxy_http_url, "http://127.0.0.1:xxx")}
+                  </div>
+                </div>
+                <div class="pt-2 text-xs text-slate-500 italic">
+                  💡 This single port automatically detects and handles both SOCKS5 and HTTP protocols.
+                </div>
+              <% else %>
+                <div class="pt-2 text-xs text-slate-500 italic">
+                  Start Proxy Inbound to activate connection endpoints.
+                </div>
+              <% end %>
+            </div>
+          </div>
+
+          <div class="pt-6 border-t border-slate-800 flex items-center gap-3">
+            <button
+              phx-click="start_ts"
+              disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
+              class="flex-1 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Start Proxy
+            </button>
+            <button
+              phx-click="stop_ts"
+              disabled={@pair.ts_status == :stopped}
+              class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-red-400 border border-red-500/20 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Stop Proxy
+            </button>
+            <button
+              phx-click="restart_ts"
+              disabled={@pair.wg_status != :running}
+              class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-slate-300 border border-slate-700 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Restart
+            </button>
           </div>
         </div>
+      <% else %>
+        <!-- Tailscale Status Card -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6 flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+                🦄 Tailscale Connection
+              </h2>
+              <%= case @pair.ts_status do %>
+                <% :running -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Running
+                  </span>
+                <% :starting -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                    Starting
+                  </span>
+                <% :stopped -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                  </span>
+                <% :error -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                  </span>
+              <% end %>
+            </div>
 
-        <div class="pt-6 border-t border-slate-800 flex items-center gap-3">
-          <button
-            phx-click="start_ts"
-            disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
-            class="flex-1 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
-          >
-            Start Tailscale
-          </button>
-          <button
-            phx-click="stop_ts"
-            disabled={@pair.ts_status == :stopped}
-            class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-red-400 border border-red-500/20 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
-          >
-            Stop Tailscale
-          </button>
-          <button
-            phx-click="restart_ts"
-            disabled={@pair.wg_status != :running}
-            class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-slate-300 border border-slate-700 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
-          >
-            Restart
-          </button>
+            <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
+              <div class="bg-red-950/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400 whitespace-pre-wrap font-mono">
+                {@pair.ts_error_reason}
+              </div>
+            <% end %>
+
+            <div class="space-y-2 text-sm text-slate-300">
+              <div>
+                <span class="text-slate-400 font-semibold">Exit Node Hostname:</span>
+                <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">hermit-node-{String.replace(
+                  @id,
+                  "_",
+                  "-"
+                )}</code>
+              </div>
+              <div>
+                <span class="text-slate-400 font-semibold">Daemon Process ID:</span>
+                <%= if @pair.ts_port do %>
+                  <span class="text-emerald-400 font-mono">Active (PID via Port)</span>
+                <% else %>
+                  <span class="text-slate-500">Offline</span>
+                <% end %>
+              </div>
+
+              <%= if @pair.ts_status == :running do %>
+                <div>
+                  <span class="text-slate-400 font-semibold">Connection State:</span>
+                  <span class={[
+                    "font-semibold",
+                    @pair.metrics.ts_backend_state == "Running" && "text-emerald-400",
+                    @pair.metrics.ts_backend_state != "Running" && "text-amber-400"
+                  ]}>
+                    {@pair.metrics.ts_backend_state}
+                  </span>
+                </div>
+                <div>
+                  <span class="text-slate-400 font-semibold">Logged-in User:</span>
+                  <span class="text-slate-200 font-mono">{@pair.metrics.ts_user}</span>
+                </div>
+                <div>
+                  <span class="text-slate-400 font-semibold block mb-0.5">IP Address(es):</span>
+                  <div class="flex flex-col gap-1 mt-1">
+                    <%= for ip <- @pair.metrics.ts_ips do %>
+                      <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono w-fit text-cyan-400">{ip}</code>
+                    <% end %>
+                  </div>
+                </div>
+                <div>
+                  <span class="text-slate-400 font-semibold">MagicDNS Domain:</span>
+                  <div class="text-xs font-mono text-slate-400 bg-slate-950 p-2 rounded border border-slate-800 mt-1 truncate">
+                    {@pair.metrics.ts_magic_dns}
+                  </div>
+                </div>
+              <% else %>
+                <div class="pt-2 text-xs text-slate-500 italic">
+                  Start Tailscale to retrieve detailed connection status.
+                </div>
+              <% end %>
+            </div>
+          </div>
+
+          <div class="pt-6 border-t border-slate-800 flex items-center gap-3">
+            <button
+              phx-click="start_ts"
+              disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
+              class="flex-1 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Start Tailscale
+            </button>
+            <button
+              phx-click="stop_ts"
+              disabled={@pair.ts_status == :stopped}
+              class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-red-400 border border-red-500/20 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Stop Tailscale
+            </button>
+            <button
+              phx-click="restart_ts"
+              disabled={@pair.wg_status != :running}
+              class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-slate-300 border border-slate-700 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Restart
+            </button>
+          </div>
         </div>
-      </div>
+      <% end %>
     </div>
 
     <!-- Real-time Metrics Info Dashboard -->

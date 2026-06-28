@@ -58,7 +58,7 @@ ARG TARGETARCH
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
-     iproute2 iptables wireguard-tools wireguard-go curl tar procps openresolv ethtool \
+     iproute2 iptables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Tailscale static binaries for the target architecture

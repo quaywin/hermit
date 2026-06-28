@@ -319,20 +319,34 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         end
 
       true ->
-        # We need the tailscaled pid to read /proc/<pid>/net/dev, which is inside storage_dir
-        pid_path = Path.join([storage_dir, "tailscale", "tailscaled.pid"])
-
+        # We need a process PID running inside the netns to read /proc/<pid>/net/dev.
+        # We check possible PID files written by Inbound modules.
         pid =
-          case File.read(pid_path) do
-            {:ok, pid_str} -> String.trim(pid_str)
-            _ -> nil
-          end
+          ["tailscale/tailscaled.pid", "microsocks.pid", "tinyproxy.pid"]
+          |> Enum.find_value(fn rel_path ->
+            path = Path.join(storage_dir, rel_path)
+
+            case File.read(path) do
+              {:ok, content} ->
+                cleaned = String.trim(content)
+
+                if cleaned != "" and cleaned != "#{System.pid()}" do
+                  cleaned
+                else
+                  nil
+                end
+
+              _ ->
+                nil
+            end
+          end)
 
         metrics =
           if pid do
             with {:ok, content} <- File.read("/proc/#{pid}/net/dev"),
-                 parsed when not is_nil(parsed) <- parse_proc_net_dev(content, "wg0") do
-              {:ok, parsed}
+                 interfaces = parse_net_dev(content),
+                 extracted = extract_metrics(interfaces) do
+              {:ok, extracted}
             else
               _ -> :error
             end
@@ -348,16 +362,29 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
           :error ->
             # Fallback to system command (more expensive but always works on Linux with netns)
-            case System.cmd("ip", ["netns", "exec", wg_name, "wg", "show", "wg0", "transfer"],
+            # Try reading /proc/net/dev from netns first so we can parse tailscale0 if present
+            case System.cmd("ip", ["netns", "exec", wg_name, "cat", "/proc/net/dev"],
                    stderr_to_stdout: true
                  ) do
               {output, 0} ->
-                data = parse_wg_transfer(output)
+                interfaces = parse_net_dev(output)
+                data = extract_metrics(interfaces)
                 wg_port = get_wg_listen_port(wg_name)
                 {:ok, Map.put(data, :wg_port, wg_port)}
 
               _ ->
-                :error
+                # Last resort fallback to wg show transfer
+                case System.cmd("ip", ["netns", "exec", wg_name, "wg", "show", "wg0", "transfer"],
+                       stderr_to_stdout: true
+                     ) do
+                  {output, 0} ->
+                    data = parse_wg_transfer(output)
+                    wg_port = get_wg_listen_port(wg_name)
+                    {:ok, Map.put(data, :wg_port, wg_port)}
+
+                  _ ->
+                    :error
+                end
             end
         end
     end
@@ -365,47 +392,63 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
   # --- Internal Helpers ---
 
-  defp parse_proc_net_dev(content, interface) do
-    target = "#{interface}:"
+  defp parse_net_dev(content) when is_binary(content) do
+    content
+    |> String.split("\n")
+    |> Enum.reduce(%{}, fn line, acc ->
+      line = String.trim(line)
 
-    line =
-      content
-      |> String.split("\n")
-      |> Enum.find(fn l -> String.contains?(l, target) end)
+      if String.contains?(line, ":") do
+        [iface, stats_str] = String.split(line, ":", parts: 2)
+        iface = String.trim(iface)
 
-    case line do
-      nil ->
-        nil
-
-      l ->
-        clean_line = String.replace(l, target, "")
-
-        case String.split(clean_line, " ", trim: true) do
-          [
-            rx_bytes,
-            _rx_pkts,
-            _rx_errs,
-            _rx_drop,
-            _rx_fifo,
-            _rx_frame,
-            _rx_comp,
-            _rx_multi,
-            tx_bytes | _
-          ] ->
+        case String.split(stats_str, " ", trim: true) do
+          [rx_bytes, _, _, _, _, _, _, _, tx_bytes | _] ->
             case {Integer.parse(rx_bytes), Integer.parse(tx_bytes)} do
               {{rx, ""}, {tx, ""}} ->
-                %{bytes_received: rx, bytes_sent: tx}
+                Map.put(acc, iface, %{rx: rx, tx: tx})
 
               _ ->
-                nil
+                acc
             end
 
           _ ->
-            nil
+            acc
         end
+      else
+        acc
+      end
+    end)
+  end
+
+  defp parse_net_dev(_), do: %{}
+
+  defp extract_metrics(interfaces) when is_map(interfaces) do
+    # Look for tailscale0 interface first
+    tailscale_iface =
+      Enum.find(Map.keys(interfaces), fn name ->
+        String.starts_with?(name, "tailscale")
+      end)
+
+    if tailscale_iface do
+      stats = Map.get(interfaces, tailscale_iface)
+      # For tailscale inbound interface:
+      # Bytes Received (Download) = Tx (sent to client)
+      # Bytes Sent (Upload) = Rx (received from client)
+      %{bytes_received: stats.tx, bytes_sent: stats.rx}
+    else
+      # Fallback to wg0
+      case Map.get(interfaces, "wg0") do
+        %{rx: rx, tx: tx} ->
+          # For wg0 outbound interface:
+          # Bytes Received = Rx (received from internet)
+          # Bytes Sent = Tx (sent to internet)
+          %{bytes_received: rx, bytes_sent: tx}
+
+        nil ->
+          %{bytes_received: 0, bytes_sent: 0}
+      end
     end
-  rescue
-    _ -> nil
   end
 
   defp parse_wg_transfer(output) when is_binary(output) do
@@ -425,6 +468,20 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
   defp parse_wg_transfer(_), do: %{bytes_received: 0, bytes_sent: 0}
 
   defp get_wg_listen_port(wg_name) do
+    cache_key = {:wg_listen_port, wg_name}
+
+    case Process.get(cache_key) do
+      nil ->
+        port = fetch_wg_listen_port(wg_name)
+        if port, do: Process.put(cache_key, port)
+        port
+
+      port ->
+        port
+    end
+  end
+
+  defp fetch_wg_listen_port(wg_name) do
     case System.cmd("ip", ["netns", "exec", wg_name, "wg", "show", "wg0", "listen-port"],
            stderr_to_stdout: true
          ) do

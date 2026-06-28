@@ -367,8 +367,8 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     {:ok, inbound_profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "test_inbound_hs",
-        type: "headscale",
+        name: "test_inbound_ts",
+        type: "tailscale",
         config: %{"ts_auth_key" => args.ts_auth_key, "login_server" => args.login_server}
       })
 
@@ -396,6 +396,219 @@ defmodule Hermit.Vpn.PairWorkerTest do
     state = GenServer.call(pid, :get_state)
     assert state.inbound_config["login_server"] == "https://my-headscale.com"
     assert state.inbound_config["ts_auth_key"] == "tskey-12345"
+
+    GenServer.stop(pid)
+  end
+
+  test "stop_wg stops inbound (Tailscale) and resets metrics to default keys" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:socket_path, "/invalid/docker.sock")
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+      File.rm_rf!(Path.expand("storage/test_pair_stop_wg", File.cwd!()))
+    end)
+
+    args = %{
+      id: "test_pair_stop_wg",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts3",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg3",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    # Wait for bootstrap to complete and transition to running
+    Process.sleep(300)
+
+    # Confirm it is running and ts_port is active
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :running
+    assert state.ts_status == :running
+    assert is_port(state.ts_port)
+
+    # Perform stop_wg
+    {:ok, state} = GenServer.call(pid, {:stop_wg})
+
+    # Assert both wg and ts are stopped
+    assert state.wg_status == :stopped
+    assert state.ts_status == :stopped
+    assert is_nil(state.ts_port)
+
+    # Assert metrics have default keys and values (e.g. ts_backend_state is "Offline")
+    assert state.metrics.ts_backend_state == "Offline"
+    assert state.metrics.ts_user == "Unknown"
+    assert state.metrics.ts_ips == []
+
+    GenServer.stop(pid)
+  end
+
+  test "bootstrap fails if outbound profile is already in use by another active tunnel" do
+    wg_config = "[Interface]\nPrivateKey = wgpkey\n"
+    ts_auth_key = "tskey-12345"
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_conflict",
+        type: "tailscale",
+        config: %{"ts_auth_key" => ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_conflict",
+        type: "wireguard",
+        config: %{"wg_config" => wg_config}
+      })
+
+    # Create active pair_a in the database using the same profile
+    pair_a = %Hermit.Vpn.VpnPair{
+      pair_id: "pair_a",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "running",
+      ts_status: "running"
+    }
+
+    _ = Hermit.Repo.insert!(pair_a)
+
+    # Create pair_b in the database that will try to start
+    pair_b = %Hermit.Vpn.VpnPair{
+      pair_id: "pair_b",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(pair_b)
+
+    args = %{
+      id: "pair_b",
+      wg_config: wg_config,
+      ts_auth_key: ts_auth_key
+    }
+
+    # Start the worker for pair_b
+    {:ok, pid} = PairWorker.start_link(args)
+    # Wait for bootstrap
+    Process.sleep(250)
+
+    # Verify that the worker failed to bootstrap because the profile is in use by pair_a
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :error
+
+    assert state.wg_error_reason ==
+             "Outbound profile is already in use by active tunnel 'pair_a'."
+
+    GenServer.stop(pid)
+  end
+
+  test "starting WireGuard alone starts the metrics timer and schedules poll" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:socket_path, "/invalid/docker.sock")
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+      File.rm_rf!(Path.expand("storage/test_pair_start_wg_alone", File.cwd!()))
+    end)
+
+    args = %{
+      id: "test_pair_start_wg_alone",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    # Persist the pair with wg_status = stopped and ts_status = stopped
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts_alone",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg_alone",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "stopped",
+      wg_status: "stopped",
+      ts_status: "stopped"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    Process.sleep(200)
+
+    # Initial state should be stopped for both
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :stopped
+    assert state.ts_status == :stopped
+    assert is_nil(state.metrics_timer)
+
+    # Start WireGuard
+    {:ok, _updated_state} = GenServer.call(pid, {:start_wg})
+    # Wait for bootstrap_wg continue to run
+    Process.sleep(300)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :running
+    assert state.ts_status == :stopped
+    # The metrics timer should be active
+    assert is_reference(state.metrics_timer)
+
+    # Stop WireGuard
+    {:ok, state} = GenServer.call(pid, {:stop_wg})
+    assert state.wg_status == :stopped
+    # The metrics timer should be cancelled (nil)
+    assert is_nil(state.metrics_timer)
 
     GenServer.stop(pid)
   end

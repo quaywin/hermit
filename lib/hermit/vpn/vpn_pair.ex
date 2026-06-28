@@ -53,4 +53,31 @@ defmodule Hermit.Vpn.VpnPair do
       changeset
     end
   end
+
+  @doc """
+  Checks if the given outbound profile is already in use by another active tunnel.
+  Returns `{:error, conflicting_pair_id}` if a conflict is found, otherwise `:ok`.
+  """
+  def check_outbound_conflict(outbound_profile_id, current_pair_id) do
+    if is_nil(outbound_profile_id) do
+      :ok
+    else
+      import Ecto.Query
+
+      query =
+        from(p in Hermit.Vpn.VpnPair,
+          where: p.outbound_profile_id == ^outbound_profile_id,
+          where: p.pair_id != ^current_pair_id,
+          where: p.wg_status in ["running", "starting"]
+        )
+
+      case Hermit.Repo.all(query) do
+        [conflicting_pair | _] ->
+          {:error, conflicting_pair.pair_id}
+
+        [] ->
+          :ok
+      end
+    end
+  end
 end

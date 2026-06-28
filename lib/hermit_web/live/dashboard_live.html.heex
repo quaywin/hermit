@@ -1,0 +1,253 @@
+<div class="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans">
+  <div class="max-w-7xl mx-auto space-y-8">
+    <!-- Flash Messages -->
+    <.flash kind={:info} title="Success" flash={@flash} />
+    <.flash kind={:error} title="Error" flash={@flash} />
+
+    <!-- Header -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800 pb-6">
+      <div>
+        <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">
+          HERMIT GATEWAY
+        </h1>
+        <p class="text-slate-400 mt-1 text-sm">
+          Self-Hosted Multi-Tenant VPN Router & Network Gateway Orchestrator
+        </p>
+      </div>
+      <div class="mt-4 md:mt-0 flex items-center space-x-3 text-xs bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+        <span class="text-slate-300 font-semibold uppercase tracking-wider">Docker Daemon Connected</span>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <!-- Left Column: Settings & Deploy Panel -->
+      <div class="space-y-8">
+        <!-- Settings Panel -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+              ⚙️ Global Settings
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Configure default settings saved to SQLite.
+            </p>
+          </div>
+
+          <form phx-submit="save_settings" id="global-settings-form" class="space-y-4">
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Default Tailscale Auth Key</label>
+              <input
+                type="password"
+                name="tailscale_auth_key"
+                value={@global_ts_auth_key}
+                placeholder="tskey-auth-..."
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+              />
+            </div>
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale API Key</label>
+              <input
+                type="password"
+                name="tailscale_api_key"
+                value={@global_ts_api_key}
+                placeholder="tskey-api-..."
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+              />
+            </div>
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Tailnet Name</label>
+              <input
+                type="text"
+                name="tailscale_tailnet"
+                value={@global_ts_tailnet}
+                placeholder="example.com or user@gmail.com"
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+              />
+            </div>
+            <button
+              type="submit"
+              class="w-full bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/20 font-bold uppercase tracking-wider py-2.5 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Save Settings
+            </button>
+          </form>
+        </div>
+
+        <!-- Creation Panel (Left or Side) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+          <div>
+            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+              <span>+</span> Deploy VPN Pair
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Instantiate isolated Tailscale inbound exit node routed through WireGuard outbound tunnel.
+            </p>
+          </div>
+
+          <.form
+            :let={f}
+            for={@form}
+            phx-change="validate"
+            phx-submit="save"
+            id="vpn-pair-form"
+            class="space-y-4"
+          >
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">VPN Pair Name / Slug</label>
+              <.input
+                field={f[:pair_id]}
+                type="text"
+                placeholder="e.g., prod_us_east"
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
+              />
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">WireGuard Conf Payload</label>
+              <.input
+                field={f[:wg_config]}
+                type="textarea"
+                rows={8}
+                placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-xs rounded-lg"
+              />
+            </div>
+
+            <button
+              type="submit"
+              class="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider py-3 rounded-lg transition-colors cursor-pointer"
+            >
+              Spawn VPN Pair
+            </button>
+          </.form>
+        </div>
+      </div>
+
+      <!-- Live Datagrid (Right or Main) -->
+      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+        <div>
+          <h2 class="text-xl font-bold text-slate-100">Active VPN Tunnels</h2>
+          <p class="text-xs text-slate-400 mt-1">
+            Real-time status, configurations, and throughput logs.
+          </p>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                <th class="py-3 px-4">Name / ID</th>
+                <th class="py-3 px-4">Exit Node Hostname</th>
+                <th class="py-3 px-4">WireGuard</th>
+                <th class="py-3 px-4">Tailscale</th>
+                <th class="py-3 px-4">Traffic / Health</th>
+                <th class="py-3 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody
+              id="vpn-pairs-list"
+              phx-update="stream"
+              class="divide-y divide-slate-800 text-sm"
+            >
+              <tr
+                :for={{dom_id, pair} <- @streams.vpn_pairs}
+                id={dom_id}
+                class="hover:bg-slate-800/40 transition-colors"
+              >
+                <td class="py-4 px-4 font-mono font-bold text-slate-200">
+                  <.link navigate={~p"/tunnels/#{pair.id}"} class="text-cyan-400 hover:underline">
+                    {pair.id}
+                  </.link>
+                </td>
+                <td class="py-4 px-4 text-slate-300 font-mono text-xs">
+                  hermit-node-{String.replace(pair.id, "_", "-")}
+                </td>
+                <td class="py-4 px-4">
+                  <%= case pair.wg_status do %>
+                    <% :running -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Running
+                      </span>
+                    <% :starting -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                        Starting
+                      </span>
+                    <% :stopped -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                      </span>
+                    <% :error -> %>
+                      <span
+                        class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 cursor-help"
+                        title={pair.wg_error_reason}
+                      >
+                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                      </span>
+                  <% end %>
+                </td>
+                <td class="py-4 px-4">
+                  <%= case pair.ts_status do %>
+                    <% :running -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Running
+                      </span>
+                    <% :starting -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                        Starting
+                      </span>
+                    <% :stopped -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                      </span>
+                    <% :error -> %>
+                      <span
+                        class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 cursor-help"
+                        title={pair.ts_error_reason}
+                      >
+                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                      </span>
+                  <% end %>
+                </td>
+                <td class="py-4 px-4 text-xs font-mono text-slate-400">
+                  <div class="flex items-center gap-1">
+                    <span class="text-emerald-400">↓</span> {format_bytes(
+                      pair.metrics.bytes_received
+                    )}
+                  </div>
+                  <div class="flex items-center gap-1 mt-0.5">
+                    <span class="text-cyan-400">↑</span> {format_bytes(pair.metrics.bytes_sent)}
+                  </div>
+                </td>
+                <td class="py-4 px-4 text-right">
+                  <div class="inline-flex items-center space-x-2">
+                    <.link
+                      navigate={~p"/tunnels/#{pair.id}"}
+                      class="px-2.5 py-1 text-xs font-semibold rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
+                    >
+                      View Details
+                    </.link>
+
+                    <button
+                      phx-click="delete"
+                      phx-value-id={pair.id}
+                      data-confirm="Are you sure you want to permanently delete this VPN Pair and remove all associated containers?"
+                      class="px-2.5 py-1 text-xs font-semibold rounded bg-red-950/40 hover:bg-red-950 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

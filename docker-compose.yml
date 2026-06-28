@@ -1,0 +1,19 @@
+services:
+  hermit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hermit_orchestrator
+    ports:
+      - "${HERMIT_PORT:-3000}:3000"
+    privileged: true
+    volumes:
+      # Mount storage directory for Sandboxed configurations
+      - ./storage:/app/storage
+    environment:
+      - PHX_SERVER=true
+      - PORT=3000
+      - PHX_HOST=localhost
+      - SECRET_KEY_BASE=56eb70dfc4a56a64cfc4a56a64cfc4a56a64cfc4a56a64cfc4a56a64cfc4a56a
+      - STORAGE_BASE_PATH=/app/storage
+    restart: unless-stopped

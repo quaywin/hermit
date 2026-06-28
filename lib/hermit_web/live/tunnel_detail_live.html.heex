@@ -1,0 +1,347 @@
+<div class="min-h-screen bg-slate-950 text-slate-100 p-6 font-sans">
+  <div class="max-w-7xl mx-auto space-y-8">
+    <!-- Flash Messages -->
+    <.flash kind={:info} title="Success" flash={@flash} />
+    <.flash kind={:error} title="Error" flash={@flash} />
+
+    <!-- Back Link and Header -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800 pb-6">
+      <div>
+        <div class="flex items-center gap-2">
+          <.link
+            navigate={~p"/"}
+            class="text-sm text-cyan-400 hover:underline flex items-center gap-1"
+          >
+            &larr; Back to Dashboard
+          </.link>
+        </div>
+        <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent mt-2">
+          Tunnel Detail: {@id}
+        </h1>
+        <p class="text-slate-400 mt-1 text-sm">
+          Configure and manage Tailscale and VPN (WireGuard) endpoints sharing network namespace <span class="font-mono text-slate-300">hermit_wg_{@id}</span>.
+        </p>
+      </div>
+      <div class="mt-4 md:mt-0 flex items-center space-x-3">
+        <button
+          phx-click="delete"
+          data-confirm="Are you sure you want to permanently delete this entire Tunnel and all configuration files?"
+          class="bg-red-950/40 hover:bg-red-950 text-red-400 border border-red-500/30 font-bold uppercase tracking-wider px-4 py-2.5 rounded-lg transition-colors cursor-pointer text-xs"
+        >
+          Delete Entire Tunnel
+        </button>
+      </div>
+    </header>
+
+    <!-- Connection Details Status Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <!-- WireGuard (VPN) Status Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6 flex flex-col justify-between">
+        <div class="space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+              🔒 VPN Connection (WireGuard)
+            </h2>
+            <div class="flex items-center gap-2.5">
+              <button
+                type="button"
+                id="edit-wg-config-btn"
+                phx-click="edit_wg_config"
+                class="bg-slate-800 hover:bg-slate-750 text-cyan-400 border border-cyan-500/20 font-semibold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs flex items-center gap-1 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
+              </button>
+              <%= case @pair.wg_status do %>
+                <% :running -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Running
+                  </span>
+                <% :starting -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                    Starting
+                  </span>
+                <% :stopped -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                  </span>
+                <% :error -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                  </span>
+              <% end %>
+            </div>
+          </div>
+
+          <%= if @pair.wg_status == :error and @pair.wg_error_reason do %>
+            <div class="bg-red-950/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400 whitespace-pre-wrap font-mono">
+              {@pair.wg_error_reason}
+            </div>
+          <% end %>
+
+          <div class="space-y-2 text-sm text-slate-300">
+            <div>
+              <span class="text-slate-400 font-semibold">Interface Name:</span>
+              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">wg0</code>
+            </div>
+            <div>
+              <span class="text-slate-400 font-semibold">Namespace:</span>
+              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">hermit_wg_{@id}</code>
+            </div>
+            <div>
+              <span class="text-slate-400 font-semibold">Listening Port:</span>
+              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">{@pair.metrics[
+                :wg_port
+              ] || "-"}</code>
+            </div>
+            <div>
+              <span class="text-slate-400 font-semibold">Interface Address:</span>
+              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">{@wg_info[
+                :interface_address
+              ] || "-"}</code>
+            </div>
+            <div>
+              <span class="text-slate-400 font-semibold">Peer Endpoint:</span>
+              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">{@wg_info[
+                :peer_endpoint
+              ] || "-"}</code>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-6 border-t border-slate-800 flex items-center gap-3">
+          <button
+            phx-click="start_wg"
+            disabled={@pair.wg_status in [:running, :starting]}
+            class="flex-1 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+          >
+            Start Wireguard
+          </button>
+          <button
+            phx-click="stop_wg"
+            disabled={@pair.wg_status == :stopped}
+            class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-red-400 border border-red-500/20 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+          >
+            Stop Wireguard
+          </button>
+          <button
+            phx-click="restart_wg"
+            class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+          >
+            Restart
+          </button>
+        </div>
+      </div>
+
+      <!-- Tailscale Status Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6 flex flex-col justify-between">
+        <div class="space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+              🦄 Tailscale Connection
+            </h2>
+            <%= case @pair.ts_status do %>
+              <% :running -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Running
+                </span>
+              <% :starting -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                  Starting
+                </span>
+              <% :stopped -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                </span>
+              <% :error -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                </span>
+            <% end %>
+          </div>
+
+          <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
+            <div class="bg-red-950/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400 whitespace-pre-wrap font-mono">
+              {@pair.ts_error_reason}
+            </div>
+          <% end %>
+
+          <div class="space-y-2 text-sm text-slate-300">
+            <div>
+              <span class="text-slate-400 font-semibold">Exit Node Hostname:</span>
+              <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono">hermit-node-{String.replace(
+                @id,
+                "_",
+                "-"
+              )}</code>
+            </div>
+            <div>
+              <span class="text-slate-400 font-semibold">Daemon Process ID:</span>
+              <%= if @pair.ts_port do %>
+                <span class="text-emerald-400 font-mono">Active (PID via Port)</span>
+              <% else %>
+                <span class="text-slate-500">Offline</span>
+              <% end %>
+            </div>
+
+            <%= if @pair.ts_status == :running do %>
+              <div>
+                <span class="text-slate-400 font-semibold">Connection State:</span>
+                <span class={[
+                  "font-semibold",
+                  @pair.metrics.ts_backend_state == "Running" && "text-emerald-400",
+                  @pair.metrics.ts_backend_state != "Running" && "text-amber-400"
+                ]}>
+                  {@pair.metrics.ts_backend_state}
+                </span>
+              </div>
+              <div>
+                <span class="text-slate-400 font-semibold">Logged-in User:</span>
+                <span class="text-slate-200 font-mono">{@pair.metrics.ts_user}</span>
+              </div>
+              <div>
+                <span class="text-slate-400 font-semibold block mb-0.5">IP Address(es):</span>
+                <div class="flex flex-col gap-1 mt-1">
+                  <%= for ip <- @pair.metrics.ts_ips do %>
+                    <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs font-mono w-fit text-cyan-400">{ip}</code>
+                  <% end %>
+                </div>
+              </div>
+              <div>
+                <span class="text-slate-400 font-semibold">MagicDNS Domain:</span>
+                <div class="text-xs font-mono text-slate-400 bg-slate-950 p-2 rounded border border-slate-800 mt-1 truncate">
+                  {@pair.metrics.ts_magic_dns}
+                </div>
+              </div>
+            <% else %>
+              <div class="pt-2 text-xs text-slate-500 italic">
+                Start Tailscale to retrieve detailed connection status.
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="pt-6 border-t border-slate-800 flex items-center gap-3">
+          <button
+            phx-click="start_ts"
+            disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
+            class="flex-1 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+          >
+            Start Tailscale
+          </button>
+          <button
+            phx-click="stop_ts"
+            disabled={@pair.ts_status == :stopped}
+            class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-red-400 border border-red-500/20 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+          >
+            Stop Tailscale
+          </button>
+          <button
+            phx-click="restart_ts"
+            disabled={@pair.wg_status != :running}
+            class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 disabled:text-slate-600 text-slate-300 border border-slate-700 font-bold uppercase tracking-wider py-2 rounded-lg transition-colors cursor-pointer text-xs"
+          >
+            Restart
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Real-time Metrics Info Dashboard -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+      <h2 class="text-xl font-bold text-slate-100">
+        📊 Network Statistics & Throughput
+      </h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+          <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+            Bytes Received (Rx)
+          </div>
+          <div class="text-2xl font-bold text-emerald-400 mt-1 font-mono">
+            {format_bytes(@pair.metrics.bytes_received)}
+          </div>
+        </div>
+        <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+          <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+            Bytes Sent (Tx)
+          </div>
+          <div class="text-2xl font-bold text-cyan-400 mt-1 font-mono">
+            {format_bytes(@pair.metrics.bytes_sent)}
+          </div>
+        </div>
+        <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+          <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+            Uptime
+          </div>
+          <div class="text-2xl font-bold text-slate-300 mt-1 font-mono">
+            {@uptime}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <%= if @show_edit_modal do %>
+    <dialog id="edit-wg-modal" class="modal modal-open z-50 backdrop-blur-sm">
+      <div class="modal-box w-full max-w-2xl bg-slate-900 border border-slate-800 p-6 space-y-4 text-slate-100">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-lg font-bold text-slate-100 flex items-center gap-2">
+            🔑 Edit WireGuard Configuration: <span class="text-cyan-400 font-mono">{@id}</span>
+          </h3>
+          <button
+            type="button"
+            id="close-edit-modal-x"
+            phx-click="close_edit_modal"
+            class="text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+          >
+            <.icon name="hero-x-mark" class="size-6" />
+          </button>
+        </div>
+
+        <.form
+          for={@form}
+          id="edit-wg-form"
+          phx-change="validate_wg_config"
+          phx-submit="save_wg_config"
+          class="space-y-4"
+        >
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+              WireGuard Conf Payload
+            </label>
+            <.input
+              field={@form[:wg_config]}
+              type="textarea"
+              rows={12}
+              class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-xs rounded-lg p-3"
+            />
+          </div>
+
+          <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+            <button
+              type="button"
+              id="cancel-edit-btn"
+              phx-click="close_edit_modal"
+              class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold uppercase tracking-wider px-4 py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              id="save-edit-btn"
+              class="bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider px-4 py-2 rounded-lg transition-colors cursor-pointer text-xs"
+            >
+              Save & Apply
+            </button>
+          </div>
+        </.form>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button type="button" phx-click="close_edit_modal">close</button>
+      </form>
+    </dialog>
+  <% end %>
+</div>

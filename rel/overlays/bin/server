@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+cd -P -- "$(dirname -- "$0")"
+
+# Apply host-level performance tunings if running with sufficient privileges
+if [ -w /proc/sys/net/core/rmem_max ]; then
+  echo "Applying network performance tuning..."
+  sysctl -w net.core.rmem_max=750000000 || true
+  sysctl -w net.core.wmem_max=750000000 || true
+  sysctl -w net.core.rmem_default=750000000 || true
+  sysctl -w net.core.wmem_default=750000000 || true
+  sysctl -w net.core.netdev_max_backlog=250000 || true
+  sysctl -w net.ipv4.udp_mem="379008 504512 759360" || true
+  sysctl -w net.netfilter.nf_conntrack_max=1048576 || true
+fi
+
+PHX_SERVER=true exec ./hermit start

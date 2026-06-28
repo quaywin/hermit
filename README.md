@@ -67,3 +67,35 @@ docker compose exec hermit mix deps.get
 Running real-world VPN pairs requires operating-system level root privileges to create network namespaces (`netns`), configure virtual network interfaces, and route traffic via `iptables`.
 - The **`privileged: true`** setting in `docker-compose.yml` grants the container permissions to perform these system-level operations in an isolated manner.
 - Running directly on your host machine risks messing up local network interfaces and requires granting global `sudo` privileges to external scripts, which is unsafe for your development environment.
+
+---
+
+## 🗺️ Alternatives & Similar Projects
+
+If you are looking for other tools to manage VPNs or WireGuard tunnels, here is how **Hermit** compares to existing popular open-source alternatives:
+
+| Project | Primary Focus | UI Type | WireGuard Management | Tailscale Integration | Network Namespace Isolation |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Hermit** | Multi-tunnel orchestrator | Web Dashboard | Yes | Yes | Yes (isolated `netns`) |
+| **[Wireguard UI](https://github.com/ngoduykhanh/wireguard-ui)** | WireGuard server manager | Web UI | Yes (single server) | No | No |
+| **[Netbird](https://github.com/netbirdio/netbird)** | Mesh VPN Overlay | Web & Agent | Yes (under the hood) | No (custom control plane) | No |
+| **[Netmaker](https://github.com/gravitl/netmaker)** | Custom Mesh VPN | Web & Agent | Yes | No | No |
+| **[Firezone](https://github.com/firezone/firezone)** | Zero Trust Access (ZTNA) | Web & Client | Yes | No | No |
+
+### Key Differences
+
+- **[Wireguard UI](https://github.com/ngoduykhanh/wireguard-ui)**: A web-based configuration manager for a single WireGuard server. Unlike Hermit, it does not support running multiple tunnels side-by-side or integrating them with Tailscale.
+- **[Netbird](https://github.com/netbirdio/netbird)** / **[Netmaker](https://github.com/gravitl/netmaker)**: Complete mesh VPN overlay platforms that connect multiple hosts/nodes into a secure network. Hermit, on the other hand, is a local runner/orchestrator designed to pair and run WireGuard + Tailscale tunnels inside isolated network namespaces (`netns`) on a single host.
+- **[Firezone](https://github.com/firezone/firezone)**: Focused on enterprise-grade secure remote access and ZTNA, managing user access to corporate resources, rather than local tunnel namespace routing and isolation.
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to open issues, submit pull requests, or share ideas to improve Hermit.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

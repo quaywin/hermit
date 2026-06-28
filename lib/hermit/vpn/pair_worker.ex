@@ -96,20 +96,43 @@ defmodule Hermit.Vpn.PairWorker do
         {:error, :not_found}
 
       pair ->
-        case pair
-             |> Hermit.Vpn.VpnPair.changeset(%{wg_config: new_wg_config})
-             |> Hermit.Repo.update() do
-          {:ok, _updated_pair} ->
-            case GenServer.whereis(via_tuple(id)) do
+        if is_nil(new_wg_config) or String.trim(new_wg_config) == "" do
+          changeset =
+            pair
+            |> Hermit.Vpn.VpnPair.changeset(%{wg_config: new_wg_config})
+            |> Ecto.Changeset.add_error(:wg_config, "can't be blank")
+
+          {:error, changeset}
+        else
+          if pair.outbound_profile_id do
+            case Hermit.Repo.get(Hermit.Vpn.OutboundProfile, pair.outbound_profile_id) do
               nil ->
-                {:ok, :updated_offline}
+                {:error, :profile_not_found}
 
-              pid ->
-                GenServer.call(pid, {:update_wg_config, new_wg_config})
+              profile ->
+                new_config = Map.put(profile.config || %{}, "wg_config", new_wg_config)
+
+                case profile
+                     |> Hermit.Vpn.OutboundProfile.changeset(%{config: new_config})
+                     |> Hermit.Repo.update() do
+                  {:ok, _} ->
+                    case GenServer.whereis(via_tuple(id)) do
+                      nil -> {:ok, :updated_offline}
+                      pid -> GenServer.call(pid, {:update_wg_config, new_wg_config})
+                    end
+
+                  {:error, _changeset} ->
+                    pair_changeset =
+                      pair
+                      |> Hermit.Vpn.VpnPair.changeset(%{wg_config: new_wg_config})
+                      |> Ecto.Changeset.add_error(:wg_config, "is invalid")
+
+                    {:error, pair_changeset}
+                end
             end
-
-          {:error, changeset} ->
-            {:error, changeset}
+          else
+            {:error, :no_outbound_profile}
+          end
         end
     end
   end
@@ -141,7 +164,9 @@ defmodule Hermit.Vpn.PairWorker do
   def list_pairs do
     persisted_pairs =
       try do
-        Hermit.Repo.all(Hermit.Vpn.VpnPair)
+        Hermit.Vpn.VpnPair
+        |> Hermit.Repo.all()
+        |> Hermit.Repo.preload([:inbound_profile, :outbound_profile])
       rescue
         _ -> []
       end
@@ -157,15 +182,33 @@ defmodule Hermit.Vpn.PairWorker do
         nil ->
           pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
 
+          {inbound_type, inbound_config} =
+            if pair && pair.inbound_profile do
+              {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
+            else
+              {"tailscale", %{}}
+            end
+
+          {outbound_type, outbound_config} =
+            if pair && pair.outbound_profile do
+              {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+            else
+              {"wireguard", %{}}
+            end
+
           inbound_mod =
-            case (pair && pair.inbound_type) || "tailscale" do
+            case inbound_type do
               "tailscale" -> Hermit.Vpn.Inbound.Tailscale
+              "headscale" -> Hermit.Vpn.Inbound.Tailscale
+              "zerotier" -> Hermit.Vpn.Inbound.ZeroTier
+              "proxy" -> Hermit.Vpn.Inbound.Proxy
               _ -> Hermit.Vpn.Inbound.Tailscale
             end
 
           outbound_mod =
-            case (pair && pair.outbound_type) || "wireguard" do
+            case outbound_type do
               "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+              "openvpn" -> Hermit.Vpn.Outbound.OpenVPN
               _ -> Hermit.Vpn.Outbound.WireGuard
             end
 
@@ -174,8 +217,11 @@ defmodule Hermit.Vpn.PairWorker do
             wg_container_name: "hermit_wg_#{id}",
             ts_container_name: "hermit_ts_#{id}",
             wg_config_path: Path.join([get_storage_base_path(), id, "wg0.conf"]),
-            wg_config_content: (pair && pair.wg_config) || "",
-            ts_auth_key: (pair && pair.ts_auth_key) || "",
+            wg_config_content:
+              Map.get(outbound_config, "wg_config") || Map.get(outbound_config, :wg_config) || "",
+            ts_auth_key:
+              Map.get(inbound_config, "ts_auth_key") || Map.get(inbound_config, :ts_auth_key) ||
+                "",
             status: String.to_atom((pair && pair.status) || "stopped"),
             error_reason: pair && (pair.wg_error_reason || pair.ts_error_reason),
             wg_status: String.to_atom((pair && pair.wg_status) || "stopped"),
@@ -197,8 +243,8 @@ defmodule Hermit.Vpn.PairWorker do
             ts_port: nil,
             inbound_module: inbound_mod,
             outbound_module: outbound_mod,
-            inbound_config: pair && pair.inbound_config,
-            outbound_config: pair && pair.outbound_config
+            inbound_config: inbound_config,
+            outbound_config: outbound_config
           }
 
         pid ->
@@ -208,15 +254,33 @@ defmodule Hermit.Vpn.PairWorker do
             _, _ ->
               pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
 
+              {inbound_type, inbound_config} =
+                if pair && pair.inbound_profile do
+                  {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
+                else
+                  {"tailscale", %{}}
+                end
+
+              {outbound_type, outbound_config} =
+                if pair && pair.outbound_profile do
+                  {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+                else
+                  {"wireguard", %{}}
+                end
+
               inbound_mod =
-                case (pair && pair.inbound_type) || "tailscale" do
+                case inbound_type do
                   "tailscale" -> Hermit.Vpn.Inbound.Tailscale
+                  "headscale" -> Hermit.Vpn.Inbound.Tailscale
+                  "zerotier" -> Hermit.Vpn.Inbound.ZeroTier
+                  "proxy" -> Hermit.Vpn.Inbound.Proxy
                   _ -> Hermit.Vpn.Inbound.Tailscale
                 end
 
               outbound_mod =
-                case (pair && pair.outbound_type) || "wireguard" do
+                case outbound_type do
                   "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+                  "openvpn" -> Hermit.Vpn.Outbound.OpenVPN
                   _ -> Hermit.Vpn.Outbound.WireGuard
                 end
 
@@ -225,8 +289,12 @@ defmodule Hermit.Vpn.PairWorker do
                 wg_container_name: "hermit_wg_#{id}",
                 ts_container_name: "hermit_ts_#{id}",
                 wg_config_path: Path.join([get_storage_base_path(), id, "wg0.conf"]),
-                wg_config_content: (pair && pair.wg_config) || "",
-                ts_auth_key: (pair && pair.ts_auth_key) || "",
+                wg_config_content:
+                  Map.get(outbound_config, "wg_config") || Map.get(outbound_config, :wg_config) ||
+                    "",
+                ts_auth_key:
+                  Map.get(inbound_config, "ts_auth_key") || Map.get(inbound_config, :ts_auth_key) ||
+                    "",
                 status: String.to_atom((pair && pair.status) || "stopped"),
                 error_reason: pair && (pair.wg_error_reason || pair.ts_error_reason),
                 wg_status: String.to_atom((pair && pair.wg_status) || "stopped"),
@@ -248,8 +316,8 @@ defmodule Hermit.Vpn.PairWorker do
                 ts_port: nil,
                 inbound_module: inbound_mod,
                 outbound_module: outbound_mod,
-                inbound_config: pair && pair.inbound_config,
-                outbound_config: pair && pair.outbound_config
+                inbound_config: inbound_config,
+                outbound_config: outbound_config
               }
           end
       end
@@ -271,12 +339,8 @@ defmodule Hermit.Vpn.PairWorker do
                    {__MODULE__,
                     %{
                       id: id,
-                      wg_config: pair.wg_config,
-                      ts_auth_key: pair.ts_auth_key,
-                      inbound_type: pair.inbound_type,
-                      inbound_config: pair.inbound_config,
-                      outbound_type: pair.outbound_type,
-                      outbound_config: pair.outbound_config
+                      inbound_profile_id: pair.inbound_profile_id,
+                      outbound_profile_id: pair.outbound_profile_id
                     }}
                  ) do
               {:ok, pid} -> {:ok, pid}
@@ -313,37 +377,68 @@ defmodule Hermit.Vpn.PairWorker do
              %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
 
         pair ->
+          pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
+
+          {inbound_type, inbound_config} =
+            if pair.inbound_profile do
+              {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
+            else
+              {pair.inbound_type || "tailscale", pair.inbound_config || %{}}
+            end
+
+          {outbound_type, outbound_config} =
+            if pair.outbound_profile do
+              {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+            else
+              {pair.outbound_type || "wireguard", pair.outbound_config || %{}}
+            end
+
           {
             String.to_atom(pair.wg_status || "stopped"),
             String.to_atom(pair.ts_status || "stopped"),
             String.to_atom(pair.status || "stopped"),
             pair.started_at,
-            pair.inbound_type || "tailscale",
-            pair.inbound_config || %{},
-            pair.outbound_type || "wireguard",
-            pair.outbound_config || %{}
+            inbound_type,
+            inbound_config,
+            outbound_type,
+            outbound_config
           }
       end
 
     inbound_module =
       case inbound_type do
         "tailscale" -> Hermit.Vpn.Inbound.Tailscale
+        "headscale" -> Hermit.Vpn.Inbound.Tailscale
+        "zerotier" -> Hermit.Vpn.Inbound.ZeroTier
+        "proxy" -> Hermit.Vpn.Inbound.Proxy
         _ -> Hermit.Vpn.Inbound.Tailscale
       end
 
     outbound_module =
       case outbound_type do
         "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+        "openvpn" -> Hermit.Vpn.Outbound.OpenVPN
         _ -> Hermit.Vpn.Outbound.WireGuard
       end
+
+    wg_config_content =
+      Map.get(outbound_config, "wg_config") ||
+        Map.get(outbound_config, :wg_config) ||
+        args[:wg_config] ||
+        args[:wg_config_content]
+
+    ts_auth_key =
+      Map.get(inbound_config, "ts_auth_key") ||
+        Map.get(inbound_config, :ts_auth_key) ||
+        args[:ts_auth_key]
 
     state = %__MODULE__{
       id: id,
       wg_container_name: "hermit_wg_#{id}",
       ts_container_name: "hermit_ts_#{id}",
       wg_config_path: wg_config_path,
-      wg_config_content: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
+      wg_config_content: wg_config_content,
+      ts_auth_key: ts_auth_key,
       status: overall_status,
       wg_status: wg_status,
       ts_status: ts_status,

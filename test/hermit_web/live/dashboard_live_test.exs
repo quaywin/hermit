@@ -34,6 +34,20 @@ defmodule HermitWeb.DashboardLiveTest do
   end
 
   test "renders dashboard, validates input, and deploys a pair", %{conn: conn} do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-12345"}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => "[Interface]\nPrivateKey = test_key\n"}
+      })
+
     {:ok, view, html} = live(conn, ~p"/")
 
     assert html =~ "HERMIT GATEWAY"
@@ -42,7 +56,8 @@ defmodule HermitWeb.DashboardLiveTest do
     invalid_form = %{
       "form" => %{
         "pair_id" => "invalid Name Here",
-        "wg_config" => ""
+        "inbound_profile_id" => "",
+        "outbound_profile_id" => ""
       }
     }
 
@@ -58,7 +73,8 @@ defmodule HermitWeb.DashboardLiveTest do
     valid_form = %{
       "form" => %{
         "pair_id" => "prod_us",
-        "wg_config" => "[Interface]\nPrivateKey = test_key\n"
+        "inbound_profile_id" => inbound_profile.id,
+        "outbound_profile_id" => outbound_profile.id
       }
     }
 
@@ -83,6 +99,31 @@ defmodule HermitWeb.DashboardLiveTest do
       wg_config: "[Interface]\nPrivateKey = wgpkey\n",
       ts_auth_key: "tskey-12345"
     }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts2",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg2",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
 
     {:ok, pid} = PairWorker.start_link(args)
     Process.sleep(100)
@@ -118,5 +159,34 @@ defmodule HermitWeb.DashboardLiveTest do
 
     html = render(view)
     refute html =~ "prod_eu"
+  end
+
+  test "switches tabs using CSS hidden class to preserve stream state", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # By default, tunnels tab is active, inbound/outbound are hidden
+    assert render(view) =~ "Deploy VPN Tunnel"
+    assert has_element?(view, "div.hidden", "Create Inbound Profile")
+    assert has_element?(view, "div.hidden", "Create Outbound Profile")
+    refute has_element?(view, "div.hidden", "Deploy VPN Tunnel")
+
+    # Switch to inbound tab
+    view
+    |> element("button[phx-click=set_tab][phx-value-tab=inbound]")
+    |> render_click()
+
+    # Now inbound is visible, tunnels and outbound are hidden
+    assert has_element?(view, "div.hidden", "Deploy VPN Tunnel")
+    refute has_element?(view, "div.hidden", "Create Inbound Profile")
+    assert has_element?(view, "div.hidden", "Create Outbound Profile")
+
+    # Switch to outbound tab
+    view
+    |> element("button[phx-click=set_tab][phx-value-tab=outbound]")
+    |> render_click()
+
+    assert has_element?(view, "div.hidden", "Deploy VPN Tunnel")
+    assert has_element?(view, "div.hidden", "Create Inbound Profile")
+    refute has_element?(view, "div.hidden", "Create Outbound Profile")
   end
 end

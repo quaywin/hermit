@@ -43,11 +43,25 @@ defmodule HermitWeb.TunnelDetailLiveTest do
       ts_auth_key: "tskey-12345"
     }
 
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
     # Persist the tunnel in Ecto so get_state can find it
     vpn_pair = %Hermit.Vpn.VpnPair{
       pair_id: args.id,
-      wg_config: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
       status: "stopped",
       wg_status: "stopped",
       ts_status: "stopped"
@@ -101,10 +115,24 @@ defmodule HermitWeb.TunnelDetailLiveTest do
       ts_auth_key: "tskey-12345"
     }
 
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts2",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg2",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
     vpn_pair = %Hermit.Vpn.VpnPair{
       pair_id: args.id,
-      wg_config: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
       status: "stopped",
       wg_status: "stopped",
       ts_status: "stopped"

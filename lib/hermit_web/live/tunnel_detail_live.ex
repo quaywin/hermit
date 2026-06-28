@@ -141,6 +141,9 @@ defmodule HermitWeb.TunnelDetailLive do
         {:noreply, put_flash(socket, :error, "Tunnel not found in database.")}
 
       vpn_pair ->
+        vpn_pair = Hermit.Repo.preload(vpn_pair, :outbound_profile)
+        wg_config = vpn_pair.outbound_profile && vpn_pair.outbound_profile.config["wg_config"]
+        vpn_pair = %{vpn_pair | wg_config: wg_config}
         changeset = Hermit.Vpn.VpnPair.changeset(vpn_pair, %{})
 
         {:noreply,
@@ -159,6 +162,9 @@ defmodule HermitWeb.TunnelDetailLive do
   def handle_event("validate_wg_config", %{"vpn_pair" => params}, socket) do
     id = socket.assigns.id
     vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
+    vpn_pair = Hermit.Repo.preload(vpn_pair, :outbound_profile)
+    wg_config = vpn_pair.outbound_profile && vpn_pair.outbound_profile.config["wg_config"]
+    vpn_pair = %{vpn_pair | wg_config: wg_config}
 
     changeset =
       vpn_pair

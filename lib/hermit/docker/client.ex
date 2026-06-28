@@ -596,8 +596,19 @@ defmodule Hermit.Docker.Client do
         {:ok, :approved}
 
       true ->
-        api_key = Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
-        tailnet = Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+        pair =
+          case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
+            nil -> nil
+            p -> Hermit.Repo.preload(p, :inbound_profile)
+          end
+
+        api_key =
+          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+        tailnet =
+          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
 
         if api_key == "" or tailnet == "" do
           Logger.warning(

@@ -12,42 +12,25 @@ defmodule Hermit.Vpn.DynamicSupervisor do
   Dynamically starts a new VPN Pair worker.
   """
   def start_pair(args) do
-    Logger.info("DynamicSupervisor: starting VPN pair child for ID: #{args.id}")
+    pair_id = args[:id] || args["id"] || args[:pair_id] || args["pair_id"]
+    inbound_profile_id = to_int(args[:inbound_profile_id] || args["inbound_profile_id"])
+    outbound_profile_id = to_int(args[:outbound_profile_id] || args["outbound_profile_id"])
 
-    inbound_config =
-      args[:inbound_config] ||
-        %{
-          "ts_auth_key" => args[:ts_auth_key],
-          "login_server" => args[:login_server]
-        }
-
-    outbound_config =
-      args[:outbound_config] ||
-        %{
-          "wg_config" => args[:wg_config]
-        }
+    Logger.info("DynamicSupervisor: starting VPN pair child for ID: #{pair_id}")
 
     vpn_pair = %Hermit.Vpn.VpnPair{
-      pair_id: args.id,
-      wg_config: args[:wg_config],
-      ts_auth_key: args[:ts_auth_key],
-      inbound_type: args[:inbound_type] || "tailscale",
-      inbound_config: inbound_config,
-      outbound_type: args[:outbound_type] || "wireguard",
-      outbound_config: outbound_config,
+      pair_id: pair_id,
+      inbound_profile_id: inbound_profile_id,
+      outbound_profile_id: outbound_profile_id,
       status: "running",
       wg_status: "starting",
       ts_status: "starting"
     }
 
     worker_args = %{
-      id: args.id,
-      wg_config: args[:wg_config],
-      ts_auth_key: args[:ts_auth_key],
-      inbound_type: args[:inbound_type] || "tailscale",
-      inbound_config: inbound_config,
-      outbound_type: args[:outbound_type] || "wireguard",
-      outbound_config: outbound_config
+      id: pair_id,
+      inbound_profile_id: inbound_profile_id,
+      outbound_profile_id: outbound_profile_id
     }
 
     case Hermit.Repo.insert(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id) do
@@ -90,5 +73,17 @@ defmodule Hermit.Vpn.DynamicSupervisor do
   @impl true
   def init(_init_arg) do
     DynamicSupervisor.init(strategy: :one_for_one)
+  end
+
+  # --- Helpers ---
+
+  defp to_int(nil), do: nil
+  defp to_int(val) when is_integer(val), do: val
+
+  defp to_int(val) when is_binary(val) do
+    case Integer.parse(val) do
+      {int, _} -> int
+      _ -> nil
+    end
   end
 end

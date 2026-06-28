@@ -165,10 +165,24 @@ defmodule Hermit.Vpn.PairWorkerTest do
     }
 
     # Persist the pair in Ecto so get_state can query it during recovery
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
     vpn_pair = %Hermit.Vpn.VpnPair{
       pair_id: args.id,
-      wg_config: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
       status: "running",
       wg_status: "starting",
       ts_status: "starting"
@@ -231,10 +245,24 @@ defmodule Hermit.Vpn.PairWorkerTest do
     }
 
     # Persist the pair in Ecto so get_state can query it during recovery
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts2",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg2",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
     vpn_pair = %Hermit.Vpn.VpnPair{
       pair_id: args.id,
-      wg_config: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
       status: "running",
       wg_status: "starting",
       ts_status: "starting"
@@ -279,10 +307,24 @@ defmodule Hermit.Vpn.PairWorkerTest do
       ts_auth_key: "tskey-12345"
     }
 
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
     vpn_pair = %Hermit.Vpn.VpnPair{
       pair_id: args.id,
-      wg_config: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
       status: "running",
       wg_status: "stopped",
       ts_status: "stopped"
@@ -299,7 +341,11 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     # Check database was updated
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_pair")
-    assert updated_pair.wg_config == new_config
+
+    updated_profile =
+      Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, updated_pair.outbound_profile_id)
+
+    assert updated_profile.config["wg_config"] == new_config
 
     # Check memory state of running worker
     state = GenServer.call(pid, :get_state)
@@ -319,14 +365,24 @@ defmodule Hermit.Vpn.PairWorkerTest do
       login_server: "https://my-headscale.com"
     }
 
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_hs",
+        type: "headscale",
+        config: %{"ts_auth_key" => args.ts_auth_key, "login_server" => args.login_server}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
     vpn_pair = %Hermit.Vpn.VpnPair{
       pair_id: args.id,
-      wg_config: args.wg_config,
-      ts_auth_key: args.ts_auth_key,
-      inbound_type: "tailscale",
-      inbound_config: %{"ts_auth_key" => args.ts_auth_key, "login_server" => args.login_server},
-      outbound_type: "wireguard",
-      outbound_config: %{"wg_config" => args.wg_config},
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
       status: "running",
       wg_status: "stopped",
       ts_status: "stopped"

@@ -20,252 +20,605 @@
       </div>
     </header>
 
-    <!-- Main Content Grid -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <!-- Left Column: Settings & Deploy Panel -->
-      <div class="space-y-8">
-        <!-- Settings Panel -->
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+    <!-- Navigation Tabs -->
+    <div class="flex border-b border-slate-800 space-x-8 mb-6">
+      <button
+        phx-click="set_tab"
+        phx-value-tab="tunnels"
+        class={"pb-4 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :tunnels, do: "border-cyan-500 text-cyan-400", else: "border-transparent text-slate-400 hover:text-slate-200")}
+      >
+        Tunnels
+      </button>
+      <button
+        phx-click="set_tab"
+        phx-value-tab="inbound"
+        class={"pb-4 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :inbound, do: "border-cyan-500 text-cyan-400", else: "border-transparent text-slate-400 hover:text-slate-200")}
+      >
+        Inbound Profiles
+      </button>
+      <button
+        phx-click="set_tab"
+        phx-value-tab="outbound"
+        class={"pb-4 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :outbound, do: "border-cyan-500 text-cyan-400", else: "border-transparent text-slate-400 hover:text-slate-200")}
+      >
+        Outbound Profiles
+      </button>
+    </div>
+
+    <!-- Active Tab Content -->
+    <div class={if @active_tab != :tunnels, do: "hidden"}>
+      <!-- Main Content Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left Column: Settings & Deploy Panel -->
+        <div class="space-y-8">
+          <!-- Deploy Tunnel Panel -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+            <div>
+              <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+                <span>+</span> Deploy VPN Tunnel
+              </h2>
+              <p class="text-xs text-slate-400 mt-1">
+                Deploy an isolated VPN tunnel by linking an Inbound exit node to an Outbound connection.
+              </p>
+            </div>
+
+            <.form
+              :let={f}
+              for={@form}
+              phx-change="validate"
+              phx-submit="save"
+              id="vpn-pair-form"
+              class="space-y-4"
+            >
+              <div class="space-y-2">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tunnel ID / Name</label>
+                <.input
+                  field={f[:pair_id]}
+                  type="text"
+                  placeholder="e.g., prod_us_east"
+                  class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
+                />
+              </div>
+
+              <div class="space-y-2">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Inbound Profile</label>
+                <.input
+                  field={f[:inbound_profile_id]}
+                  type="select"
+                  prompt="Select an Inbound Profile"
+                  options={Enum.map(@inbound_profiles, &{&1.name, &1.id})}
+                  class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 text-sm rounded-lg"
+                />
+              </div>
+
+              <div class="space-y-2">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Outbound Profile</label>
+                <.input
+                  field={f[:outbound_profile_id]}
+                  type="select"
+                  prompt="Select an Outbound Profile"
+                  options={Enum.map(@outbound_profiles, &{&1.name, &1.id})}
+                  class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 text-sm rounded-lg"
+                />
+              </div>
+
+              <button
+                type="submit"
+                class="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider py-3 rounded-lg transition-colors cursor-pointer"
+              >
+                Spawn VPN Pair
+              </button>
+            </.form>
+          </div>
+        </div>
+
+        <!-- Live Datagrid (Right or Main) -->
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
           <div>
-            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
-              ⚙️ Global Settings
-            </h2>
+            <h2 class="text-xl font-bold text-slate-100">Active VPN Tunnels</h2>
             <p class="text-xs text-slate-400 mt-1">
-              Configure default settings saved to SQLite.
+              Real-time status, configurations, and throughput logs.
             </p>
           </div>
 
-          <form phx-submit="save_settings" id="global-settings-form" class="space-y-4">
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Default Tailscale Auth Key</label>
-              <input
-                type="password"
-                name="tailscale_auth_key"
-                value={@global_ts_auth_key}
-                placeholder="tskey-auth-..."
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
-              />
-            </div>
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale API Key</label>
-              <input
-                type="password"
-                name="tailscale_api_key"
-                value={@global_ts_api_key}
-                placeholder="tskey-api-..."
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
-              />
-            </div>
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Tailnet Name</label>
-              <input
-                type="text"
-                name="tailscale_tailnet"
-                value={@global_ts_tailnet}
-                placeholder="example.com or user@gmail.com"
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
-              />
-            </div>
-            <button
-              type="submit"
-              class="w-full bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/20 font-bold uppercase tracking-wider py-2.5 rounded-lg transition-colors cursor-pointer text-xs"
-            >
-              Save Settings
-            </button>
-          </form>
-        </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  <th class="py-3 px-4">Name / ID</th>
+                  <th class="py-3 px-4">Exit Node Hostname</th>
+                  <th class="py-3 px-4">WireGuard</th>
+                  <th class="py-3 px-4">Tailscale</th>
+                  <th class="py-3 px-4">Traffic / Health</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody
+                id="vpn-pairs-list"
+                phx-update="stream"
+                class="divide-y divide-slate-800 text-sm"
+              >
+                <tr
+                  :for={{dom_id, pair} <- @streams.vpn_pairs}
+                  id={dom_id}
+                  class="hover:bg-slate-800/40 transition-colors"
+                >
+                  <td class="py-4 px-4 font-mono font-bold text-slate-200">
+                    <.link
+                      navigate={~p"/tunnels/#{pair.id}"}
+                      class="text-cyan-400 hover:underline"
+                    >
+                      {pair.id}
+                    </.link>
+                  </td>
+                  <td class="py-4 px-4 text-slate-300 font-mono text-xs">
+                    hermit-node-{String.replace(pair.id, "_", "-")}
+                  </td>
+                  <td class="py-4 px-4">
+                    <%= case pair.wg_status do %>
+                      <% :running -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Running
+                        </span>
+                      <% :starting -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                          Starting
+                        </span>
+                      <% :stopped -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                        </span>
+                      <% :error -> %>
+                        <span
+                          class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 cursor-help"
+                          title={pair.wg_error_reason}
+                        >
+                          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                        </span>
+                    <% end %>
+                  </td>
+                  <td class="py-4 px-4">
+                    <%= case pair.ts_status do %>
+                      <% :running -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Running
+                        </span>
+                      <% :starting -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                          Starting
+                        </span>
+                      <% :stopped -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
+                        </span>
+                      <% :error -> %>
+                        <span
+                          class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 cursor-help"
+                          title={pair.ts_error_reason}
+                        >
+                          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                        </span>
+                    <% end %>
+                  </td>
+                  <td class="py-4 px-4 text-xs font-mono text-slate-400">
+                    <div class="flex items-center gap-1">
+                      <span class="text-emerald-400">↓</span> {format_bytes(
+                        pair.metrics.bytes_received
+                      )}
+                    </div>
+                    <div class="flex items-center gap-1 mt-0.5">
+                      <span class="text-cyan-400">↑</span> {format_bytes(pair.metrics.bytes_sent)}
+                    </div>
+                  </td>
+                  <td class="py-4 px-4 text-right">
+                    <div class="inline-flex items-center space-x-2">
+                      <.link
+                        navigate={~p"/tunnels/#{pair.id}"}
+                        class="px-2.5 py-1 text-xs font-semibold rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
+                      >
+                        View Details
+                      </.link>
 
-        <!-- Creation Panel (Left or Side) -->
+                      <button
+                        phx-click="delete"
+                        phx-value-id={pair.id}
+                        data-confirm="Are you sure you want to permanently delete this VPN Pair and remove all associated containers?"
+                        class="px-2.5 py-1 text-xs font-semibold rounded bg-red-950/40 hover:bg-red-950 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class={if @active_tab != :inbound, do: "hidden"}>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left Column: Create Inbound Profile Form -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
           <div>
             <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
-              <span>+</span> Deploy VPN Pair
+              <span>+</span> Create Inbound Profile
             </h2>
             <p class="text-xs text-slate-400 mt-1">
-              Instantiate isolated Tailscale inbound exit node routed through WireGuard outbound tunnel.
+              Configure inbound endpoints for connections (Tailscale, Headscale, ZeroTier, Proxy).
             </p>
           </div>
 
           <.form
             :let={f}
-            for={@form}
-            phx-change="validate"
-            phx-submit="save"
-            id="vpn-pair-form"
+            for={@inbound_form}
+            phx-change="validate_inbound"
+            phx-submit="save_inbound"
+            id="inbound-profile-form"
             class="space-y-4"
           >
             <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">VPN Pair Name / Slug</label>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Profile Name</label>
               <.input
-                field={f[:pair_id]}
+                field={f[:name]}
                 type="text"
-                placeholder="e.g., prod_us_east"
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
+                placeholder="e.g., Office Tailscale or Proxy Inbound"
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 text-sm rounded-lg"
               />
             </div>
 
             <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">WireGuard Conf Payload</label>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <.input
-                field={f[:wg_config]}
-                type="textarea"
-                rows={8}
-                placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-xs rounded-lg"
+                field={f[:type]}
+                type="select"
+                options={[
+                  {"Tailscale", "tailscale"},
+                  {"Headscale", "headscale"},
+                  {"ZeroTier", "zerotier"},
+                  {"Proxy", "proxy"}
+                ]}
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 text-sm rounded-lg"
               />
             </div>
 
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Auth Key (Optional)</label>
-              <.input
-                field={f[:ts_auth_key]}
-                type="password"
-                placeholder="Defaults to Global Settings Key"
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
-              />
-            </div>
-
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Headscale Login Server (Optional)</label>
-              <.input
-                field={f[:login_server]}
-                type="text"
-                placeholder="e.g., https://your-headscale-domain.com"
-                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg"
-              />
-            </div>
+            <!-- Dynamic Input Fields based on Type -->
+            <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
+              <% "tailscale" -> %>
+                <div class="space-y-4 bg-slate-950/40 p-4 border border-slate-800/60 rounded-lg">
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Auth Key (Optional)</label>
+                    <input
+                      type="password"
+                      name="inbound_profile[config][ts_auth_key]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["ts_auth_key"]}
+                      placeholder="tskey-auth-..."
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale API Key (Optional)</label>
+                    <input
+                      type="password"
+                      name="inbound_profile[config][ts_api_key]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["ts_api_key"]}
+                      placeholder="tskey-api-..."
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Tailnet Name (Optional)</label>
+                    <input
+                      type="text"
+                      name="inbound_profile[config][ts_tailnet]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["ts_tailnet"]}
+                      placeholder="e.g., example.com or user@gmail.com"
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                </div>
+              <% "headscale" -> %>
+                <div class="space-y-4 bg-slate-950/40 p-4 border border-slate-800/60 rounded-lg">
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Headscale Auth Key</label>
+                    <input
+                      type="password"
+                      name="inbound_profile[config][ts_auth_key]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["ts_auth_key"]}
+                      placeholder="tskey-auth-..."
+                      required
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Headscale Login Server URL</label>
+                    <input
+                      type="text"
+                      name="inbound_profile[config][login_server]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["login_server"]}
+                      placeholder="e.g., https://headscale.example.com"
+                      required
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale API Key (Optional)</label>
+                    <input
+                      type="password"
+                      name="inbound_profile[config][ts_api_key]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["ts_api_key"]}
+                      placeholder="tskey-api-..."
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Tailscale Tailnet Name (Optional)</label>
+                    <input
+                      type="text"
+                      name="inbound_profile[config][ts_tailnet]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["ts_tailnet"]}
+                      placeholder="e.g., example.com or user@gmail.com"
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                </div>
+              <% "zerotier" -> %>
+                <div class="space-y-4 bg-slate-950/40 p-4 border border-slate-800/60 rounded-lg">
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">ZeroTier Network ID</label>
+                    <input
+                      type="text"
+                      name="inbound_profile[config][network_id]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["network_id"]}
+                      placeholder="e.g., 8056c2e21c000001"
+                      required
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                </div>
+              <% "proxy" -> %>
+                <div class="space-y-4 bg-slate-950/40 p-4 border border-slate-800/60 rounded-lg">
+                  <div class="space-y-2">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Proxy Inbound Port</label>
+                    <input
+                      type="number"
+                      name="inbound_profile[config][port]"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["port"]}
+                      placeholder="e.g., 1080"
+                      required
+                      class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-sm rounded-lg p-2.5"
+                    />
+                  </div>
+                </div>
+              <% _ -> %>
+            <% end %>
 
             <button
               type="submit"
               class="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider py-3 rounded-lg transition-colors cursor-pointer"
             >
-              Spawn VPN Pair
+              Save Inbound Profile
             </button>
           </.form>
         </div>
-      </div>
 
-      <!-- Live Datagrid (Right or Main) -->
-      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
-        <div>
-          <h2 class="text-xl font-bold text-slate-100">Active VPN Tunnels</h2>
-          <p class="text-xs text-slate-400 mt-1">
-            Real-time status, configurations, and throughput logs.
-          </p>
+        <!-- List Inbound Profiles -->
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+          <div>
+            <h2 class="text-xl font-bold text-slate-100">Inbound Profiles</h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Configured exit nodes and proxy inbounds.
+            </p>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  <th class="py-3 px-4">Name</th>
+                  <th class="py-3 px-4">Type</th>
+                  <th class="py-3 px-4">Details</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800 text-sm">
+                <%= if @inbound_profiles == [] do %>
+                  <tr>
+                    <td colspan="4" class="py-8 text-center text-slate-500">
+                      No Inbound Profiles configured yet.
+                    </td>
+                  </tr>
+                <% else %>
+                  <tr
+                    :for={profile <- @inbound_profiles}
+                    class="hover:bg-slate-800/40 transition-colors"
+                  >
+                    <td class="py-4 px-4 font-bold text-slate-200">{profile.name}</td>
+                    <td class="py-4 px-4">
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase">
+                        {profile.type}
+                      </span>
+                    </td>
+                    <td class="py-4 px-4 font-mono text-xs text-slate-400">
+                      <%= case profile.type do %>
+                        <% "tailscale" -> %>
+                          <span>Key: {if(profile.config["ts_auth_key"],
+                            do: "Configured (tskey-...)",
+                            else: "Default"
+                          )}, Server: {profile.config["login_server"] || "Official"}</span>
+                        <% "headscale" -> %>
+                          <span>Server: {profile.config["login_server"]}</span>
+                        <% "zerotier" -> %>
+                          <span>Net ID: {profile.config["network_id"]}</span>
+                        <% "proxy" -> %>
+                          <span>Port: {profile.config["port"]}</span>
+                        <% _ -> %>
+                          <span>-</span>
+                      <% end %>
+                    </td>
+                    <td class="py-4 px-4 text-right">
+                      <button
+                        phx-click="delete_inbound"
+                        phx-value-id={profile.id}
+                        data-confirm="Are you sure you want to delete this inbound profile?"
+                        class="px-2.5 py-1 text-xs font-semibold rounded bg-red-950/40 hover:bg-red-950 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class={if @active_tab != :outbound, do: "hidden"}>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Create Outbound Profile Form -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+          <div>
+            <h2 class="text-xl font-bold text-slate-100 flex items-center gap-2">
+              <span>+</span> Create Outbound Profile
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Configure outbound gateways for tunnels (WireGuard, OpenVPN).
+            </p>
+          </div>
+
+          <.form
+            :let={f}
+            for={@outbound_form}
+            phx-change="validate_outbound"
+            phx-submit="save_outbound"
+            id="outbound-profile-form"
+            class="space-y-4"
+          >
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Profile Name</label>
+              <.input
+                field={f[:name]}
+                type="text"
+                placeholder="e.g., Mullvad US or OpenVPN Gateway"
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 text-sm rounded-lg"
+              />
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
+              <.input
+                field={f[:type]}
+                type="select"
+                options={[{"WireGuard", "wireguard"}, {"OpenVPN", "openvpn"}]}
+                class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 text-sm rounded-lg"
+              />
+            </div>
+
+            <!-- Dynamic Input Fields based on Type -->
+            <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
+              <% "wireguard" -> %>
+                <div class="space-y-2 bg-slate-950/40 p-4 border border-slate-800/60 rounded-lg">
+                  <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">WireGuard Payload</label>
+                  <textarea
+                    name="outbound_profile[config][wg_config]"
+                    rows="8"
+                    placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
+                    required
+                    class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-xs rounded-lg p-2.5"
+                  ><%= Phoenix.HTML.Form.input_value(f, :config)["wg_config"] %></textarea>
+                </div>
+              <% "openvpn" -> %>
+                <div class="space-y-2 bg-slate-950/40 p-4 border border-slate-800/60 rounded-lg">
+                  <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">OpenVPN Config (.ovpn)</label>
+                  <textarea
+                    name="outbound_profile[config][ovpn_config]"
+                    rows="8"
+                    placeholder="client&#10;dev tun&#10;proto udp&#10;remote 127.0.0.1 1194&#10;..."
+                    required
+                    class="w-full bg-slate-950 border-slate-800 focus:border-cyan-500 text-slate-100 font-mono text-xs rounded-lg p-2.5"
+                  ><%= Phoenix.HTML.Form.input_value(f, :config)["ovpn_config"] %></textarea>
+                </div>
+              <% _ -> %>
+            <% end %>
+
+            <button
+              type="submit"
+              class="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider py-3 rounded-lg transition-colors cursor-pointer"
+            >
+              Save Outbound Profile
+            </button>
+          </.form>
         </div>
 
-        <div class="overflow-x-auto">
-          <table class="w-full text-left border-collapse">
-            <thead>
-              <tr class="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                <th class="py-3 px-4">Name / ID</th>
-                <th class="py-3 px-4">Exit Node Hostname</th>
-                <th class="py-3 px-4">WireGuard</th>
-                <th class="py-3 px-4">Tailscale</th>
-                <th class="py-3 px-4">Traffic / Health</th>
-                <th class="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody
-              id="vpn-pairs-list"
-              phx-update="stream"
-              class="divide-y divide-slate-800 text-sm"
-            >
-              <tr
-                :for={{dom_id, pair} <- @streams.vpn_pairs}
-                id={dom_id}
-                class="hover:bg-slate-800/40 transition-colors"
-              >
-                <td class="py-4 px-4 font-mono font-bold text-slate-200">
-                  <.link navigate={~p"/tunnels/#{pair.id}"} class="text-cyan-400 hover:underline">
-                    {pair.id}
-                  </.link>
-                </td>
-                <td class="py-4 px-4 text-slate-300 font-mono text-xs">
-                  hermit-node-{String.replace(pair.id, "_", "-")}
-                </td>
-                <td class="py-4 px-4">
-                  <%= case pair.wg_status do %>
-                    <% :running -> %>
-                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        Running
-                      </span>
-                    <% :starting -> %>
-                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                        Starting
-                      </span>
-                    <% :stopped -> %>
-                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
-                        <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
-                      </span>
-                    <% :error -> %>
-                      <span
-                        class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 cursor-help"
-                        title={pair.wg_error_reason}
-                      >
-                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                      </span>
-                  <% end %>
-                </td>
-                <td class="py-4 px-4">
-                  <%= case pair.ts_status do %>
-                    <% :running -> %>
-                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        Running
-                      </span>
-                    <% :starting -> %>
-                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                        Starting
-                      </span>
-                    <% :stopped -> %>
-                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">
-                        <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Stopped
-                      </span>
-                    <% :error -> %>
-                      <span
-                        class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 cursor-help"
-                        title={pair.ts_error_reason}
-                      >
-                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                      </span>
-                  <% end %>
-                </td>
-                <td class="py-4 px-4 text-xs font-mono text-slate-400">
-                  <div class="flex items-center gap-1">
-                    <span class="text-emerald-400">↓</span> {format_bytes(
-                      pair.metrics.bytes_received
-                    )}
-                  </div>
-                  <div class="flex items-center gap-1 mt-0.5">
-                    <span class="text-cyan-400">↑</span> {format_bytes(pair.metrics.bytes_sent)}
-                  </div>
-                </td>
-                <td class="py-4 px-4 text-right">
-                  <div class="inline-flex items-center space-x-2">
-                    <.link
-                      navigate={~p"/tunnels/#{pair.id}"}
-                      class="px-2.5 py-1 text-xs font-semibold rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
-                    >
-                      View Details
-                    </.link>
+        <!-- List Outbound Profiles -->
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+          <div>
+            <h2 class="text-xl font-bold text-slate-100">Outbound Profiles</h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Configured upstream VPN tunnels.
+            </p>
+          </div>
 
-                    <button
-                      phx-click="delete"
-                      phx-value-id={pair.id}
-                      data-confirm="Are you sure you want to permanently delete this VPN Pair and remove all associated containers?"
-                      class="px-2.5 py-1 text-xs font-semibold rounded bg-red-950/40 hover:bg-red-950 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  <th class="py-3 px-4">Name</th>
+                  <th class="py-3 px-4">Type</th>
+                  <th class="py-3 px-4">Details</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800 text-sm">
+                <%= if @outbound_profiles == [] do %>
+                  <tr>
+                    <td colspan="4" class="py-8 text-center text-slate-500">
+                      No Outbound Profiles configured yet.
+                    </td>
+                  </tr>
+                <% else %>
+                  <tr
+                    :for={profile <- @outbound_profiles}
+                    class="hover:bg-slate-800/40 transition-colors"
+                  >
+                    <td class="py-4 px-4 font-bold text-slate-200">{profile.name}</td>
+                    <td class="py-4 px-4">
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase">
+                        {profile.type}
+                      </span>
+                    </td>
+                    <td class="py-4 px-4 font-mono text-xs text-slate-400">
+                      <%= case profile.type do %>
+                        <% "wireguard" -> %>
+                          <span>WireGuard Configuration Payload</span>
+                        <% "openvpn" -> %>
+                          <span>OpenVPN (.ovpn) Configuration Payload</span>
+                        <% _ -> %>
+                          <span>-</span>
+                      <% end %>
+                    </td>
+                    <td class="py-4 px-4 text-right">
+                      <button
+                        phx-click="delete_outbound"
+                        phx-value-id={profile.id}
+                        data-confirm="Are you sure you want to delete this outbound profile?"
+                        class="px-2.5 py-1 text-xs font-semibold rounded bg-red-950/40 hover:bg-red-950 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

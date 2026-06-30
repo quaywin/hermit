@@ -111,9 +111,9 @@ defmodule Hermit.Vpn.Inbound.Proxy do
     cond do
       mock?() ->
         %{
-          proxy_port: 1080,
+          proxy_port: "1080 / 8080",
           proxy_socks5_url: "socks5://127.0.0.1:1080",
-          proxy_http_url: "http://127.0.0.1:1080",
+          proxy_http_url: "http://127.0.0.1:8080",
           proxy_status: "Running"
         }
 
@@ -122,8 +122,11 @@ defmodule Hermit.Vpn.Inbound.Proxy do
           {:ok, content} ->
             case Jason.decode(content) do
               {:ok, data} ->
+                socks5_port = data["socks5_port"]
+                http_port = data["http_port"]
+
                 %{
-                  proxy_port: data["port"],
+                  proxy_port: "#{socks5_port} / #{http_port}",
                   proxy_socks5_url: data["socks5_url"],
                   proxy_http_url: data["http_url"],
                   proxy_status: data["status"] || "Running"

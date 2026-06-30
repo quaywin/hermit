@@ -374,41 +374,52 @@ defmodule Hermit.Vpn.PairWorker do
     {wg_status, ts_status, overall_status, started_at, inbound_type, inbound_config,
      outbound_type,
      outbound_config} =
-      case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-        nil ->
+      try do
+        case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
+          nil ->
+            {:starting, :starting, :starting_wg, nil, args[:inbound_type] || "tailscale",
+             args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
+             args[:outbound_type] || "wireguard",
+             args[:outbound_config] ||
+               %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
+
+          pair ->
+            pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
+
+            {inbound_type, inbound_config} =
+              if pair.inbound_profile do
+                {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
+              else
+                {pair.inbound_type || "tailscale", pair.inbound_config || %{}}
+              end
+
+            {outbound_type, outbound_config} =
+              if pair.outbound_profile do
+                {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+              else
+                {pair.outbound_type || "wireguard", pair.outbound_config || %{}}
+              end
+
+            {
+              String.to_atom(pair.wg_status || "stopped"),
+              String.to_atom(pair.ts_status || "stopped"),
+              String.to_atom(pair.status || "stopped"),
+              pair.started_at,
+              inbound_type,
+              inbound_config,
+              outbound_type,
+              outbound_config
+            }
+        end
+      rescue
+        e ->
+          Logger.error("Failed to load VPN pair state from database during init: #{inspect(e)}")
+
           {:starting, :starting, :starting_wg, nil, args[:inbound_type] || "tailscale",
            args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
            args[:outbound_type] || "wireguard",
            args[:outbound_config] ||
              %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
-
-        pair ->
-          pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
-
-          {inbound_type, inbound_config} =
-            if pair.inbound_profile do
-              {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
-            else
-              {pair.inbound_type || "tailscale", pair.inbound_config || %{}}
-            end
-
-          {outbound_type, outbound_config} =
-            if pair.outbound_profile do
-              {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
-            else
-              {pair.outbound_type || "wireguard", pair.outbound_config || %{}}
-            end
-
-          {
-            String.to_atom(pair.wg_status || "stopped"),
-            String.to_atom(pair.ts_status || "stopped"),
-            String.to_atom(pair.status || "stopped"),
-            pair.started_at,
-            inbound_type,
-            inbound_config,
-            outbound_type,
-            outbound_config
-          }
       end
 
     inbound_module =

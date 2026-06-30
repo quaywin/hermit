@@ -34,17 +34,20 @@ defmodule Hermit.Vpn.Inbound.Proxy.RelayerTest do
     # Allow the GenServer to write the file and start listening
     Process.sleep(50)
 
-    # Read proxy info JSON to get the port
+    # Read proxy info JSON to get the ports
     info_path = Path.join(storage_dir, "proxy_info.json")
     assert File.exists?(info_path)
     info = Jason.decode!(File.read!(info_path))
-    port = info["port"]
-    assert is_integer(port)
-    assert port > 0
+    socks5_port = info["socks5_port"]
+    http_port = info["http_port"]
+    assert is_integer(socks5_port)
+    assert socks5_port > 0
+    assert is_integer(http_port)
+    assert http_port > 0
 
     # 1. Test HTTP Proxy Protocol Signature (Non-SOCKS5)
     assert {:ok, http_sock} =
-             :gen_tcp.connect(~c"127.0.0.1", port, [:binary, packet: :raw, active: false])
+             :gen_tcp.connect(~c"127.0.0.1", http_port, [:binary, packet: :raw, active: false])
 
     assert :ok = :gen_tcp.send(http_sock, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
     assert {:ok, http_resp} = :gen_tcp.recv(http_sock, 0, 2000)
@@ -53,7 +56,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.RelayerTest do
 
     # 2. Test SOCKS5 Protocol Signature
     assert {:ok, socks_sock} =
-             :gen_tcp.connect(~c"127.0.0.1", port, [:binary, packet: :raw, active: false])
+             :gen_tcp.connect(~c"127.0.0.1", socks5_port, [:binary, packet: :raw, active: false])
 
     # Send initial greeting: SOCKS version 5, 1 auth method (no auth)
     assert :ok = :gen_tcp.send(socks_sock, <<0x05, 0x01, 0x00>>)

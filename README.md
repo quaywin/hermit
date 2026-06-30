@@ -1,8 +1,30 @@
 # Hermit
 
-Hermit is an orchestrator and manager for VPN connection pairs (combining WireGuard and Tailscale) running inside isolated network namespaces (`netns`). The application provides a real-time web dashboard to monitor bandwidth usage, manage connection states, update WireGuard configurations, and configure Tailscale authentication keys.
+Hermit is a modular multi-tunnel orchestrator and manager for VPN connection pairs running inside isolated network namespaces (`netns`). It decouples configurations into reusable **Inbound Profiles** (e.g., SOCKS5/HTTP Proxy, Tailscale) and **Outbound Profiles** (e.g., WireGuard), allowing you to easily pair, share configurations, and manage multiple tunnels side-by-side.
+
+The application provides a real-time web dashboard to monitor bandwidth usage, manage connection states, create and share profiles, and configure global settings.
 
 > ⚠️ **IMPORTANT NOTE**: This project requires elevated system privileges (`privileged: true`) and advanced networking tools such as `iptables`, `iproute2`, `wireguard-tools`, and `tailscale`. To avoid impacting your host machine's network configuration and to ensure a consistent development environment, **it is highly recommended to develop and run this project completely within Docker**.
+
+---
+
+## Key Features & Architecture
+
+Hermit uses a decoupled architecture where a VPN tunnel is defined by pairing an **Inbound Profile** with an **Outbound Profile**.
+
+### 1. Inbound Profiles
+Inbound profiles define how traffic enters the isolated network namespace from the host or external network:
+- **SOCKS5/HTTP Proxy**: Runs a dual proxy setup inside the namespace: `microsocks` (SOCKS5 on port 1080) and `tinyproxy` (HTTP on port 8080). A host-level relayer handles traffic multiplexing. You can specify a dedicated host port, or configure `0` (or leave it blank) to let the OS dynamically assign an ephemeral port.
+- **Tailscale**: Connects the namespace to your Tailscale network (tailnet) as a node. You can supply a specific Tailscale Auth Key, or fall back to the global key configured in Settings.
+
+### 2. Outbound Profiles
+Outbound profiles define how traffic leaves the namespace:
+- **WireGuard**: Routes all outbound traffic from the namespace through a WireGuard tunnel. Requires a valid WireGuard configuration payload (the `wg0.conf` contents).
+
+### 3. VPN Pairs (Tunnels) & Conflict Prevention
+- A **VPN Pair** is a running instance combining an Inbound and an Outbound Profile.
+- To prevent routing and interface collisions, Hermit automatically performs conflict checks and blocks you from activating multiple concurrent tunnels that use the same Outbound Profile.
+- Features real-time status reporting (starting, running, stopped, error reasons) and bandwidth tracking.
 
 ---
 
@@ -77,16 +99,8 @@ If you are looking for other tools to manage VPNs or WireGuard tunnels, here is 
 | Project | Primary Focus | UI Type | WireGuard Management | Tailscale Integration | Network Namespace Isolation |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Hermit** | Multi-tunnel orchestrator | Web Dashboard | Yes | Yes | Yes (isolated `netns`) |
-| **[Wireguard UI](https://github.com/ngoduykhanh/wireguard-ui)** | WireGuard server manager | Web UI | Yes (single server) | No | No |
-| **[Netbird](https://github.com/netbirdio/netbird)** | Mesh VPN Overlay | Web & Agent | Yes (under the hood) | No (custom control plane) | No |
-| **[Netmaker](https://github.com/gravitl/netmaker)** | Custom Mesh VPN | Web & Agent | Yes | No | No |
-| **[Firezone](https://github.com/firezone/firezone)** | Zero Trust Access (ZTNA) | Web & Client | Yes | No | No |
-
-### Key Differences
-
-- **[Wireguard UI](https://github.com/ngoduykhanh/wireguard-ui)**: A web-based configuration manager for a single WireGuard server. Unlike Hermit, it does not support running multiple tunnels side-by-side or integrating them with Tailscale.
-- **[Netbird](https://github.com/netbirdio/netbird)** / **[Netmaker](https://github.com/gravitl/netmaker)**: Complete mesh VPN overlay platforms that connect multiple hosts/nodes into a secure network. Hermit, on the other hand, is a local runner/orchestrator designed to pair and run WireGuard + Tailscale tunnels inside isolated network namespaces (`netns`) on a single host.
-- **[Firezone](https://github.com/firezone/firezone)**: Focused on enterprise-grade secure remote access and ZTNA, managing user access to corporate resources, rather than local tunnel namespace routing and isolation.
+| **[wireproxy](https://github.com/octeep/wireproxy)** | Userspace WireGuard proxy | CLI / Config | Yes | No | No (userspace proxy) |
+| **[Gluetun](https://github.com/qdm12/gluetun)** | Docker-focused VPN client | CLI / Config | Yes | No | No (uses Docker network links) |
 
 ---
 

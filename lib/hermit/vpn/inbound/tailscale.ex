@@ -36,7 +36,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "tailscaled",
           "--socket=#{socket_path}",
           "--state=#{state_path}",
-          "--port=41641"
+          "--port=41641",
+          "--no-logs-no-support"
         ]
 
         try do
@@ -68,6 +69,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "up",
             "--authkey=#{ts_auth_key}",
             "--advertise-exit-node",
+            "--accept-dns=true",
+            "--accept-routes=false",
             "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
             "--timeout=30s"
           ]

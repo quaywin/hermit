@@ -262,7 +262,9 @@ defmodule Hermit.Docker.Client do
         state_dir = opts[:state_dir] || Path.join([get_storage_base_path(), id, "tailscale"])
         File.mkdir_p!(state_dir)
 
-        socket_path = Path.join(state_dir, "tailscaled.socket")
+        socket_path = "/run/tailscaled.#{id}.socket"
+        File.rm(socket_path)
+
         pid_path = Path.join(state_dir, "tailscaled.pid")
         state_path = Path.join(state_dir, "tailscaled.state")
 
@@ -343,6 +345,10 @@ defmodule Hermit.Docker.Client do
 
       # 1. Stop tailscaled daemon process
       stop_tailscaled_by_pid(pid_path)
+
+      # Clean up Unix domain socket from the container filesystem
+      socket_path = "/run/tailscaled.#{id}.socket"
+      File.rm(socket_path)
 
       # 2. Delete the namespace
       if netns_exists?(wg_name) do
@@ -435,7 +441,7 @@ defmodule Hermit.Docker.Client do
       true ->
         id = id_from_name(wg_name)
         storage_dir = Path.join(get_storage_base_path(), id)
-        socket_path = Path.join([storage_dir, "tailscale", "tailscaled.socket"])
+        socket_path = "/run/tailscaled.#{id}.socket"
 
         ts_info =
           if File.exists?(socket_path) do

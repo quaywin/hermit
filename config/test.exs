@@ -29,9 +29,8 @@ config :phoenix_live_view,
 config :phoenix,
   sort_verified_routes_query_params: true
 
-# Configure Docker integration for test (Colima)
+# Configure Tailscale integration for test
 config :hermit, :docker,
-  socket_path: "/Users/quaywin/.colima/default/docker.sock",
   mock: true,
   tailscale_auth_key: "tskey-auth-default-test"
 

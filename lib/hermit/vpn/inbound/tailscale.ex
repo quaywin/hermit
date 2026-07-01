@@ -22,7 +22,9 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         state_dir = Path.join([storage_dir, "tailscale"])
         File.mkdir_p!(state_dir)
 
-        socket_path = Path.join(state_dir, "tailscaled.socket")
+        socket_path = "/run/tailscaled.#{pair_id}.socket"
+        File.rm(socket_path)
+
         pid_path = Path.join(state_dir, "tailscaled.pid")
         state_path = Path.join(state_dir, "tailscaled.state")
 
@@ -109,6 +111,11 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
       # Stop tailscaled daemon process
       stop_tailscaled_by_pid(pid_path)
+
+      # Clean up Unix domain socket from the container filesystem
+      socket_path = "/run/tailscaled.#{pair_id}.socket"
+      File.rm(socket_path)
+
       :ok
     end
   end
@@ -153,7 +160,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   @impl true
-  def get_network_info(pair_id, storage_dir) do
+  def get_network_info(pair_id, _storage_dir) do
     wg_name = "hermit_wg_#{pair_id}"
 
     cond do
@@ -170,7 +177,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         }
 
       true ->
-        socket_path = Path.join([storage_dir, "tailscale", "tailscaled.socket"])
+        socket_path = "/run/tailscaled.#{pair_id}.socket"
 
         ts_info =
           if File.exists?(socket_path) do

@@ -81,10 +81,8 @@ config :phoenix_live_view,
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
 
-# Configure Docker integration for development (Colima)
-config :hermit, :docker,
-  socket_path: "/Users/quaywin/.colima/default/docker.sock",
-  tailscale_auth_key: System.get_env("TAILSCALE_AUTH_KEY")
+# Configure Tailscale integration for development
+config :hermit, :docker, tailscale_auth_key: System.get_env("TAILSCALE_AUTH_KEY")
 
 # Configure Storage base directory for development
 config :hermit, :storage, base_path: Path.expand("storage", File.cwd!())

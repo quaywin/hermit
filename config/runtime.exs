@@ -111,19 +111,10 @@ if config_env() == :prod do
 end
 
 if config_env() != :test do
-  socket_default =
-    if config_env() == :dev,
-      do: "/Users/quaywin/.colima/default/docker.sock",
-      else: "/var/run/docker.sock"
-
   storage_default =
     if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: "/app/storage"
 
-  config :hermit, :docker,
-    socket_path: System.get_env("DOCKER_SOCKET_PATH", socket_default),
-    wg_image: System.get_env("WG_IMAGE", "ghcr.io/linuxserver/wireguard:latest"),
-    ts_image: System.get_env("TS_IMAGE", "tailscale/tailscale:latest"),
-    tailscale_auth_key: System.get_env("TAILSCALE_AUTH_KEY")
+  config :hermit, :docker, tailscale_auth_key: System.get_env("TAILSCALE_AUTH_KEY")
 
   config :hermit, :storage, base_path: System.get_env("STORAGE_BASE_PATH", storage_default)
 end

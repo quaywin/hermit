@@ -9,7 +9,6 @@ defmodule HermitWeb.TunnelDetailLiveTest do
       :hermit,
       :docker,
       original_config
-      |> Keyword.put(:socket_path, "/invalid/docker.sock")
       |> Keyword.put(:mock_error, :daemon_unresponsive)
     )
 

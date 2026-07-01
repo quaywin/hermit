@@ -6,14 +6,12 @@ defmodule Hermit.Vpn.PairWorkerTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Hermit.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Hermit.Repo, {:shared, self()})
 
-    # Configure an invalid socket path so we don't accidentally talk to real Docker
     original_config = Application.get_env(:hermit, :docker)
 
     Application.put_env(
       :hermit,
       :docker,
       original_config
-      |> Keyword.put(:socket_path, "/invalid/docker.sock")
       |> Keyword.put(:mock_error, :daemon_unresponsive)
     )
 
@@ -149,7 +147,6 @@ defmodule Hermit.Vpn.PairWorkerTest do
       :hermit,
       :docker,
       original_config
-      |> Keyword.put(:socket_path, "/invalid/docker.sock")
       |> Keyword.put(:mock_error, nil)
     )
 
@@ -229,7 +226,6 @@ defmodule Hermit.Vpn.PairWorkerTest do
       :hermit,
       :docker,
       original_config
-      |> Keyword.put(:socket_path, "/invalid/docker.sock")
       |> Keyword.put(:mock_error, nil)
     )
 
@@ -407,7 +403,6 @@ defmodule Hermit.Vpn.PairWorkerTest do
       :hermit,
       :docker,
       original_config
-      |> Keyword.put(:socket_path, "/invalid/docker.sock")
       |> Keyword.put(:mock_error, nil)
     )
 
@@ -543,7 +538,6 @@ defmodule Hermit.Vpn.PairWorkerTest do
       :hermit,
       :docker,
       original_config
-      |> Keyword.put(:socket_path, "/invalid/docker.sock")
       |> Keyword.put(:mock_error, nil)
     )
 

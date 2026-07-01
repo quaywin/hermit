@@ -67,12 +67,6 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Configure Docker integration defaults
-config :hermit, :docker,
-  socket_path: "/var/run/docker.sock",
-  wg_image: "ghcr.io/linuxserver/wireguard:latest",
-  ts_image: "tailscale/tailscale:latest"
-
 # Configure Storage base directory defaults
 config :hermit, :storage, base_path: "/app/storage"
 

@@ -26,28 +26,40 @@ ENV MIX_ENV="prod"
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
-RUN mix deps.get --only $MIX_ENV
+RUN --mount=type=cache,target=/app/deps \
+    --mount=type=cache,target=/app/_build \
+    mix deps.get --only $MIX_ENV
 RUN mkdir config
 
 # copy compile-time config files
 COPY config/config.exs config/${MIX_ENV}.exs config/
-RUN mix deps.compile
+RUN --mount=type=cache,target=/app/deps \
+    --mount=type=cache,target=/app/_build \
+    mix deps.compile
 
-RUN mix assets.setup
+RUN --mount=type=cache,target=/app/deps \
+    --mount=type=cache,target=/app/_build \
+    mix assets.setup
 
 COPY priv priv
 COPY lib lib
 
 # Compile the release
-RUN mix compile
+RUN --mount=type=cache,target=/app/deps \
+    --mount=type=cache,target=/app/_build \
+    mix compile
 
 COPY assets assets
-RUN mix assets.deploy
+RUN --mount=type=cache,target=/app/deps \
+    --mount=type=cache,target=/app/_build \
+    mix assets.deploy
 
 # Changes to config/runtime.exs don't require recompiling the code
 COPY config/runtime.exs config/
 COPY rel rel
-RUN mix release
+RUN --mount=type=cache,target=/app/deps \
+    --mount=type=cache,target=/app/_build \
+    mix release && cp -r _build/${MIX_ENV}/rel/hermit /app/hermit_release
 
 # start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
@@ -82,6 +94,6 @@ WORKDIR "/app"
 ENV MIX_ENV="prod"
 
 # Copy the final release
-COPY --from=builder /app/_build/${MIX_ENV}/rel/hermit ./
+COPY --from=builder /app/hermit_release ./
 
 CMD ["/app/bin/server"]

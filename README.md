@@ -12,6 +12,17 @@ The application provides a real-time web dashboard to monitor bandwidth usage, m
 
 Hermit uses a decoupled architecture where a VPN tunnel is defined by pairing an **Inbound Profile** with an **Outbound Profile**.
 
+```mermaid
+graph TD
+    Host[Host / External Client] -->|1. Traffic In| Inbound[Inbound Profile: SOCKS5/HTTP / Tailscale]
+    subgraph NetNS [Isolated Network Namespace netns]
+        Inbound -->|2. Inside Namespace| Outbound[Outbound Profile: WireGuard wg0]
+    end
+    Outbound -->|3. Traffic Out| Internet[VPN / Internet Tunnel]
+    
+    Dashboard[Web Dashboard :3000] -.->|Orchestrates & Monitors| NetNS
+```
+
 ### 1. Inbound Profiles
 Inbound profiles define how traffic enters the isolated network namespace from the host or external network:
 - **SOCKS5/HTTP Proxy**: Runs a dual proxy setup inside the namespace: `microsocks` (SOCKS5 on port 1080) and `tinyproxy` (HTTP on port 8080). A host-level relayer handles traffic multiplexing. You can specify a dedicated host port, or configure `0` (or leave it blank) to let the OS dynamically assign an ephemeral port.

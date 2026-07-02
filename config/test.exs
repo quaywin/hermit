@@ -9,12 +9,6 @@ config :hermit, HermitWeb.Endpoint,
   secret_key_base: "PU8mmuRdeJetQ5nyFZs+QdSuVySM5v6pIcQp04kLaKq6yoi/y/GkGDlod4QFpNxi",
   server: false
 
-# In test we don't send emails
-config :hermit, Hermit.Mailer, adapter: Swoosh.Adapters.Test
-
-# Disable swoosh api client as it is only required for production adapters
-config :swoosh, :api_client, false
-
 # Print only warnings and errors during test
 config :logger, level: :warning
 

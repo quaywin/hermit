@@ -9,8 +9,6 @@ defmodule Hermit.Application do
   def start(_type, _args) do
     children = [
       Hermit.Repo,
-      HermitWeb.Telemetry,
-      {DNSCluster, query: Application.get_env(:hermit, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Hermit.PubSub},
       {Registry, keys: :unique, name: Hermit.Vpn.Registry},
       {Hermit.Vpn.DynamicSupervisor, []},

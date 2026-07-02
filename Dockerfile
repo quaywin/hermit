@@ -26,64 +26,49 @@ ENV MIX_ENV="prod"
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
-RUN --mount=type=cache,target=/app/deps \
-    --mount=type=cache,target=/app/_build \
-    mix deps.get --only $MIX_ENV
+RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 
 # copy compile-time config files
 COPY config/config.exs config/${MIX_ENV}.exs config/
-RUN --mount=type=cache,target=/app/deps \
-    --mount=type=cache,target=/app/_build \
-    mix deps.compile
+RUN mix deps.compile
 
-RUN --mount=type=cache,target=/app/deps \
-    --mount=type=cache,target=/app/_build \
-    mix assets.setup
+RUN mix assets.setup
 
 COPY priv priv
 COPY lib lib
 
 # Compile the release
-RUN --mount=type=cache,target=/app/deps \
-    --mount=type=cache,target=/app/_build \
-    mix compile
+RUN mix compile
 
 COPY assets assets
-RUN --mount=type=cache,target=/app/deps \
-    --mount=type=cache,target=/app/_build \
-    mix assets.deploy
+RUN mix assets.deploy
 
 # Changes to config/runtime.exs don't require recompiling the code
 COPY config/runtime.exs config/
 COPY rel rel
-RUN --mount=type=cache,target=/app/deps \
-    --mount=type=cache,target=/app/_build \
-    mix release && cp -r _build/${MIX_ENV}/rel/hermit /app/hermit_release
+RUN mix release && cp -r _build/${MIX_ENV}/rel/hermit /app/hermit_release
 
 # start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE} AS final
 ARG TARGETARCH
 
-# Install dependencies including network utilities, wireguard, iptables, and process tools
+# Install dependencies, download and install Tailscale in a single layer to minimize size
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
      iproute2 iptables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy \
+  && ARCH=$(dpkg --print-architecture) \
+  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
+  && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
+  && rm -rf /tmp/tailscale* \
+  && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
-
-# Install Tailscale static binaries for the target architecture
-RUN ARCH=$(dpkg --print-architecture) \
-    && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" -o tailscale.tgz \
-    && tar -xzf tailscale.tgz \
-    && cp tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
-    && rm -rf tailscale*
 
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
   && locale-gen
-
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8

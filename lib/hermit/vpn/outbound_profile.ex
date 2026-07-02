@@ -15,7 +15,7 @@ defmodule Hermit.Vpn.OutboundProfile do
     outbound_profile
     |> cast(attrs, [:name, :type, :config])
     |> validate_required([:name, :type])
-    |> validate_inclusion(:type, ["wireguard"])
+    |> validate_inclusion(:type, ["wireguard", "local"])
     |> validate_config()
   end
 
@@ -33,8 +33,29 @@ defmodule Hermit.Vpn.OutboundProfile do
           changeset
         end
 
+      "local" ->
+        local_ip = Map.get(config, "local_ip") || Map.get(config, :local_ip)
+        host_ip = Map.get(config, "host_ip") || Map.get(config, :host_ip)
+
+        changeset
+        |> validate_ip_cidr(local_ip, :local_ip)
+        |> validate_ip_cidr(host_ip, :host_ip)
+
       _ ->
         changeset
+    end
+  end
+
+  defp validate_ip_cidr(changeset, nil, _field), do: changeset
+  defp validate_ip_cidr(changeset, "", _field), do: changeset
+
+  defp validate_ip_cidr(changeset, value, field) do
+    case Regex.match?(~r/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/, value) do
+      true ->
+        changeset
+
+      false ->
+        add_error(changeset, :config, "#{field} must be in CIDR format (e.g. 10.200.1.2/30)")
     end
   end
 end

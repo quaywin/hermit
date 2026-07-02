@@ -35,105 +35,6 @@
 
     <!-- Connection Details Status Section -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      <!-- WireGuard (VPN) Status Card -->
-      <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
-              🔒 VPN Connection (WireGuard)
-            </h2>
-            <div class="flex items-center gap-2.5">
-              <button
-                type="button"
-                id="edit-wg-config-btn"
-                phx-click="edit_wg_config"
-                class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs flex items-center gap-1"
-              >
-                <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
-              </button>
-              <%= case @pair.wg_status do %>
-                <% :running -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Running
-                  </span>
-                <% :starting -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                    Starting
-                  </span>
-                <% :stopped -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
-                  </span>
-                <% :error -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                  </span>
-              <% end %>
-            </div>
-          </div>
-
-          <%= if @pair.wg_status == :error and @pair.wg_error_reason do %>
-            <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
-              {@pair.wg_error_reason}
-            </div>
-          <% end %>
-
-          <div class="space-y-2 text-sm text-base-content">
-            <div>
-              <span class="text-base-content/60 font-medium">Interface Name:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">wg0</code>
-            </div>
-            <div>
-              <span class="text-base-content/60 font-medium">Namespace:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">hermit_wg_{@id}</code>
-            </div>
-            <div>
-              <span class="text-base-content/60 font-medium">Listening Port:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.metrics[
-                :wg_port
-              ] || "-"}</code>
-            </div>
-            <div>
-              <span class="text-base-content/60 font-medium">Interface Address:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
-                :interface_address
-              ] || "-"}</code>
-            </div>
-            <div>
-              <span class="text-base-content/60 font-medium">Peer Endpoint:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
-                :peer_endpoint
-              ] || "-"}</code>
-            </div>
-          </div>
-        </div>
-
-        <div class="pt-6 border-t border-base-300 flex items-center gap-3">
-          <button
-            phx-click="start_wg"
-            disabled={@pair.wg_status in [:running, :starting]}
-            class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-          >
-            Start Wireguard
-          </button>
-          <button
-            phx-click="stop_wg"
-            disabled={@pair.wg_status == :stopped}
-            class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-          >
-            Stop Wireguard
-          </button>
-          <button
-            phx-click="restart_wg"
-            class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider"
-          >
-            Restart
-          </button>
-        </div>
-      </div>
-
       <!-- Inbound Connection Status Card -->
       <%= if @pair.inbound_module == Hermit.Vpn.Inbound.Proxy do %>
         <!-- Proxy Status Card -->
@@ -344,6 +245,138 @@
           </div>
         </div>
       <% end %>
+
+      <!-- Outbound Gateway Status Card -->
+      <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
+        <div class="space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
+              <%= if @pair.outbound_module == Hermit.Vpn.Outbound.Local do %>
+                🏠 Host Network Connection (Local NAT)
+              <% else %>
+                🔒 VPN Connection (WireGuard)
+              <% end %>
+            </h2>
+            <div class="flex items-center gap-2.5">
+              <%= if @pair.outbound_module != Hermit.Vpn.Outbound.Local do %>
+                <button
+                  type="button"
+                  id="edit-wg-config-btn"
+                  phx-click="edit_wg_config"
+                  class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs flex items-center gap-1"
+                >
+                  <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
+                </button>
+              <% end %>
+              <%= case @pair.wg_status do %>
+                <% :running -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Running
+                  </span>
+                <% :starting -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                    Starting
+                  </span>
+                <% :stopped -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
+                  </span>
+                <% :error -> %>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                  </span>
+              <% end %>
+            </div>
+          </div>
+
+          <%= if @pair.wg_status == :error and @pair.wg_error_reason do %>
+            <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
+              {@pair.wg_error_reason}
+            </div>
+          <% end %>
+
+          <div class="space-y-2 text-sm text-base-content">
+            <div>
+              <span class="text-base-content/60 font-medium">Interface Name:</span>
+              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.outbound_if ||
+                "wg0"}</code>
+            </div>
+            <div>
+              <span class="text-base-content/60 font-medium">Namespace:</span>
+              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">hermit_wg_{@id}</code>
+            </div>
+            <%= if @pair.outbound_module != Hermit.Vpn.Outbound.Local do %>
+              <div>
+                <span class="text-base-content/60 font-medium">Listening Port:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.metrics[
+                  :wg_port
+                ] || "-"}</code>
+              </div>
+              <div>
+                <span class="text-base-content/60 font-medium">Interface Address:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
+                  :interface_address
+                ] || "-"}</code>
+              </div>
+              <div>
+                <span class="text-base-content/60 font-medium">Peer Endpoint:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
+                  :peer_endpoint
+                ] || "-"}</code>
+              </div>
+            <% else %>
+              <% hash = :erlang.phash2(@id, 250) + 1
+
+              local_ip =
+                Map.get(@pair.outbound_config || %{}, "local_ip") ||
+                  Map.get(@pair.outbound_config || %{}, :local_ip) || "10.200.#{hash}.2/30"
+
+              host_ip =
+                Map.get(@pair.outbound_config || %{}, "host_ip") ||
+                  Map.get(@pair.outbound_config || %{}, :host_ip) || "10.200.#{hash}.1/30"
+
+              gateway = String.split(host_ip, "/") |> hd() %>
+              <div>
+                <span class="text-base-content/60 font-medium">Local Namespace IP:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{local_ip}</code>
+              </div>
+              <div>
+                <span class="text-base-content/60 font-medium">Host Gateway IP:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{gateway}</code>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="pt-6 border-t border-base-300 flex items-center gap-3">
+          <button
+            phx-click="start_wg"
+            disabled={@pair.wg_status in [:running, :starting]}
+            class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+          >
+            {if @pair.outbound_module == Hermit.Vpn.Outbound.Local,
+              do: "Start Outbound",
+              else: "Start Wireguard"}
+          </button>
+          <button
+            phx-click="stop_wg"
+            disabled={@pair.wg_status == :stopped}
+            class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+          >
+            {if @pair.outbound_module == Hermit.Vpn.Outbound.Local,
+              do: "Stop Outbound",
+              else: "Stop Wireguard"}
+          </button>
+          <button
+            phx-click="restart_wg"
+            class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider"
+          >
+            Restart
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Real-time Metrics Info Dashboard -->

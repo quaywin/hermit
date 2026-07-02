@@ -42,7 +42,9 @@ defmodule Hermit.Vpn.PairWorker do
     outbound_module: Hermit.Vpn.Outbound.WireGuard,
     inbound_config: nil,
     outbound_config: nil,
-    metrics_timer: nil
+    inbound_type: "tailscale",
+    metrics_timer: nil,
+    outbound_if: "wg0"
   ]
 
   # --- Client API ---
@@ -218,6 +220,7 @@ defmodule Hermit.Vpn.PairWorker do
           outbound_mod =
             case outbound_type do
               "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+              "local" -> Hermit.Vpn.Outbound.Local
               _ -> Hermit.Vpn.Outbound.WireGuard
             end
 
@@ -253,7 +256,8 @@ defmodule Hermit.Vpn.PairWorker do
             inbound_module: inbound_mod,
             outbound_module: outbound_mod,
             inbound_config: inbound_config,
-            outbound_config: outbound_config
+            outbound_config: outbound_config,
+            inbound_type: inbound_type
           }
 
         pid ->
@@ -287,6 +291,7 @@ defmodule Hermit.Vpn.PairWorker do
               outbound_mod =
                 case outbound_type do
                   "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+                  "local" -> Hermit.Vpn.Outbound.Local
                   _ -> Hermit.Vpn.Outbound.WireGuard
                 end
 
@@ -323,7 +328,8 @@ defmodule Hermit.Vpn.PairWorker do
                 inbound_module: inbound_mod,
                 outbound_module: outbound_mod,
                 inbound_config: inbound_config,
-                outbound_config: outbound_config
+                outbound_config: outbound_config,
+                inbound_type: inbound_type
               }
           end
       end
@@ -432,6 +438,7 @@ defmodule Hermit.Vpn.PairWorker do
     outbound_module =
       case outbound_type do
         "wireguard" -> Hermit.Vpn.Outbound.WireGuard
+        "local" -> Hermit.Vpn.Outbound.Local
         _ -> Hermit.Vpn.Outbound.WireGuard
       end
 
@@ -476,7 +483,8 @@ defmodule Hermit.Vpn.PairWorker do
       inbound_module: inbound_module,
       outbound_module: outbound_module,
       inbound_config: inbound_config,
-      outbound_config: outbound_config
+      outbound_config: outbound_config,
+      inbound_type: inbound_type
     }
 
     cond do
@@ -538,12 +546,13 @@ defmodule Hermit.Vpn.PairWorker do
 
         :ok ->
           case state.outbound_module.bootstrap(state.id, state.storage_dir, state.outbound_config) do
-            {:ok, _} ->
+            {:ok, iface} ->
               updated_state = %{
                 state
                 | wg_status: :running,
                   wg_error_reason: nil,
-                  wg_retry_count: 0
+                  wg_retry_count: 0,
+                  outbound_if: iface
               }
 
               updated_state = broadcast_update(updated_state)
@@ -829,11 +838,12 @@ defmodule Hermit.Vpn.PairWorker do
           trigger_handshake("hermit_wg_#{state.id}")
 
           case state.outbound_module.get_metrics(state.id, state.storage_dir) do
-            {:ok, %{bytes_received: bytes_received}} when bytes_received > 0 ->
+            {:ok, %{bytes_received: bytes_received}}
+            when bytes_received > 0 or state.outbound_module == Hermit.Vpn.Outbound.Local ->
               # Start Tailscale inside the network namespace
               case state.inbound_module.bootstrap(
                      state.id,
-                     "wg0",
+                     state.outbound_if || "wg0",
                      state.storage_dir,
                      state.inbound_config
                    ) do
@@ -1105,6 +1115,8 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   # --- Internal Helpers ---
+
+  defp resolve_endpoint_in_config(nil), do: ""
 
   defp resolve_endpoint_in_config(content) do
     Regex.replace(

@@ -606,4 +606,63 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     GenServer.stop(pid)
   end
+
+  test "starting with local outbound starts both successfully" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+      File.rm_rf!(Path.expand("storage/test_pair_local", File.cwd!()))
+    end)
+
+    args = %{
+      id: "test_pair_local",
+      ts_auth_key: "tskey-12345"
+    }
+
+    # Persist local outbound and tailscale inbound profiles
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts_local",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_local_profile",
+        type: "local",
+        config: %{}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    # Wait for bootstrap_wg and bootstrap_ts to complete
+    Process.sleep(300)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :running
+    assert state.ts_status == :running
+    assert state.outbound_module == Hermit.Vpn.Outbound.Local
+    assert state.outbound_if == "eth0"
+
+    GenServer.stop(pid)
+  end
 end

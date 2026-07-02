@@ -128,8 +128,8 @@
               <thead>
                 <tr class="border-b border-base-300 text-base-content/60 text-xs font-medium uppercase tracking-wider">
                   <th class="py-3 px-2 md:px-4">Name / ID</th>
-                  <th class="py-3 px-2 md:px-4">WireGuard</th>
-                  <th class="py-3 px-2 md:px-4">Tailscale</th>
+                  <th class="py-3 px-2 md:px-4">Inbound</th>
+                  <th class="py-3 px-2 md:px-4">Outbound</th>
                   <th class="py-3 px-2 md:px-4">Traffic / Health</th>
                   <th class="py-3 px-2 md:px-4 text-right">Actions</th>
                 </tr>
@@ -145,41 +145,35 @@
                   class="hover:bg-base-200/50 transition-colors"
                 >
                   <td class="py-4 px-2 md:px-4 font-medium text-base-content">
-                    <.link
-                      navigate={~p"/tunnels/#{pair.id}"}
-                      class="text-base-content underline hover:text-[#3ecf8e] transition-colors font-mono block"
-                    >
-                      {pair.id}
-                    </.link>
+                    <div class="flex items-center gap-2">
+                      <%= case pair.inbound_type do %>
+                        <% "tailscale" -> %>
+                          <span
+                            class="inline-flex items-center justify-center p-1 rounded bg-[#ff7e47]/10 text-[#ff7e47] border border-[#ff7e47]/20"
+                            title="Tailscale Inbound"
+                          >
+                            <.icon name="hero-globe-alt" class="size-4" />
+                          </span>
+                        <% "proxy" -> %>
+                          <span
+                            class="inline-flex items-center justify-center p-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20"
+                            title="Proxy Inbound"
+                          >
+                            <.icon name="hero-arrows-right-left" class="size-4" />
+                          </span>
+                        <% _ -> %>
+                          <!-- Fallback or empty -->
+                      <% end %>
+                      <.link
+                        navigate={~p"/tunnels/#{pair.id}"}
+                        class="text-base-content underline hover:text-[#3ecf8e] transition-colors font-mono"
+                      >
+                        {pair.id}
+                      </.link>
+                    </div>
                     <span class="block text-[10px] font-mono text-base-content/50 mt-0.5">
                       hermit-node-{String.replace(pair.id, "_", "-")}
                     </span>
-                  </td>
-                  <td class="py-4 px-2 md:px-4">
-                    <%= case pair.wg_status do %>
-                      <% :running -> %>
-                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                          Running
-                        </span>
-                      <% :starting -> %>
-                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                          <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                          Starting
-                        </span>
-                      <% :stopped -> %>
-                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                          <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span>
-                          Stopped
-                        </span>
-                      <% :error -> %>
-                        <span
-                          class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
-                          title={pair.wg_error_reason}
-                        >
-                          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                        </span>
-                    <% end %>
                   </td>
                   <td class="py-4 px-2 md:px-4">
                     <%= case pair.ts_status do %>
@@ -202,6 +196,32 @@
                         <span
                           class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
                           title={pair.ts_error_reason}
+                        >
+                          <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                        </span>
+                    <% end %>
+                  </td>
+                  <td class="py-4 px-2 md:px-4">
+                    <%= case pair.wg_status do %>
+                      <% :running -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Running
+                        </span>
+                      <% :starting -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                          <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                          Starting
+                        </span>
+                      <% :stopped -> %>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                          <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span>
+                          Stopped
+                        </span>
+                      <% :error -> %>
+                        <span
+                          class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
+                          title={pair.wg_error_reason}
                         >
                           <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
                         </span>
@@ -485,6 +505,29 @@
                     class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
                   ><%= Phoenix.HTML.Form.input_value(f, :config)["wg_config"] %></textarea>
                 </div>
+              <% "local" -> %>
+                <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                  <div class="space-y-1">
+                    <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Local IP / CIDR</label>
+                    <input
+                      type="text"
+                      name="outbound_profile[config][local_ip]"
+                      placeholder="e.g., 10.200.1.2/30 (leave blank for auto)"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["local_ip"]}
+                      class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] text-sm rounded-[4px] p-2.5"
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Host IP / CIDR</label>
+                    <input
+                      type="text"
+                      name="outbound_profile[config][host_ip]"
+                      placeholder="e.g., 10.200.1.1/30 (leave blank for auto)"
+                      value={Phoenix.HTML.Form.input_value(f, :config)["host_ip"]}
+                      class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] text-sm rounded-[4px] p-2.5"
+                    />
+                  </div>
+                </div>
               <% _ -> %>
             <% end %>
 
@@ -540,28 +583,34 @@
                       <%= case profile.type do %>
                         <% "wireguard" -> %>
                           <span>WireGuard Configuration Payload</span>
+                        <% "local" -> %>
+                          <span>Local Network (Host NAT)</span>
                         <% _ -> %>
                           <span>-</span>
                       <% end %>
                     </td>
                     <td class="py-4 px-4 text-right">
                       <div class="flex items-center justify-end gap-2">
-                        <button
-                          id={"edit-outbound-#{profile.id}"}
-                          phx-click="edit_outbound"
-                          phx-value-id={profile.id}
-                          class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          phx-click="delete_outbound"
-                          phx-value-id={profile.id}
-                          data-confirm="Are you sure you want to delete this outbound profile?"
-                          class="btn btn-xs btn-error btn-outline rounded-[4px] cursor-pointer font-medium text-xs"
-                        >
-                          Delete
-                        </button>
+                        <%= if profile.type != "local" do %>
+                          <button
+                            id={Enum.join(["edit-outbound-", profile.id])}
+                            phx-click="edit_outbound"
+                            phx-value-id={profile.id}
+                            class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            phx-click="delete_outbound"
+                            phx-value-id={profile.id}
+                            data-confirm="Are you sure you want to delete this outbound profile?"
+                            class="btn btn-xs btn-error btn-outline rounded-[4px] cursor-pointer font-medium text-xs"
+                          >
+                            Delete
+                          </button>
+                        <% else %>
+                          <span class="text-xs text-base-content/40 italic">System Default</span>
+                        <% end %>
                       </div>
                     </td>
                   </tr>
@@ -743,7 +792,7 @@
             <.input
               field={f[:type]}
               type="select"
-              options={[{"WireGuard", "wireguard"}]}
+              options={[{"WireGuard", "wireguard"}, {"Local Network (Host NAT)", "local"}]}
               class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
             />
           </div>
@@ -760,6 +809,35 @@
                   required
                   class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
                 ><%= (Phoenix.HTML.Form.input_value(f, :config) || %{})["wg_config"] %></textarea>
+                <%= if error_msg = f[:config].errors |> List.first() do %>
+                  <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
+                    <.icon name="hero-exclamation-circle" class="size-4 text-error" />
+                    {HermitWeb.CoreComponents.translate_error(error_msg)}
+                  </p>
+                <% end %>
+              </div>
+            <% "local" -> %>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <div class="space-y-1">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Local IP / CIDR</label>
+                  <input
+                    type="text"
+                    name="outbound_profile[config][local_ip]"
+                    placeholder="e.g., 10.200.1.2/30 (leave blank for auto)"
+                    value={(Phoenix.HTML.Form.input_value(f, :config) || %{})["local_ip"]}
+                    class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] text-sm rounded-[4px] p-2.5"
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Host IP / CIDR</label>
+                  <input
+                    type="text"
+                    name="outbound_profile[config][host_ip]"
+                    placeholder="e.g., 10.200.1.1/30 (leave blank for auto)"
+                    value={(Phoenix.HTML.Form.input_value(f, :config) || %{})["host_ip"]}
+                    class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] text-sm rounded-[4px] p-2.5"
+                  />
+                </div>
                 <%= if error_msg = f[:config].errors |> List.first() do %>
                   <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
                     <.icon name="hero-exclamation-circle" class="size-4 text-error" />

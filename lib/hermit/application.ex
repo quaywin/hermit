@@ -24,6 +24,7 @@ defmodule Hermit.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
         run_migrations()
+        seed_default_local_profile()
         boot_vpn_pairs()
         {:ok, pid}
 
@@ -38,6 +39,25 @@ defmodule Hermit.Application do
   rescue
     e ->
       IO.inspect(e, label: "Failed to run SQLite migrations on startup")
+  end
+
+  defp seed_default_local_profile do
+    case Hermit.Repo.get_by(Hermit.Vpn.OutboundProfile, type: "local") do
+      nil ->
+        %Hermit.Vpn.OutboundProfile{}
+        |> Hermit.Vpn.OutboundProfile.changeset(%{
+          name: "Host Local Network",
+          type: "local",
+          config: %{}
+        })
+        |> Hermit.Repo.insert()
+
+      _ ->
+        :ok
+    end
+  rescue
+    e ->
+      IO.inspect(e, label: "Failed to seed default local outbound profile")
   end
 
   defp boot_vpn_pairs do

@@ -17,9 +17,9 @@
 // If you have dependencies that try to import CSS, esbuild will generate a separate `app.css` file.
 // To load it, simply add a second `<link>` to your `root.html.heex` file.
 
-// Include phoenix_html to handle method=PUT/DELETE in forms and buttons.
+// Include HTML utilities to handle method=PUT/DELETE in forms and buttons.
 import "phoenix_html";
-// Establish Phoenix Socket and LiveView configuration.
+// Establish Socket and LiveView configuration.
 import { Socket } from "phoenix";
 import { LiveSocket } from "phoenix_live_view";
 import { hooks as colocatedHooks } from "phoenix-colocated/hermit";
@@ -44,7 +44,12 @@ const Hooks = {
       this.clearTimer();
       if (this.el.id && this.el.id.startsWith("flash-")) {
         this.timer = setTimeout(() => {
-          this.el.click();
+          const phxClick = this.el.getAttribute("phx-click");
+          if (phxClick) {
+            this.liveSocket.execJS(this.el, phxClick);
+          } else {
+            this.el.click();
+          }
         }, 5000);
       }
     },
@@ -77,7 +82,7 @@ liveSocket.connect();
 // >> liveSocket.disableLatencySim()
 window.liveSocket = liveSocket;
 
-// The lines below enable quality of life phoenix_live_reload
+// The lines below enable quality of life live reload
 // development features:
 //
 //     1. stream server logs to the browser console

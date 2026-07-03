@@ -50,6 +50,7 @@ defmodule Hermit.Docker.Client do
               dns
               |> String.split(",")
               |> Enum.map(&String.trim/1)
+              |> Enum.reject(&(&1 == ""))
 
             _ ->
               []

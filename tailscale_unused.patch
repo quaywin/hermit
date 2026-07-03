@@ -1,0 +1,12 @@
+diff --git a/lib/hermit/vpn/inbound/tailscale.ex b/lib/hermit/vpn/inbound/tailscale.ex
+index 99f3847..cfcf5df 100644
+--- a/lib/hermit/vpn/inbound/tailscale.ex
++++ b/lib/hermit/vpn/inbound/tailscale.ex
+@@ -440,7 +440,2 @@
+-        advertise_connector =
+-          case Map.get(config, "advertise_connector") do
+-            true -> true
+-            "true" -> true
+-            _ -> false
+-          end
+-

@@ -9,6 +9,24 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     ts_auth_key = Map.get(config, :ts_auth_key) || Map.get(config, "ts_auth_key") || ""
     login_server = Map.get(config, :login_server) || Map.get(config, "login_server")
 
+    advertise_exit_node =
+      case Map.get(config, :advertise_exit_node) || Map.get(config, "advertise_exit_node") do
+        false -> false
+        "false" -> false
+        nil -> true
+        _ -> true
+      end
+
+    advertise_connector =
+      case Map.get(config, :advertise_connector) || Map.get(config, "advertise_connector") do
+        true -> true
+        "true" -> true
+        _ -> false
+      end
+
+    advertise_routes =
+      Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
+
     cond do
       err = get_mock_error() ->
         {:error, err}
@@ -70,7 +88,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "--socket=#{socket_path}",
             "up",
             "--authkey=#{ts_auth_key}",
-            "--advertise-exit-node",
             "--accept-dns=true",
             "--accept-routes=false",
             "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
@@ -85,8 +102,52 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               ts_up_args
             end
 
+          ts_up_args =
+            if advertise_exit_node do
+              ts_up_args ++ ["--advertise-exit-node"]
+            else
+              ts_up_args ++ ["--advertise-exit-node=false"]
+            end
+
+          ts_up_args =
+            if advertise_connector do
+              ts_up_args ++ ["--advertise-connector"]
+            else
+              ts_up_args ++ ["--advertise-connector=false"]
+            end
+
+          ts_up_args =
+            if clean_routes(advertise_routes) != "" do
+              ts_up_args ++ ["--advertise-routes=#{clean_routes(advertise_routes)}"]
+            else
+              ts_up_args ++ ["--advertise-routes="]
+            end
+
           case run_cmd("ip", ts_up_args) do
             {:ok, _} ->
+              dns_resolvers = Map.get(config, "dns_resolvers") || Map.get(config, :dns_resolvers)
+              dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode)
+
+              should_update_dns =
+                cond do
+                  dns_mode == "custom" and dns_resolvers && String.trim(dns_resolvers) != "" -> true
+                  dns_mode == "default" -> true
+                  is_binary(dns_resolvers) and String.trim(dns_resolvers) != "" -> true
+                  true -> false
+                end
+
+              if should_update_dns do
+                dns_resolvers_str = if dns_mode == "default", do: "", else: dns_resolvers || ""
+
+                case update_dns_settings_api(pair_id, dns_resolvers_str) do
+                  {:ok, _} ->
+                    Logger.info("Tailscale DNS settings updated successfully.")
+
+                  {:error, reason} ->
+                    Logger.warning("Failed to auto-update Tailscale DNS: #{inspect(reason)}")
+                end
+              end
+
               {:ok, port}
 
             {:error, reason} ->
@@ -96,6 +157,139 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         rescue
           e ->
             {:error, {:spawn_failed, e}}
+        end
+    end
+  end
+
+  @impl true
+  def update_settings(pair_id, config) do
+    wg_name = "hermit_wg_#{pair_id}"
+
+    cond do
+      err = get_mock_error() ->
+        {:error, err}
+
+      mock?() ->
+        Logger.info("Mock: Updating Tailscale settings for #{pair_id} to #{inspect(config)}")
+        {:ok, :updated}
+
+      true ->
+        socket_path = "/run/tailscaled.#{pair_id}.socket"
+        login_server = Map.get(config, :login_server) || Map.get(config, "login_server")
+
+        advertise_exit_node =
+          case Map.get(config, :advertise_exit_node) || Map.get(config, "advertise_exit_node") do
+            false -> false
+            "false" -> false
+            nil -> true
+            _ -> true
+          end
+
+        advertise_connector =
+          case Map.get(config, :advertise_connector) || Map.get(config, "advertise_connector") do
+            true -> true
+            "true" -> true
+            _ -> false
+          end
+
+        advertise_routes =
+          Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
+
+        ts_up_args = [
+          "netns",
+          "exec",
+          wg_name,
+          "tailscale",
+          "--socket=#{socket_path}",
+          "up",
+          "--accept-dns=true",
+          "--accept-routes=false",
+          "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
+          "--timeout=30s"
+        ]
+
+        ts_up_args =
+          if login_server && login_server != "" do
+            ts_up_args ++ ["--login-server=#{login_server}"]
+          else
+            ts_up_args
+          end
+
+        ts_up_args =
+          if advertise_exit_node do
+            ts_up_args ++ ["--advertise-exit-node"]
+          else
+            ts_up_args ++ ["--advertise-exit-node=false"]
+          end
+
+        ts_up_args =
+          if advertise_connector do
+            ts_up_args ++ ["--advertise-connector"]
+          else
+            ts_up_args ++ ["--advertise-connector=false"]
+          end
+
+        ts_up_args =
+          if clean_routes(advertise_routes) != "" do
+            ts_up_args ++ ["--advertise-routes=#{clean_routes(advertise_routes)}"]
+          else
+            ts_up_args ++ ["--advertise-routes="]
+          end
+
+        case run_cmd("ip", ts_up_args) do
+          {:ok, _} ->
+            dns_resolvers = Map.get(config, "dns_resolvers") || Map.get(config, :dns_resolvers)
+            dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode)
+
+            should_update_dns =
+              cond do
+                dns_mode == "custom" and dns_resolvers && String.trim(dns_resolvers) != "" -> true
+                dns_mode == "default" -> true
+                is_binary(dns_resolvers) and String.trim(dns_resolvers) != "" -> true
+                true -> false
+              end
+
+            if should_update_dns do
+              dns_resolvers_str = if dns_mode == "default", do: "", else: dns_resolvers || ""
+
+              case update_dns_settings_api(pair_id, dns_resolvers_str) do
+                {:ok, _} ->
+                  Logger.info("Tailscale DNS settings updated successfully.")
+
+                {:error, reason} ->
+                  Logger.warning("Failed to auto-update Tailscale DNS: #{inspect(reason)}")
+              end
+            end
+
+            if advertise_connector do
+              tag =
+                Map.get(config, "advertise_connector_tag") ||
+                  Map.get(config, :advertise_connector_tag) || "tag:connector"
+
+              domains_str =
+                Map.get(config, "advertise_connector_domains") ||
+                  Map.get(config, :advertise_connector_domains) || ""
+
+              domains =
+                String.split(domains_str, [",", "\n"])
+                |> Enum.map(&String.trim/1)
+                |> Enum.reject(&(&1 == ""))
+
+              if domains != [] do
+                case update_app_connector_acl(pair_id, tag, domains) do
+                  {:ok, _} ->
+                    Logger.info("Tailscale ACL updated successfully for app connector.")
+
+                  {:error, reason} ->
+                    Logger.warning("Failed to auto-update Tailscale ACL: #{inspect(reason)}")
+                end
+              end
+            end
+
+            {:ok, :updated}
+
+          {:error, reason} ->
+            {:error, reason}
         end
     end
   end
@@ -241,8 +435,9 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   @doc """
-  Approves advertised exit node routes for a Tailscale node using Tailscale API.
+  Approves advertised routes (exit nodes, subnets, app connectors) for a Tailscale node using Tailscale API.
   """
+  @impl true
   def approve_exit_node(pair_id) do
     cond do
       mock?() ->
@@ -256,27 +451,41 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             p -> Hermit.Repo.preload(p, :inbound_profile)
           end
 
-        api_key =
-          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
-            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+        config = (pair && pair.inbound_profile && pair.inbound_profile.config) || %{}
 
-        tailnet =
-          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
-            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+        advertise_exit_node =
+          case Map.get(config, "advertise_exit_node") do
+            false -> false
+            "false" -> false
+            nil -> true
+            _ -> true
+          end
 
-        if api_key == "" or tailnet == "" do
-          Logger.warning(
-            "Tailscale API credentials not configured. Skipping auto-approval of exit node."
-          )
 
-          {:error, :missing_credentials}
+        advertise_routes = Map.get(config, "advertise_routes") || ""
+
+        # Only call do_approve_exit_node if the node is actually advertising routes!
+        if advertise_exit_node or clean_routes(advertise_routes) != "" do
+          api_key =
+            Map.get(config, "ts_api_key") || Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+          tailnet =
+            Map.get(config, "ts_tailnet") || Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+          if api_key == "" or tailnet == "" do
+            Logger.warning(
+              "Tailscale API credentials not configured. Skipping auto-approval of routes."
+            )
+
+            {:error, :missing_credentials}
+          else
+            expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
+            Logger.info("Starting Tailscale routes approval for #{expected_hostname}")
+            do_approve_exit_node(api_key, tailnet, expected_hostname, 5)
+          end
         else
-          # Hostname advertised by this node
-          expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
-          Logger.info("Starting Tailscale exit node approval for #{expected_hostname}")
-
-          # Retry up to 5 times to let the device register
-          do_approve_exit_node(api_key, tailnet, expected_hostname, 5)
+          Logger.info("Node #{pair_id} is not advertising any routes. Skipping auto-approval.")
+          {:ok, :skipped}
         end
     end
   end
@@ -287,12 +496,10 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   defp do_approve_exit_node(api_key, tailnet, expected_hostname, retries_left) do
-    # 1. Fetch devices list
     devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
 
     case Req.get(devices_url, auth: {:basic, "#{api_key}:"}) do
       {:ok, %{status: 200, body: %{"devices" => devices}}} ->
-        # Find device matching hostname or name prefix
         device =
           Enum.find(devices, fn dev ->
             dev["hostname"] == expected_hostname or
@@ -301,29 +508,48 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
         if device do
           device_id = device["id"]
-
-          Logger.info(
-            "Found Tailscale device #{expected_hostname} with ID #{device_id}. Approving routes..."
-          )
-
-          # 2. Approve 0.0.0.0/0 and ::/0 exit node routes
           routes_url = "https://api.tailscale.com/api/v2/device/#{device_id}/routes"
-          routes_payload = %{routes: ["0.0.0.0/0", "::/0"]}
 
-          case Req.post(routes_url, json: routes_payload, auth: {:basic, "#{api_key}:"}) do
-            {:ok, %{status: 200}} ->
-              Logger.info("Successfully approved exit node routes for #{expected_hostname}")
-              {:ok, :approved}
+          case Req.get(routes_url, auth: {:basic, "#{api_key}:"}) do
+            {:ok, %{status: 200, body: %{"advertisedRoutes" => advertised_routes}}} ->
+              if advertised_routes != [] do
+                Logger.info(
+                  "Found advertised routes: #{inspect(advertised_routes)}. Auto-approving..."
+                )
+
+                routes_payload = %{routes: advertised_routes}
+
+                case Req.post(routes_url, json: routes_payload, auth: {:basic, "#{api_key}:"}) do
+                  {:ok, %{status: 200}} ->
+                    Logger.info("Successfully auto-approved routes for #{expected_hostname}")
+                    {:ok, :approved}
+
+                  {:ok, %{status: status, body: body}} ->
+                    Logger.error(
+                      "Failed to approve Tailscale routes (HTTP #{status}): #{inspect(body)}"
+                    )
+
+                    {:error, {:routes_api_failed, status, body}}
+
+                  {:error, reason} ->
+                    Logger.error("Failed to call Tailscale routes API: #{inspect(reason)}")
+                    {:error, reason}
+                end
+              else
+                Logger.info(
+                  "No advertised routes found yet for #{expected_hostname}. Retrying in 3s... (#{retries_left - 1} left)"
+                )
+
+                Process.sleep(3000)
+                do_approve_exit_node(api_key, tailnet, expected_hostname, retries_left - 1)
+              end
 
             {:ok, %{status: status, body: body}} ->
-              Logger.error(
-                "Failed to approve Tailscale routes (HTTP #{status}): #{inspect(body)}"
-              )
-
-              {:error, {:routes_api_failed, status, body}}
+              Logger.error("Failed to fetch device routes (HTTP #{status}): #{inspect(body)}")
+              {:error, {:routes_fetch_failed, status, body}}
 
             {:error, reason} ->
-              Logger.error("Failed to call Tailscale routes API: #{inspect(reason)}")
+              Logger.error("Failed to call Tailscale routes fetch API: #{inspect(reason)}")
               {:error, reason}
           end
         else
@@ -343,6 +569,411 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         Logger.error("Failed to call Tailscale devices API: #{inspect(reason)}")
         {:error, reason}
     end
+  end
+
+  @doc """
+  Updates the Tailscale DNS nameservers for the tailnet using the Tailscale API.
+  """
+  def update_dns_settings_api(pair_id, dns_resolvers_str) when is_binary(dns_resolvers_str) do
+    cond do
+      mock?() ->
+        Logger.info(
+          "Mock: Updating Tailscale DNS settings for #{pair_id} to #{dns_resolvers_str}"
+        )
+
+        {:ok, :updated}
+
+      true ->
+        pair =
+          case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id) do
+            nil -> nil
+            p -> Hermit.Repo.preload(p, :inbound_profile)
+          end
+
+        api_key =
+          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+        tailnet =
+          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+        if api_key == "" or tailnet == "" do
+          Logger.warning(
+            "Tailscale API credentials not configured. Skipping DNS settings update."
+          )
+
+          {:error, :missing_credentials}
+        else
+          do_update_dns_settings_api(api_key, tailnet, dns_resolvers_str)
+        end
+    end
+  end
+
+  defp do_update_dns_settings_api(api_key, tailnet, dns_resolvers_str) do
+    dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
+
+    resolvers =
+      String.split(dns_resolvers_str, [",", "\n"])
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(fn ip -> %{"addr" => ip} end)
+
+    payload =
+      if resolvers == [] do
+        %{"resolvers" => [], "proxied" => false}
+      else
+        %{"resolvers" => resolvers, "proxied" => true}
+      end
+
+    case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
+      {:ok, %{status: 200}} ->
+        Logger.info("Successfully updated Tailscale DNS config to: #{dns_resolvers_str}")
+        {:ok, :updated}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("Failed to update Tailscale DNS config (HTTP #{status}): #{inspect(body)}")
+        {:error, {:dns_update_failed, status, body}}
+
+      {:error, reason} ->
+        Logger.error("Failed to call Tailscale DNS API: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Updates the Tailscale ACL to map the specified tag to a list of domains for the App Connector.
+  """
+  def update_app_connector_acl(pair_id, tag, domains) when is_list(domains) do
+    cond do
+      mock?() ->
+        Logger.info(
+          "Mock: Updating Tailscale ACL for #{pair_id} tag #{tag} with domains #{inspect(domains)}"
+        )
+
+        {:ok, :updated}
+
+      true ->
+        pair =
+          case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id) do
+            nil -> nil
+            p -> Hermit.Repo.preload(p, :inbound_profile)
+          end
+
+        api_key =
+          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+        tailnet =
+          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+        if api_key == "" or tailnet == "" do
+          Logger.warning(
+            "Tailscale API credentials not configured. Skipping App Connector ACL update."
+          )
+
+          {:error, :missing_credentials}
+        else
+          try do
+            do_update_app_connector_acl(api_key, tailnet, tag, domains)
+          rescue
+            e ->
+              Logger.error("Exception raised during Tailscale ACL update: #{inspect(e)}")
+              {:error, {:exception, e}}
+          end
+        end
+    end
+  end
+
+  defp do_update_app_connector_acl(api_key, tailnet, tag, domains) do
+    acl_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/acl"
+
+    case Req.get(acl_url,
+           auth: {:basic, "#{api_key}:"},
+           headers: [{"accept", "application/json"}]
+         ) do
+      {:ok, %{status: 200, body: acl} = response} ->
+        etag =
+          case Req.Response.get_header(response, "etag") do
+            [val | _] -> val
+            _ -> nil
+          end
+
+        wrapped? = Map.has_key?(acl, "acl")
+
+        acl_map_result =
+          if wrapped? do
+            acl_str = Map.get(acl, "acl")
+            clean_str = clean_hujson(acl_str)
+
+            case Jason.decode(clean_str) do
+              {:ok, parsed} ->
+                {:ok, parsed}
+
+              {:error, reason} ->
+                Logger.error(
+                  "Failed to decode clean HuJSON: #{inspect(reason)}\nCleaned string: #{clean_str}"
+                )
+
+                {:error, :hujson_parse_failed}
+            end
+          else
+            {:ok, acl}
+          end
+
+        case acl_map_result do
+          {:ok, acl_map} ->
+            tag = if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
+            domains = Enum.map(domains, &String.trim/1) |> Enum.reject(&(&1 == ""))
+
+            updated_acl_map = update_acl_for_app_connector(acl_map, tag, domains)
+            hujson_str = "// Hermit App Connector Update\n" <> Jason.encode!(updated_acl_map)
+
+            req_opts =
+              if wrapped? do
+                [
+                  json: Map.put(acl, "acl", hujson_str),
+                  auth: {:basic, "#{api_key}:"},
+                  headers: [{"content-type", "application/json"}]
+                ]
+              else
+                [
+                  body: hujson_str,
+                  auth: {:basic, "#{api_key}:"},
+                  headers: [{"content-type", "text/plain"}]
+                ]
+              end
+
+            req_opts =
+              if etag do
+                Keyword.put(req_opts, :headers, req_opts[:headers] ++ [{"if-match", etag}])
+              else
+                req_opts
+              end
+
+            case Req.post(acl_url, req_opts) do
+              {:ok, %{status: 200}} ->
+                Logger.info("Successfully updated Tailscale ACL for App Connector tag #{tag}")
+                {:ok, :updated}
+
+              {:ok, %{status: status, body: body}} ->
+                Logger.error("Failed to update Tailscale ACL (HTTP #{status}): #{inspect(body)}")
+                {:error, {:acl_update_failed, status, body}}
+
+              {:error, reason} ->
+                Logger.error("Failed to call Tailscale ACL update API: #{inspect(reason)}")
+                {:error, reason}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("Failed to fetch Tailscale ACL (HTTP #{status}): #{inspect(body)}")
+        {:error, {:acl_fetch_failed, status, body}}
+
+      {:error, reason} ->
+        Logger.error("Failed to call Tailscale ACL fetch API: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  def update_acl_for_app_connector(acl_map, tag, domains) do
+    tag_owners = Map.get(acl_map, "tagOwners", %{})
+
+    updated_tag_owners =
+      if Map.has_key?(tag_owners, tag) do
+        tag_owners
+      else
+        Map.put(tag_owners, tag, ["autogroup:admin"])
+      end
+
+    node_attrs = Map.get(acl_map, "nodeAttrs", [])
+    updated_node_attrs = update_node_attrs(node_attrs, tag, domains)
+
+    auto_approvers = Map.get(acl_map, "autoApprovers", %{})
+    routes = Map.get(auto_approvers, "routes", %{})
+    existing_v4 = Map.get(routes, "0.0.0.0/0", [])
+    existing_v6 = Map.get(routes, "::/0", [])
+    updated_v4 = if tag in existing_v4, do: existing_v4, else: existing_v4 ++ [tag]
+    updated_v6 = if tag in existing_v6, do: existing_v6, else: existing_v6 ++ [tag]
+
+    updated_routes =
+      routes
+      |> Map.put("0.0.0.0/0", updated_v4)
+      |> Map.put("::/0", updated_v6)
+
+    updated_auto_approvers = Map.put(auto_approvers, "routes", updated_routes)
+
+    grants = Map.get(acl_map, "grants", [])
+    updated_grants = update_grants(grants, tag)
+
+    acl_map
+    |> Map.put("tagOwners", updated_tag_owners)
+    |> Map.put("nodeAttrs", updated_node_attrs)
+    |> Map.put("autoApprovers", updated_auto_approvers)
+    |> Map.put("grants", updated_grants)
+  end
+
+  defp update_node_attrs(node_attrs, tag, domains) do
+    connector_name = "hermit-connector-#{String.replace(tag, "tag:", "")}"
+
+    target_star_index =
+      Enum.find_index(node_attrs, fn attr ->
+        targets = Map.get(attr, "target", [])
+        targets == ["*"] or "*" in targets
+      end)
+
+    if target_star_index do
+      attr = Enum.at(node_attrs, target_star_index)
+      app = Map.get(attr, "app", %{})
+      connectors_list = Map.get(app, "tailscale.com/app-connectors", [])
+
+      updated_connectors_list =
+        if Enum.any?(connectors_list, fn conn -> tag in Map.get(conn, "connectors", []) end) do
+          Enum.map(connectors_list, fn conn ->
+            if tag in Map.get(conn, "connectors", []) do
+              Map.put(conn, "domains", domains)
+            else
+              conn
+            end
+          end)
+        else
+          new_connector = %{
+            "name" => connector_name,
+            "connectors" => [tag],
+            "domains" => domains
+          }
+
+          connectors_list ++ [new_connector]
+        end
+
+      updated_app = Map.put(app, "tailscale.com/app-connectors", updated_connectors_list)
+      updated_attr = Map.put(attr, "app", updated_app)
+      List.replace_at(node_attrs, target_star_index, updated_attr)
+    else
+      new_attr = %{
+        "target" => ["*"],
+        "app" => %{
+          "tailscale.com/app-connectors" => [
+            %{
+              "name" => connector_name,
+              "connectors" => [tag],
+              "domains" => domains
+            }
+          ]
+        }
+      }
+
+      node_attrs ++ [new_attr]
+    end
+  end
+
+  defp update_grants(grants, tag) do
+    existing_grant_index =
+      Enum.find_index(grants, fn grant ->
+        Map.get(grant, "src") == ["autogroup:member"] and
+          Map.get(grant, "dst") == [tag]
+      end)
+
+    if existing_grant_index do
+      grant = Enum.at(grants, existing_grant_index)
+      ip_list = Map.get(grant, "ip", [])
+      updated_ip = ip_list
+      updated_ip = if "tcp:53" in updated_ip, do: updated_ip, else: updated_ip ++ ["tcp:53"]
+      updated_ip = if "udp:53" in updated_ip, do: updated_ip, else: updated_ip ++ ["udp:53"]
+      updated_grant = Map.put(grant, "ip", updated_ip)
+      List.replace_at(grants, existing_grant_index, updated_grant)
+    else
+      new_grant = %{
+        "src" => ["autogroup:member"],
+        "dst" => [tag],
+        "ip" => ["tcp:53", "udp:53"]
+      }
+
+      grants ++ [new_grant]
+    end
+  end
+
+  def clean_hujson(str) when is_binary(str) do
+    str
+    |> String.to_charlist()
+    |> clean_hujson_chars(false, false, false, [])
+    |> List.to_string()
+  end
+
+  defp next_char_is_closing_bracket?([char | rest]) when char in [?\s, ?\t, ?\n, ?\r] do
+    next_char_is_closing_bracket?(rest)
+  end
+
+  defp next_char_is_closing_bracket?([char | _]) when char in [?], ?}] do
+    true
+  end
+
+  defp next_char_is_closing_bracket?(_) do
+    false
+  end
+
+  defp clean_hujson_chars([?*, ?/ | rest], _in_string, false, true, acc) do
+    clean_hujson_chars(rest, false, false, false, acc)
+  end
+
+  defp clean_hujson_chars([_char | rest], in_string, false, true, acc) do
+    clean_hujson_chars(rest, in_string, false, true, acc)
+  end
+
+  defp clean_hujson_chars([?\n | rest], _in_string, true, false, acc) do
+    clean_hujson_chars(rest, false, false, false, [?\n | acc])
+  end
+
+  defp clean_hujson_chars([_char | rest], in_string, true, false, acc) do
+    clean_hujson_chars(rest, in_string, true, false, acc)
+  end
+
+  defp clean_hujson_chars([?\\, ?\" | rest], true, false, false, acc) do
+    clean_hujson_chars(rest, true, false, false, [?\", ?\\ | acc])
+  end
+
+  defp clean_hujson_chars([?\" | rest], true, false, false, acc) do
+    clean_hujson_chars(rest, false, false, false, [?\" | acc])
+  end
+
+  defp clean_hujson_chars([char | rest], true, false, false, acc) do
+    clean_hujson_chars(rest, true, false, false, [char | acc])
+  end
+
+  defp clean_hujson_chars([?/, ?* | rest], false, false, false, acc) do
+    clean_hujson_chars(rest, false, false, true, acc)
+  end
+
+  defp clean_hujson_chars([?/, ?/ | rest], false, false, false, acc) do
+    clean_hujson_chars(rest, false, true, false, acc)
+  end
+
+  defp clean_hujson_chars([?# | rest], false, false, false, acc) do
+    clean_hujson_chars(rest, false, true, false, acc)
+  end
+
+  defp clean_hujson_chars([?\" | rest], false, false, false, acc) do
+    clean_hujson_chars(rest, true, false, false, [?\" | acc])
+  end
+
+  defp clean_hujson_chars([?, | rest], false, false, false, acc) do
+    if next_char_is_closing_bracket?(rest) do
+      clean_hujson_chars(rest, false, false, false, acc)
+    else
+      clean_hujson_chars(rest, false, false, false, [?, | acc])
+    end
+  end
+
+  defp clean_hujson_chars([char | rest], false, false, false, acc) do
+    clean_hujson_chars(rest, false, false, false, [char | acc])
+  end
+
+  defp clean_hujson_chars([], _in_string, _in_line_comment, _in_block_comment, acc) do
+    Enum.reverse(acc)
   end
 
   # --- Internal Helpers ---
@@ -405,6 +1036,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       _ ->
         false
     end
+  end
+
+    defp clean_routes(nil), do: ""
+  defp clean_routes(routes) when is_binary(routes) do
+    routes
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join(",")
   end
 
   defp mock? do

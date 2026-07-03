@@ -212,6 +212,198 @@
                     {@pair.metrics.ts_magic_dns}
                   </div>
                 </div>
+                <div>
+                  <span class="text-base-content/60 font-medium">DNS Resolvers:</span>
+                  <div class="text-xs font-mono text-base-content/80 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                    <%= if (@pair.inbound_config["dns_mode"] || "default") == "default" do %>
+                      <code class="text-emerald-600 font-semibold bg-emerald-500/10 px-1 py-0.5 rounded">100.100.100.100</code>
+                      <span class="text-emerald-500 font-semibold ml-1">(Tailnet Default)</span>
+                    <% else %>
+                      <%= if is_nil(@pair.inbound_config["dns_resolvers"]) or String.trim(@pair.inbound_config["dns_resolvers"]) == "" do %>
+                        <span class="text-base-content/80">{@system_dns}</span>
+                        <span class="text-base-content/50 italic ml-1">(System Fallback)</span>
+                      <% else %>
+                        <span class="text-base-content/80">{@pair.inbound_config["dns_resolvers"]}</span>
+                      <% end %>
+                    <% end %>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+                  <div>
+                    <span class="text-base-content/60 font-medium">Exit Node routing:</span>
+                    <span class="ml-1 text-xs font-semibold">
+                      <%= if @pair.inbound_config["advertise_exit_node"] != false and @pair.inbound_config["advertise_exit_node"] != "false" do %>
+                        <span class="text-emerald-500">Enabled</span>
+                      <% else %>
+                        <span class="text-base-content/50">Disabled</span>
+                      <% end %>
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <% exit_node_enabled =
+                      @pair.inbound_config["advertise_exit_node"] != false and
+                        @pair.inbound_config["advertise_exit_node"] != "false" %>
+                    <button
+                      type="button"
+                      phx-click="toggle_exit_node"
+                      class={[
+                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                        exit_node_enabled && "bg-emerald-500",
+                        !exit_node_enabled && "bg-base-300"
+                      ]}
+                      role="switch"
+                      aria-checked={to_string(exit_node_enabled)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        class={[
+                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                          exit_node_enabled && "translate-x-5",
+                          !exit_node_enabled && "translate-x-0"
+                        ]}
+                      />
+                    </button>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+                  <div>
+                    <span class="text-base-content/60 font-medium">App Connector:</span>
+                    <span class="ml-1 text-xs font-semibold">
+                      <%= if @pair.inbound_config["advertise_connector"] == true or @pair.inbound_config["advertise_connector"] == "true" do %>
+                        <span class="text-emerald-500">Enabled</span>
+                      <% else %>
+                        <span class="text-base-content/50">Disabled</span>
+                      <% end %>
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <% connector_enabled =
+                      @pair.inbound_config["advertise_connector"] == true or
+                        @pair.inbound_config["advertise_connector"] == "true" %>
+                    <button
+                      type="button"
+                      phx-click="toggle_app_connector"
+                      class={[
+                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                        connector_enabled && "bg-emerald-500",
+                        !connector_enabled && "bg-base-300"
+                      ]}
+                      role="switch"
+                      aria-checked={to_string(connector_enabled)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        class={[
+                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                          connector_enabled && "translate-x-5",
+                          !connector_enabled && "translate-x-0"
+                        ]}
+                      />
+                    </button>
+                  </div>
+                </div>
+                <%= if connector_enabled do %>
+                  <form
+                    id="save_connector_settings_form"
+                    phx-submit="save_connector_settings"
+                    class="space-y-3 pt-3 mt-3 border-t border-base-300/40"
+                  >
+                    <div>
+                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                        App Connector Tag:
+                      </label>
+                      <input
+                        type="text"
+                        name="connector_tag"
+                        value={@pair.inbound_config["advertise_connector_tag"] || "tag:connector"}
+                        class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1"
+                        placeholder="e.g., tag:connector"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                        Domain Routes (comma or line separated):
+                      </label>
+                      <textarea
+                        name="connector_domains"
+                        rows="3"
+                        class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
+                        placeholder="e.g., *.example.com&#10;internal-service.local"
+                      ><%= @pair.inbound_config["advertise_connector_domains"] || "" %></textarea>
+                    </div>
+                    <div class="flex justify-end">
+                      <button
+                        type="submit"
+                        class="btn btn-xs btn-primary px-3 py-1.5 h-auto min-h-0 rounded-[4px] cursor-pointer"
+                      >
+                        Apply App Connector Settings
+                      </button>
+                    </div>
+                  </form>
+                <% end %>
+                <div class="pt-3 mt-3 border-t border-base-300/40">
+                  <form
+                    id="save_routes_dns_settings_form"
+                    phx-submit="save_routes_dns_settings"
+                    class="space-y-3"
+                  >
+                    <div class="flex items-center justify-between bg-base-200/30 p-2 rounded-[4px] border border-base-300/40">
+                      <span class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                        Use Tailscale DNS Settings (Default)
+                      </span>
+                      <button
+                        type="button"
+                        phx-click="toggle_use_tailscale_dns"
+                        class={[
+                          "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                          @use_tailscale_dns && "bg-emerald-500",
+                          !@use_tailscale_dns && "bg-base-300"
+                        ]}
+                      >
+                        <span class={[
+                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                          @use_tailscale_dns && "translate-x-5",
+                          !@use_tailscale_dns && "translate-x-0"
+                        ]} />
+                      </button>
+                    </div>
+
+                    <%= if not @use_tailscale_dns do %>
+                      <div>
+                        <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                          Tailscale DNS Resolvers (e.g., Control D):
+                        </label>
+                        <input
+                          type="text"
+                          name="dns_resolvers"
+                          value={@pair.inbound_config["dns_resolvers"] || ""}
+                          class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
+                          placeholder="e.g., 76.76.2.0, 76.76.10.0"
+                        />
+                      </div>
+                    <% end %>
+                    <div>
+                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                        Advertise Subnet Routes (IP Ranges):
+                      </label>
+                      <input
+                        type="text"
+                        name="advertise_routes"
+                        value={@pair.inbound_config["advertise_routes"] || ""}
+                        class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
+                        placeholder="e.g., 10.0.0.0/8, 192.168.1.0/24"
+                      />
+                    </div>
+                    <div class="flex justify-end">
+                      <button
+                        type="submit"
+                        class="btn btn-xs btn-primary px-3 py-1.5 h-auto min-h-0 rounded-[4px] cursor-pointer"
+                      >
+                        Apply Routes & DNS Settings
+                      </button>
+                    </div>
+                  </form>
+                </div>
               <% else %>
                 <div class="pt-2 text-xs text-base-content/50 italic">
                   Start Tailscale to retrieve detailed connection status.
@@ -325,6 +517,43 @@
                 <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
                   :peer_endpoint
                 ] || "-"}</code>
+              </div>
+              <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+                <div>
+                  <span class="text-base-content/60 font-medium">Use Tailscale DNS:</span>
+                  <span class="ml-1 text-xs font-semibold">
+                    <%= if @pair.outbound_config["use_tailscale_dns"] == true or @pair.outbound_config["use_tailscale_dns"] == "true" do %>
+                      <span class="text-emerald-500 font-semibold">Enabled (100.100.100.100)</span>
+                    <% else %>
+                      <span class="text-base-content/50">Disabled</span>
+                    <% end %>
+                  </span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <% use_tailscale_dns =
+                    @pair.outbound_config["use_tailscale_dns"] == true or
+                      @pair.outbound_config["use_tailscale_dns"] == "true" %>
+                  <button
+                    type="button"
+                    phx-click="toggle_wg_use_tailscale_dns"
+                    class={[
+                      "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                      use_tailscale_dns && "bg-emerald-500",
+                      !use_tailscale_dns && "bg-base-300"
+                    ]}
+                    role="switch"
+                    aria-checked={to_string(use_tailscale_dns)}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={[
+                        "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                        use_tailscale_dns && "translate-x-5",
+                        !use_tailscale_dns && "translate-x-0"
+                      ]}
+                    />
+                  </button>
+                </div>
               </div>
             <% else %>
               <% hash = :erlang.phash2(@id, 250) + 1

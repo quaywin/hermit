@@ -25,7 +25,7 @@ config :hermit, HermitWeb.Endpoint,
 
 # Configure LiveView
 config :phoenix_live_view,
-  # the attribute set on all root tags. Used for Phoenix.LiveView.ColocatedCSS.
+  # the attribute set on all root tags. Used for colocated CSS.
   root_tag_attribute: "phx-r"
 
 # Configure esbuild (the version is required)
@@ -55,7 +55,7 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
-# Use Jason for JSON parsing in Phoenix
+# Use Jason for JSON parsing
 config :phoenix, :json_library, Jason
 
 # Configure Storage base directory defaults

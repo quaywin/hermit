@@ -24,4 +24,16 @@ defmodule Hermit.Vpn.Inbound do
   Lấy thông tin mạng (IP ảo, DNS ảo, User đăng nhập...) từ bên trong namespace.
   """
   @callback get_network_info(pair_id :: String.t(), storage_dir :: String.t()) :: map()
+
+  @doc """
+  Cập nhật cấu hình động cho Inbound khi đang chạy.
+  """
+  @callback update_settings(pair_id :: String.t(), config :: map()) ::
+              :ok | {:ok, any()} | {:error, any()}
+
+  @doc """
+  Phê duyệt các route quảng bá của node (ví dụ: exit node, subnet).
+  """
+  @callback approve_exit_node(pair_id :: String.t()) ::
+              :ok | {:ok, any()} | {:error, any()}
 end

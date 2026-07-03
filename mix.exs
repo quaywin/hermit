@@ -59,7 +59,8 @@ defmodule Hermit.MixProject do
       {:bandit, "~> 1.5"},
       {:ecto, "~> 3.12"},
       {:phoenix_ecto, "~> 4.6"},
-      {:ecto_sqlite3, ">= 0.0.0"}
+      {:ecto_sqlite3, ">= 0.0.0"},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 

@@ -109,6 +109,7 @@ defmodule HermitWeb.DashboardLive do
 
   @impl true
   def handle_event("validate_inbound", %{"inbound_profile" => params}, socket) do
+    params = clean_dns_params(params)
     changeset =
       %Hermit.Vpn.InboundProfile{}
       |> Hermit.Vpn.InboundProfile.changeset(params)
@@ -119,6 +120,7 @@ defmodule HermitWeb.DashboardLive do
 
   @impl true
   def handle_event("save_inbound", %{"inbound_profile" => params}, socket) do
+    params = clean_dns_params(params)
     changeset = Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{}, params)
 
     case Hermit.Repo.insert(changeset) do
@@ -158,6 +160,7 @@ defmodule HermitWeb.DashboardLive do
   @impl true
   def handle_event("validate_edit_inbound", %{"inbound_profile" => params}, socket) do
     profile = socket.assigns.editing_inbound_profile
+    params = clean_dns_params(params)
 
     changeset =
       profile
@@ -170,6 +173,7 @@ defmodule HermitWeb.DashboardLive do
   @impl true
   def handle_event("save_edit_inbound", %{"inbound_profile" => params}, socket) do
     profile = socket.assigns.editing_inbound_profile
+    params = clean_dns_params(params)
     changeset = Hermit.Vpn.InboundProfile.changeset(profile, params)
 
     case Hermit.Repo.update(changeset) do
@@ -358,6 +362,39 @@ defmodule HermitWeb.DashboardLive do
       Hermit.Vpn.OutboundProfile.changeset(%Hermit.Vpn.OutboundProfile{type: "wireguard"}, %{})
 
     assign(socket, outbound_form: to_form(changeset))
+  end
+
+  defp clean_dns_params(params) do
+    config = Map.get(params, "config")
+
+    if is_map(config) do
+      dns_mode = Map.get(config, "dns_mode")
+      dns_resolvers = Map.get(config, "dns_resolvers", "") |> String.trim()
+
+      {dns_mode, dns_resolvers} =
+        cond do
+          dns_mode == "custom" ->
+            {"custom", dns_resolvers}
+
+          dns_mode == "default" ->
+            {"default", ""}
+
+          dns_resolvers != "" ->
+            {"custom", dns_resolvers}
+
+          true ->
+            {"default", ""}
+        end
+
+      updated_config =
+        config
+        |> Map.put("dns_mode", dns_mode)
+        |> Map.put("dns_resolvers", dns_resolvers)
+
+      Map.put(params, "config", updated_config)
+    else
+      params
+    end
   end
 
   def format_uptime(nil), do: "-"

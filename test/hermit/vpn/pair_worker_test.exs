@@ -353,6 +353,69 @@ defmodule Hermit.Vpn.PairWorkerTest do
     GenServer.stop(pid)
   end
 
+  test "updates Tailscale inbound configuration dynamically and saves to database" do
+    args = %{
+      id: "test_pair",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "stopped",
+      ts_status: "stopped"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    Process.sleep(200)
+
+    # Update Tailscale inbound configuration
+    new_inbound_config = %{
+      "ts_auth_key" => "tskey-new",
+      "advertise_exit_node" => false,
+      "advertise_connector" => true,
+      "advertise_routes" => "192.168.1.0/24"
+    }
+
+    assert {:ok, _} = PairWorker.update_inbound_config("test_pair", new_inbound_config)
+
+    # Check database was updated
+    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_pair")
+    updated_profile = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, updated_pair.inbound_profile_id)
+    assert updated_profile.config["ts_auth_key"] == "tskey-new"
+    assert updated_profile.config["advertise_exit_node"] == false
+    assert updated_profile.config["advertise_connector"] == true
+    assert updated_profile.config["advertise_routes"] == "192.168.1.0/24"
+
+    # Check memory state of running worker
+    state = GenServer.call(pid, :get_state)
+    assert state.inbound_config["ts_auth_key"] == "tskey-new"
+    assert state.inbound_config["advertise_exit_node"] == false
+    assert state.inbound_config["advertise_connector"] == true
+    assert state.inbound_config["advertise_routes"] == "192.168.1.0/24"
+
+    GenServer.stop(pid)
+  end
+
   test "initializes inbound and outbound configurations with custom login server" do
     args = %{
       id: "test_pair",
@@ -664,5 +727,56 @@ defmodule Hermit.Vpn.PairWorkerTest do
     assert state.outbound_if == "eth0"
 
     GenServer.stop(pid)
+  end
+
+  test "starting and stopping worker with proxy inbound" do
+    storage_dir = Path.expand("storage/test_pair_proxy", File.cwd!())
+    File.rm_rf!(storage_dir)
+
+    on_exit(fn ->
+      File.rm_rf!(storage_dir)
+    end)
+
+    args = %{
+      id: "test_pair_proxy",
+      inbound_type: "proxy",
+      inbound_config: %{"port" => 1080},
+      outbound_type: "local",
+      outbound_config: %{}
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_proxy",
+        type: "proxy",
+        config: %{"port" => 1080}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_local_proxy",
+        type: "local",
+        config: %{}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    Process.sleep(300)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.inbound_type == "proxy"
+    assert is_pid(state.ts_port)
+
+    assert GenServer.stop(pid) == :ok
   end
 end

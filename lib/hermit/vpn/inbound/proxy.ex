@@ -157,4 +157,10 @@ defmodule Hermit.Vpn.Inbound.Proxy do
     config = Application.get_env(:hermit, :docker, [])
     Keyword.get(config, :mock, false)
   end
+
+  @impl true
+  def update_settings(_pair_id, _config), do: :ok
+
+  @impl true
+  def approve_exit_node(_pair_id), do: :ok
 end

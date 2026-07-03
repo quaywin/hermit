@@ -165,7 +165,10 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "ACCEPT"
                  ]) do
             # Setup network namespace DNS
-            dns_servers = Map.get(config, "dns_servers") || Map.get(config, :dns_servers) || []
+            dns_servers =
+              (Map.get(config, "dns_servers") || Map.get(config, :dns_servers) || [])
+              |> Enum.map(&String.trim/1)
+              |> Enum.reject(&(&1 == ""))
 
             if dns_servers != [] do
               File.mkdir_p!(netns_dns_dir)

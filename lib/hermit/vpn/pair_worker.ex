@@ -131,8 +131,14 @@ defmodule Hermit.Vpn.PairWorker do
                      |> Hermit.Repo.update() do
                   {:ok, _} ->
                     case GenServer.whereis(via_tuple(id)) do
-                      nil -> {:ok, :updated_offline}
-                      pid -> GenServer.call(pid, {:update_wg_config, new_wg_config})
+                      nil ->
+                        case ensure_worker_running(id) do
+                          {:ok, pid} -> GenServer.call(pid, {:update_wg_config, new_wg_config})
+                          _ -> {:ok, :updated_offline}
+                        end
+
+                      pid ->
+                        GenServer.call(pid, {:update_wg_config, new_wg_config})
                     end
 
                   {:error, _changeset} ->
@@ -147,6 +153,86 @@ defmodule Hermit.Vpn.PairWorker do
           else
             {:error, :no_outbound_profile}
           end
+        end
+    end
+  end
+
+  def update_inbound_config(id, new_config) do
+    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
+      nil ->
+        {:error, :not_found}
+
+      pair ->
+        if pair.inbound_profile_id do
+          case Hermit.Repo.get(Hermit.Vpn.InboundProfile, pair.inbound_profile_id) do
+            nil ->
+              {:error, :profile_not_found}
+
+            profile ->
+              case profile
+                   |> Hermit.Vpn.InboundProfile.changeset(%{config: new_config})
+                   |> Hermit.Repo.update() do
+                {:ok, updated_profile} ->
+                  case GenServer.whereis(via_tuple(id)) do
+                    nil ->
+                      case ensure_worker_running(id) do
+                        {:ok, pid} ->
+                          GenServer.call(pid, {:update_inbound_config, updated_profile.config})
+
+                        _ ->
+                          {:ok, :updated_offline}
+                      end
+
+                    pid ->
+                      GenServer.call(pid, {:update_inbound_config, updated_profile.config})
+                  end
+
+                {:error, changeset} ->
+                  {:error, changeset}
+              end
+          end
+        else
+          {:error, :no_inbound_profile}
+        end
+    end
+  end
+
+  def update_outbound_config(id, new_config) do
+    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
+      nil ->
+        {:error, :not_found}
+
+      pair ->
+        if pair.outbound_profile_id do
+          case Hermit.Repo.get(Hermit.Vpn.OutboundProfile, pair.outbound_profile_id) do
+            nil ->
+              {:error, :profile_not_found}
+
+            profile ->
+              case profile
+                   |> Hermit.Vpn.OutboundProfile.changeset(%{config: new_config})
+                   |> Hermit.Repo.update() do
+                {:ok, updated_profile} ->
+                  case GenServer.whereis(via_tuple(id)) do
+                    nil ->
+                      case ensure_worker_running(id) do
+                        {:ok, pid} ->
+                          GenServer.call(pid, {:update_outbound_config, updated_profile.config})
+
+                        _ ->
+                          {:ok, :updated_offline}
+                      end
+
+                    pid ->
+                      GenServer.call(pid, {:update_outbound_config, updated_profile.config})
+                  end
+
+                {:error, changeset} ->
+                  {:error, changeset}
+              end
+          end
+        else
+          {:error, :no_outbound_profile}
         end
     end
   end
@@ -780,6 +866,85 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   @impl true
+  def handle_call({:update_outbound_config, new_config}, _from, state) do
+    Logger.info("Updating outbound config for pair: #{state.id}")
+
+    new_wg_config =
+      Map.get(new_config, "wg_config") || Map.get(new_config, :wg_config) ||
+        state.wg_config_content
+
+    updated_state = %{
+      state
+      | outbound_config: new_config,
+        wg_config_content: new_wg_config
+    }
+
+    try do
+      File.mkdir_p!(updated_state.storage_dir)
+      resolved_content = resolve_endpoint_in_config(new_wg_config)
+      File.write!(updated_state.wg_config_path, resolved_content)
+      File.chmod!(updated_state.wg_config_path, 0o600)
+
+      updated_state = broadcast_update(updated_state)
+
+      if updated_state.wg_status in [:running, :starting] do
+        state.outbound_module.cleanup(state.id, state.storage_dir)
+
+        restarted_state =
+          %{updated_state | wg_status: :starting, wg_error_reason: nil}
+          |> cancel_metrics_poll()
+
+        restarted_state = broadcast_update(restarted_state)
+        {:reply, {:ok, restarted_state}, restarted_state, {:continue, :bootstrap_wg}}
+      else
+        {:reply, {:ok, updated_state}, updated_state}
+      end
+    rescue
+      e ->
+        Logger.error("Failed to update Outbound config file: #{inspect(e)}")
+
+        error_state = %{
+          updated_state
+          | wg_status: :error,
+            wg_error_reason: "Config update setup failure: #{Exception.message(e)}"
+        }
+
+        error_state = broadcast_update(error_state)
+        {:reply, {:error, Exception.message(e)}, error_state}
+    end
+  end
+
+  @impl true
+  def handle_call({:update_inbound_config, new_config}, _from, state) do
+    updated_state = %{state | inbound_config: new_config}
+    updated_state = broadcast_update(updated_state)
+
+    if state.ts_status == :running do
+      parent = self()
+
+      Task.start(fn ->
+        case state.inbound_module.update_settings(state.id, new_config) do
+          {:ok, _} ->
+            state.inbound_module.approve_exit_node(state.id)
+            send(parent, {:inbound_config_updated, new_config})
+
+          :ok ->
+            state.inbound_module.approve_exit_node(state.id)
+            send(parent, {:inbound_config_updated, new_config})
+
+          {:error, reason} ->
+            Logger.error("Failed to dynamically update Tailscale settings: #{inspect(reason)}")
+            send(parent, {:inbound_config_update_failed, reason})
+        end
+      end)
+
+      {:reply, {:ok, updated_state}, updated_state}
+    else
+      {:reply, {:ok, updated_state}, updated_state}
+    end
+  end
+
+  @impl true
   def handle_call({:start_ts}, _from, state) do
     if not netns_exists?(state.wg_container_name) do
       {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."},
@@ -826,6 +991,28 @@ defmodule Hermit.Vpn.PairWorker do
     updated_state = %{state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
     updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
+  end
+
+  @impl true
+  def handle_info({:inbound_config_updated, _new_config}, state) do
+    if state.ts_error_reason do
+      updated_state = %{state | ts_error_reason: nil}
+      updated_state = broadcast_update(updated_state)
+      {:noreply, updated_state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:inbound_config_update_failed, reason}, state) do
+    error_state = %{
+      state
+      | ts_error_reason: "Failed to dynamically update Tailscale settings: #{inspect(reason)}"
+    }
+
+    updated_state = broadcast_update(error_state)
+    {:noreply, updated_state}
   end
 
   # Health checking and metric polling
@@ -1105,8 +1292,7 @@ defmodule Hermit.Vpn.PairWorker do
     Phoenix.PubSub.broadcast(Hermit.PubSub, @topic, {:vpn_pair_deleted, state.id})
 
     if state.ts_port do
-      Process.unlink(state.ts_port)
-      Port.close(state.ts_port)
+      stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)

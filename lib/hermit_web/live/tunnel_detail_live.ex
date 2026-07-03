@@ -158,6 +158,186 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   @impl true
+  def handle_event("toggle_exit_node", _params, socket) do
+    id = socket.assigns.id
+    pair = socket.assigns.pair
+    inbound_config = pair.inbound_config || %{}
+
+    current_val =
+      case Map.get(inbound_config, "advertise_exit_node") do
+        false -> false
+        "false" -> false
+        nil -> true
+        _ -> true
+      end
+
+    new_val = not current_val
+    new_config = Map.put(inbound_config, "advertise_exit_node", new_val)
+
+    case PairWorker.update_inbound_config(id, new_config) do
+      {:ok, updated_pair} ->
+        {:noreply,
+         socket
+         |> assign_pair(updated_pair)
+         |> put_flash(
+           :info,
+           "Exit node routing #{if new_val, do: "enabled", else: "disabled"}. Applying changes dynamically..."
+         )}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to toggle exit node: #{inspect(reason)}")}
+    end
+  end
+
+  @impl true
+  def handle_event("toggle_app_connector", _params, socket) do
+    id = socket.assigns.id
+    pair = socket.assigns.pair
+    inbound_config = pair.inbound_config || %{}
+
+    current_val =
+      case Map.get(inbound_config, "advertise_connector") do
+        true -> true
+        "true" -> true
+        _ -> false
+      end
+
+    new_val = not current_val
+    new_config = Map.put(inbound_config, "advertise_connector", new_val)
+
+    case PairWorker.update_inbound_config(id, new_config) do
+      {:ok, updated_pair} ->
+        {:noreply,
+         socket
+         |> assign_pair(updated_pair)
+         |> put_flash(
+           :info,
+           "App connector #{if new_val, do: "enabled", else: "disabled"}. Applying changes dynamically..."
+         )}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Failed to toggle app connector: #{inspect(reason)}")}
+    end
+  end
+
+  @impl true
+  def handle_event(
+        "save_connector_settings",
+        %{"connector_tag" => tag, "connector_domains" => domains},
+        socket
+      ) do
+    id = socket.assigns.id
+    pair = socket.assigns.pair
+    inbound_config = pair.inbound_config || %{}
+
+    new_config =
+      inbound_config
+      |> Map.put("advertise_connector_tag", String.trim(tag))
+      |> Map.put("advertise_connector_domains", String.trim(domains))
+
+    case PairWorker.update_inbound_config(id, new_config) do
+      {:ok, updated_pair} ->
+        {:noreply,
+         socket
+         |> assign_pair(updated_pair)
+         |> put_flash(:info, "App Connector settings updated. Applying to Tailscale ACL...")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to update settings: #{inspect(reason)}")}
+    end
+  end
+
+  @impl true
+  def handle_event("toggle_use_tailscale_dns", _params, socket) do
+    {:noreply, assign(socket, use_tailscale_dns: not socket.assigns.use_tailscale_dns)}
+  end
+
+  @impl true
+  def handle_event("toggle_wg_use_tailscale_dns", _params, socket) do
+    id = socket.assigns.id
+    pair = socket.assigns.pair
+    outbound_config = pair.outbound_config || %{}
+
+    current_val =
+      case Map.get(outbound_config, "use_tailscale_dns") do
+        true -> true
+        "true" -> true
+        _ -> false
+      end
+
+    new_val = not current_val
+    new_config = Map.put(outbound_config, "use_tailscale_dns", new_val)
+
+    case PairWorker.update_outbound_config(id, new_config) do
+      {:ok, updated_pair} ->
+        {:noreply,
+         socket
+         |> assign_pair(updated_pair)
+         |> put_flash(
+           :info,
+           "WireGuard DNS updated. #{if new_val, do: "Using Tailscale DNS.", else: "Using Configured DNS."} Applying changes dynamically..."
+         )}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Failed to toggle WireGuard DNS settings: #{inspect(reason)}")}
+    end
+  end
+
+  @impl true
+  def handle_event("save_routes_dns_settings", params, socket) do
+    id = socket.assigns.id
+    pair = socket.assigns.pair
+    inbound_config = pair.inbound_config || %{}
+
+    advertise_routes = Map.get(params, "advertise_routes", "") |> String.trim()
+
+    use_tailscale_dns =
+      case Map.get(params, "use_tailscale_dns") do
+        "true" ->
+          true
+
+        "false" ->
+          false
+
+        nil ->
+          dns_res = Map.get(params, "dns_resolvers")
+
+          if is_binary(dns_res) and String.trim(dns_res) != "" do
+            false
+          else
+            socket.assigns.use_tailscale_dns
+          end
+      end
+
+    {dns_mode, dns_resolvers} =
+      if use_tailscale_dns do
+        {"default", ""}
+      else
+        dns_val = Map.get(params, "dns_resolvers", "") |> String.trim()
+        {"custom", dns_val}
+      end
+
+    new_config =
+      inbound_config
+      |> Map.put("dns_mode", dns_mode)
+      |> Map.put("dns_resolvers", dns_resolvers)
+      |> Map.put("advertise_routes", advertise_routes)
+
+    case PairWorker.update_inbound_config(id, new_config) do
+      {:ok, updated_pair} ->
+        {:noreply,
+         socket
+         |> assign_pair(updated_pair)
+         |> put_flash(:info, "Tailscale routes and DNS settings updated. Applying dynamically...")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to update settings: #{inspect(reason)}")}
+    end
+  end
+
+  @impl true
   def handle_event("edit_wg_config", _params, socket) do
     id = socket.assigns.id
 
@@ -248,9 +428,12 @@ defmodule HermitWeb.TunnelDetailLive do
   @impl true
   def handle_info({:vpn_pair_updated, pair}, socket) do
     if pair.id == socket.assigns.id do
+      current_use_dns = socket.assigns.use_tailscale_dns
+
       {:noreply,
        socket
        |> assign_pair(pair)
+       |> assign(use_tailscale_dns: current_use_dns)
        |> assign(uptime: format_uptime(pair.started_at))}
     else
       {:noreply, socket}
@@ -281,9 +464,57 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   # --- Local Formatting Helpers ---
+  defp get_system_dns do
+    case File.read("/etc/resolv.conf") do
+      {:ok, content} ->
+        ips =
+          content
+          |> String.split(["\n", "\r\n"])
+          |> Enum.map(&String.trim/1)
+          |> Enum.filter(&String.starts_with?(&1, "nameserver"))
+          |> Enum.map(fn line ->
+            line
+            |> String.trim_leading("nameserver")
+            |> String.trim()
+          end)
+          |> Enum.reject(&(&1 == ""))
+
+        if ips == [] do
+          "8.8.8.8, 8.8.4.4"
+        else
+          Enum.join(ips, ", ")
+        end
+
+      _ ->
+        "8.8.8.8, 8.8.4.4"
+    end
+  end
+
   defp assign_pair(socket, pair) do
+    inbound_config = pair.inbound_config || %{}
+
+    use_tailscale_dns =
+      case Map.get(inbound_config, "dns_mode") do
+        "default" ->
+          true
+
+        "custom" ->
+          false
+
+        nil ->
+          dns_res = Map.get(inbound_config, "dns_resolvers")
+
+          if is_binary(dns_res) and String.trim(dns_res) != "" do
+            false
+          else
+            true
+          end
+      end
+
     socket
     |> assign(pair: pair)
+    |> assign(use_tailscale_dns: use_tailscale_dns)
+    |> assign(system_dns: get_system_dns())
     |> assign(wg_info: parse_wg_config(pair.wg_config_content))
   end
 

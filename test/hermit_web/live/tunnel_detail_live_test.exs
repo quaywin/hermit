@@ -422,4 +422,130 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     Application.put_env(:hermit, :docker, original_docker_config)
     GenServer.stop(pid)
   end
+
+  test "renders and configures DNS settings in DNS Control tab", %{conn: conn} do
+    args = %{
+      id: "dns_live_test",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "stopped",
+      wg_status: "stopped",
+      ts_status: "stopped"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, view, _html} = live(conn, ~p"/tunnels/dns_live_test")
+
+    # 1. Switch to DNS tab
+    html1 = view |> element("button[phx-value-tab=dns]") |> render_click()
+    assert html1 =~ "🛡️ DNS Filtering Status"
+    assert html1 =~ "DNS Control Inactive"
+
+    # 2. Toggle DNS Enabled (Filtering Status)
+    html2 = view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    assert html2 =~ "DNS Control Active"
+
+    # 3. Toggle Category Filters
+    html3 = view |> element("button[phx-click=toggle_block_ads]") |> render_click()
+    assert html3 =~ "Ads/Trackers blocking enabled!"
+
+    html4 = view |> element("button[phx-click=toggle_block_adult]") |> render_click()
+    assert html4 =~ "Adult content blocking enabled!"
+
+    # 4. Save Upstream DNS settings
+    html5 =
+      view
+      |> form("#save_upstream_dns_form", %{"upstream_dns" => "1.1.1.1, 9.9.9.9"})
+      |> render_submit()
+    assert html5 =~ "Upstream DNS servers updated"
+
+    # 5. Add Custom Rules
+    html6 =
+      view
+      |> form("#add_custom_rule_form", %{
+        "domain" => "ad.example.com",
+        "action" => "block"
+      })
+      |> render_submit()
+    assert html6 =~ "Custom rule for ad.example.com added"
+
+    # Verify custom rule is displayed in the table
+    assert html6 =~ "ad.example.com"
+    assert html6 =~ "Block"
+
+    # 6. Change custom rule action dropdown to redirect
+    _ =
+      view
+      |> element("select[name=action]")
+      |> render_change(%{"action" => "redirect"})
+
+    # Submit redirect rule
+    html7 =
+      view
+      |> form("#add_custom_rule_form", %{
+        "domain" => "redirect.example.com",
+        "action" => "redirect",
+        "value" => "10.0.0.5"
+      })
+      |> render_submit()
+    assert html7 =~ "Custom rule for redirect.example.com added"
+
+    assert html7 =~ "redirect.example.com"
+    assert html7 =~ "10.0.0.5"
+
+    # 7. Delete custom rule
+    html8 =
+      view
+      |> element("button[phx-value-domain='ad.example.com']", "Delete")
+      |> render_click()
+
+    assert html8 =~ "Custom rule for ad.example.com deleted"
+    
+    # Assert deletion in database directly rather than full HTML due to flash messages containing the domain
+    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, vpn_pair.pair_id)
+    assert Enum.find(updated_pair.dns_config["custom_rules"], &(&1["domain"] == "ad.example.com")) == nil
+
+    # 8. Test live logs streaming and clearing
+    log = %{
+      "pair_id" => args.id,
+      "domain" => "my-test.com",
+      "type" => "A",
+      "status" => "resolved",
+      "answer" => "1.2.3.4",
+      "duration" => 12,
+      "timestamp" => System.system_time(:second)
+    }
+    Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{args.id}", {:dns_log, log})
+    Process.sleep(50)
+
+    html9 = render(view)
+    assert html9 =~ "my-test.com"
+    assert html9 =~ "1.2.3.4"
+    assert html9 =~ "RESOLVE"
+
+    # Clear logs
+    html10 = view |> element("button[phx-click=clear_dns_logs]", "Clear Logs") |> render_click()
+    refute html10 =~ "my-test.com"
+  end
 end

@@ -58,7 +58,7 @@ ARG TARGETARCH
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
-     iproute2 iptables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy \
+     iproute2 iptables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy python3 \
   && ARCH=$(dpkg --print-architecture) \
   && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
   && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \

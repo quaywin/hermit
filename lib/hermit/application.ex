@@ -12,6 +12,7 @@ defmodule Hermit.Application do
       {Phoenix.PubSub, name: Hermit.PubSub},
       {Registry, keys: :unique, name: Hermit.Vpn.Registry},
       {Hermit.Vpn.DynamicSupervisor, []},
+      {Hermit.Vpn.DnsLogReceiver, []},
       HermitWeb.Endpoint
     ]
 

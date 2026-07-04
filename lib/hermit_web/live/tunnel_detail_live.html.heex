@@ -33,380 +33,567 @@
       </div>
     </header>
 
-    <!-- Connection Details Status Section -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      <!-- Inbound Connection Status Card -->
-      <%= if @pair.inbound_module == Hermit.Vpn.Inbound.Proxy do %>
-        <!-- Proxy Status Card -->
-        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
-          <div class="space-y-4">
-            <div class="flex items-center justify-between">
-              <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
-                🔌 Dual Proxy Connection
-              </h2>
-              <%= case @pair.ts_status do %>
-                <% :running -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Running
-                  </span>
-                <% :starting -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                    Starting
-                  </span>
-                <% :stopped -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
-                  </span>
-                <% :error -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                  </span>
+    <!-- Navigation Tabs -->
+    <div class="flex border-b border-base-300 space-x-8 mb-6">
+      <button
+        phx-click="set_tab"
+        phx-value-tab="overview"
+        class={"pb-4 text-xs font-medium uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :overview, do: "border-[#3ecf8e] text-base-content", else: "border-transparent text-base-content/60 hover:text-base-content")}
+      >
+        Overview
+      </button>
+      <button
+        phx-click="set_tab"
+        phx-value-tab="dns"
+        class={"pb-4 text-xs font-medium uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :dns, do: "border-[#3ecf8e] text-base-content", else: "border-transparent text-base-content/60 hover:text-base-content")}
+      >
+        DNS Control
+      </button>
+    </div>
+
+    <!-- Active Tab: Overview -->
+    <div class={if @active_tab != :overview, do: "hidden"}>
+      <!-- Connection Details Status Section -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Inbound Connection Status Card -->
+        <%= if @pair.inbound_module == Hermit.Vpn.Inbound.Proxy do %>
+          <!-- Proxy Status Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
+                  🔌 Dual Proxy Connection
+                </h2>
+                <%= case @pair.ts_status do %>
+                  <% :running -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Running
+                    </span>
+                  <% :starting -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                      Starting
+                    </span>
+                  <% :stopped -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                      <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
+                    </span>
+                  <% :error -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                    </span>
+                <% end %>
+              </div>
+
+              <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
+                <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
+                  {@pair.ts_error_reason}
+                </div>
               <% end %>
-            </div>
 
-            <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
-              <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
-                {@pair.ts_error_reason}
-              </div>
-            <% end %>
-
-            <div class="space-y-2 text-sm text-base-content">
-              <div>
-                <span class="text-base-content/60 font-medium">Proxy Inbound Port:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">
-                  {Map.get(@pair.metrics, :proxy_port) || @pair.inbound_config["port"] ||
-                    "Auto-allocating..."}
-                </code>
-              </div>
-
-              <%= if @pair.ts_status == :running do %>
+              <div class="space-y-2 text-sm text-base-content">
                 <div>
-                  <span class="text-base-content/60 font-medium">SOCKS5 Proxy URL:</span>
-                  <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
-                    {Map.get(@pair.metrics, :proxy_socks5_url, "socks5://127.0.0.1:xxx")}
+                  <span class="text-base-content/60 font-medium">Proxy Inbound Port:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">
+                    {Map.get(@pair.metrics, :proxy_port) || @pair.inbound_config["port"] ||
+                      "Auto-allocating..."}
+                  </code>
+                </div>
+
+                <%= if @pair.ts_status == :running do %>
+                  <div>
+                    <span class="text-base-content/60 font-medium">SOCKS5 Proxy URL:</span>
+                    <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                      {Map.get(@pair.metrics, :proxy_socks5_url, "socks5://127.0.0.1:xxx")}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <span class="text-base-content/60 font-medium">HTTP Proxy URL:</span>
-                  <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
-                    {Map.get(@pair.metrics, :proxy_http_url, "http://127.0.0.1:xxx")}
+                  <div>
+                    <span class="text-base-content/60 font-medium">HTTP Proxy URL:</span>
+                    <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                      {Map.get(@pair.metrics, :proxy_http_url, "http://127.0.0.1:xxx")}
+                    </div>
                   </div>
-                </div>
-                <div class="pt-2 text-xs text-base-content/50 italic">
-                  💡 SOCKS5 and HTTP protocols are now handled on two separate ports for maximum performance.
-                </div>
-              <% else %>
-                <div class="pt-2 text-xs text-base-content/50 italic">
-                  Start Proxy Inbound to activate connection endpoints.
-                </div>
-              <% end %>
-            </div>
-          </div>
-
-          <div class="pt-6 border-t border-base-300 flex items-center gap-3">
-            <button
-              phx-click="start_ts"
-              disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
-              class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-            >
-              Start Proxy
-            </button>
-            <button
-              phx-click="stop_ts"
-              disabled={@pair.ts_status == :stopped}
-              class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-            >
-              Stop Proxy
-            </button>
-            <button
-              phx-click="restart_ts"
-              disabled={@pair.wg_status != :running}
-              class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-            >
-              Restart
-            </button>
-          </div>
-        </div>
-      <% else %>
-        <!-- Tailscale Status Card -->
-        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
-          <div class="space-y-4">
-            <div class="flex items-center justify-between">
-              <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
-                🦄 Tailscale Connection
-              </h2>
-              <%= case @pair.ts_status do %>
-                <% :running -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Running
-                  </span>
-                <% :starting -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                    Starting
-                  </span>
-                <% :stopped -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
-                  </span>
-                <% :error -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                  </span>
-              <% end %>
-            </div>
-
-            <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
-              <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
-                {@pair.ts_error_reason}
-              </div>
-            <% end %>
-
-            <div class="space-y-2 text-sm text-base-content">
-              <div>
-                <span class="text-base-content/60 font-medium">Exit Node Hostname:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">hermit-node-{String.replace(
-                  @id,
-                  "_",
-                  "-"
-                )}</code>
-              </div>
-              <div>
-                <span class="text-base-content/60 font-medium">Daemon Process ID:</span>
-                <%= if @pair.ts_port do %>
-                  <span class="text-emerald-500 font-mono text-xs">Active (PID via Port)</span>
+                  <div class="pt-2 text-xs text-base-content/50 italic">
+                    💡 SOCKS5 and HTTP protocols are now handled on two separate ports for maximum performance.
+                  </div>
                 <% else %>
-                  <span class="text-base-content/40 text-xs">Offline</span>
+                  <div class="pt-2 text-xs text-base-content/50 italic">
+                    Start Proxy Inbound to activate connection endpoints.
+                  </div>
+                <% end %>
+              </div>
+            </div>
+
+            <div class="pt-6 border-t border-base-300 flex items-center gap-3">
+              <button
+                phx-click="start_ts"
+                disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
+                class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              >
+                Start Proxy
+              </button>
+              <button
+                phx-click="stop_ts"
+                disabled={@pair.ts_status == :stopped}
+                class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              >
+                Stop Proxy
+              </button>
+              <button
+                phx-click="restart_ts"
+                disabled={@pair.wg_status != :running}
+                class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              >
+                Restart
+              </button>
+            </div>
+          </div>
+        <% else %>
+          <!-- Tailscale Status Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
+                  🦄 Tailscale Connection
+                </h2>
+                <%= case @pair.ts_status do %>
+                  <% :running -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Running
+                    </span>
+                  <% :starting -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                      Starting
+                    </span>
+                  <% :stopped -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                      <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
+                    </span>
+                  <% :error -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                    </span>
                 <% end %>
               </div>
 
-              <%= if @pair.ts_status == :running do %>
+              <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
+                <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
+                  {@pair.ts_error_reason}
+                </div>
+              <% end %>
+
+              <div class="space-y-2 text-sm text-base-content">
                 <div>
-                  <span class="text-base-content/60 font-medium">Connection State:</span>
-                  <span class={[
-                    "font-semibold text-xs",
-                    @pair.metrics.ts_backend_state == "Running" && "text-emerald-500",
-                    @pair.metrics.ts_backend_state != "Running" && "text-amber-500"
-                  ]}>
-                    {@pair.metrics.ts_backend_state}
-                  </span>
+                  <span class="text-base-content/60 font-medium">Exit Node Hostname:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">hermit-node-{String.replace(
+                    @id,
+                    "_",
+                    "-"
+                  )}</code>
                 </div>
                 <div>
-                  <span class="text-base-content/60 font-medium">Logged-in User:</span>
-                  <span class="text-base-content/85 font-mono text-xs">{@pair.metrics.ts_user}</span>
+                  <span class="text-base-content/60 font-medium">Daemon Process ID:</span>
+                  <%= if @pair.ts_port do %>
+                    <span class="text-emerald-500 font-mono text-xs">Active (PID via Port)</span>
+                  <% else %>
+                    <span class="text-base-content/40 text-xs">Offline</span>
+                  <% end %>
                 </div>
-                <div>
-                  <span class="text-base-content/60 font-medium block mb-0.5">IP Address(es):</span>
-                  <div class="flex flex-col gap-1 mt-1">
-                    <%= for ip <- @pair.metrics.ts_ips do %>
-                      <code class="bg-base-200 text-emerald-600 px-1.5 py-0.5 rounded-[4px] text-xs font-mono w-fit border border-base-300">{ip}</code>
-                    <% end %>
-                  </div>
-                </div>
-                <div>
-                  <span class="text-base-content/60 font-medium">MagicDNS Domain:</span>
-                  <div class="text-xs font-mono text-base-content/80 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
-                    {@pair.metrics.ts_magic_dns}
-                  </div>
-                </div>
-                <div>
-                  <span class="text-base-content/60 font-medium">DNS Resolvers:</span>
-                  <div class="text-xs font-mono text-base-content/80 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
-                    <%= if (@pair.inbound_config["dns_mode"] || "default") == "default" do %>
-                      <code class="text-emerald-600 font-semibold bg-emerald-500/10 px-1 py-0.5 rounded">100.100.100.100</code>
-                      <span class="text-emerald-500 font-semibold ml-1">(Tailnet Default)</span>
-                    <% else %>
-                      <%= if is_nil(@pair.inbound_config["dns_resolvers"]) or String.trim(@pair.inbound_config["dns_resolvers"]) == "" do %>
-                        <span class="text-base-content/80">{@system_dns}</span>
-                        <span class="text-base-content/50 italic ml-1">(System Fallback)</span>
-                      <% else %>
-                        <span class="text-base-content/80">{@pair.inbound_config["dns_resolvers"]}</span>
-                      <% end %>
-                    <% end %>
-                  </div>
-                </div>
-                <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+
+                <%= if @pair.ts_status == :running do %>
                   <div>
-                    <span class="text-base-content/60 font-medium">Exit Node routing:</span>
-                    <span class="ml-1 text-xs font-semibold">
-                      <%= if @pair.inbound_config["advertise_exit_node"] != false and @pair.inbound_config["advertise_exit_node"] != "false" do %>
-                        <span class="text-emerald-500">Enabled</span>
-                      <% else %>
-                        <span class="text-base-content/50">Disabled</span>
-                      <% end %>
+                    <span class="text-base-content/60 font-medium">Connection State:</span>
+                    <span class={[
+                      "font-semibold text-xs",
+                      @pair.metrics.ts_backend_state == "Running" && "text-emerald-500",
+                      @pair.metrics.ts_backend_state != "Running" && "text-amber-500"
+                    ]}>
+                      {@pair.metrics.ts_backend_state}
                     </span>
                   </div>
-                  <div class="flex items-center gap-3">
-                    <% exit_node_enabled =
-                      @pair.inbound_config["advertise_exit_node"] != false and
-                        @pair.inbound_config["advertise_exit_node"] != "false" %>
-                    <button
-                      type="button"
-                      phx-click="toggle_exit_node"
-                      class={[
-                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
-                        exit_node_enabled && "bg-emerald-500",
-                        !exit_node_enabled && "bg-base-300"
-                      ]}
-                      role="switch"
-                      aria-checked={to_string(exit_node_enabled)}
-                    >
-                      <span
-                        aria-hidden="true"
-                        class={[
-                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
-                          exit_node_enabled && "translate-x-5",
-                          !exit_node_enabled && "translate-x-0"
-                        ]}
-                      />
-                    </button>
-                  </div>
-                </div>
-                <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
                   <div>
-                    <span class="text-base-content/60 font-medium">App Connector:</span>
-                    <span class="ml-1 text-xs font-semibold">
-                      <%= if @pair.inbound_config["advertise_connector"] == true or @pair.inbound_config["advertise_connector"] == "true" do %>
-                        <span class="text-emerald-500">Enabled</span>
-                      <% else %>
-                        <span class="text-base-content/50">Disabled</span>
+                    <span class="text-base-content/60 font-medium">Logged-in User:</span>
+                    <span class="text-base-content/85 font-mono text-xs">{@pair.metrics.ts_user}</span>
+                  </div>
+                  <div>
+                    <span class="text-base-content/60 font-medium block mb-0.5">IP Address(es):</span>
+                    <div class="flex flex-col gap-1 mt-1">
+                      <%= for ip <- @pair.metrics.ts_ips do %>
+                        <code class="bg-base-200 text-emerald-600 px-1.5 py-0.5 rounded-[4px] text-xs font-mono w-fit border border-base-300">{ip}</code>
                       <% end %>
-                    </span>
+                    </div>
                   </div>
-                  <div class="flex items-center gap-3">
-                    <% connector_enabled =
-                      @pair.inbound_config["advertise_connector"] == true or
-                        @pair.inbound_config["advertise_connector"] == "true" %>
-                    <button
-                      type="button"
-                      phx-click="toggle_app_connector"
-                      class={[
-                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
-                        connector_enabled && "bg-emerald-500",
-                        !connector_enabled && "bg-base-300"
-                      ]}
-                      role="switch"
-                      aria-checked={to_string(connector_enabled)}
-                    >
-                      <span
-                        aria-hidden="true"
-                        class={[
-                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
-                          connector_enabled && "translate-x-5",
-                          !connector_enabled && "translate-x-0"
-                        ]}
-                      />
-                    </button>
+                  <div>
+                    <span class="text-base-content/60 font-medium">MagicDNS Domain:</span>
+                    <div class="text-xs font-mono text-base-content/80 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                      {@pair.metrics.ts_magic_dns}
+                    </div>
                   </div>
-                </div>
-                <%= if connector_enabled do %>
-                  <form
-                    id="save_connector_settings_form"
-                    phx-submit="save_connector_settings"
-                    class="space-y-3 pt-3 mt-3 border-t border-base-300/40"
-                  >
+                  <div>
+                    <span class="text-base-content/60 font-medium">DNS Resolvers:</span>
+                    <div class="text-xs font-mono text-base-content/80 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                      <%= if (@pair.inbound_config["dns_mode"] || "default") == "default" do %>
+                        <code class="text-emerald-600 font-semibold bg-emerald-500/10 px-1 py-0.5 rounded">100.100.100.100</code>
+                        <span class="text-emerald-500 font-semibold ml-1">(Tailnet Default)</span>
+                      <% else %>
+                        <%= if is_nil(@pair.inbound_config["dns_resolvers"]) or String.trim(@pair.inbound_config["dns_resolvers"]) == "" do %>
+                          <span class="text-base-content/80">{@system_dns}</span>
+                          <span class="text-base-content/50 italic ml-1">(System Fallback)</span>
+                        <% else %>
+                          <span class="text-base-content/80">{@pair.inbound_config["dns_resolvers"]}</span>
+                        <% end %>
+                      <% end %>
+                    </div>
+                  </div>
+                  <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
                     <div>
-                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                        App Connector Tag:
-                      </label>
-                      <input
-                        type="text"
-                        name="connector_tag"
-                        value={@pair.inbound_config["advertise_connector_tag"] || "tag:connector"}
-                        class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1"
-                        placeholder="e.g., tag:connector"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                        Domain Routes (comma or line separated):
-                      </label>
-                      <textarea
-                        name="connector_domains"
-                        rows="3"
-                        class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
-                        placeholder="e.g., *.example.com&#10;internal-service.local"
-                      ><%= @pair.inbound_config["advertise_connector_domains"] || "" %></textarea>
-                    </div>
-                    <div class="flex justify-end">
-                      <button
-                        type="submit"
-                        class="btn btn-xs btn-primary px-3 py-1.5 h-auto min-h-0 rounded-[4px] cursor-pointer"
-                      >
-                        Apply App Connector Settings
-                      </button>
-                    </div>
-                  </form>
-                <% end %>
-                <div class="pt-3 mt-3 border-t border-base-300/40">
-                  <form
-                    id="save_routes_dns_settings_form"
-                    phx-submit="save_routes_dns_settings"
-                    class="space-y-3"
-                  >
-                    <div class="flex items-center justify-between bg-base-200/30 p-2 rounded-[4px] border border-base-300/40">
-                      <span class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                        Use Tailscale DNS Settings (Default)
+                      <span class="text-base-content/60 font-medium">Exit Node routing:</span>
+                      <span class="ml-1 text-xs font-semibold">
+                        <%= if @pair.inbound_config["advertise_exit_node"] != false and @pair.inbound_config["advertise_exit_node"] != "false" do %>
+                          <span class="text-emerald-500">Enabled</span>
+                        <% else %>
+                          <span class="text-base-content/50">Disabled</span>
+                        <% end %>
                       </span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <% exit_node_enabled =
+                        @pair.inbound_config["advertise_exit_node"] != false and
+                          @pair.inbound_config["advertise_exit_node"] != "false" %>
                       <button
                         type="button"
-                        phx-click="toggle_use_tailscale_dns"
+                        phx-click="toggle_exit_node"
                         class={[
                           "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
-                          @use_tailscale_dns && "bg-emerald-500",
-                          !@use_tailscale_dns && "bg-base-300"
+                          exit_node_enabled && "bg-emerald-500",
+                          !exit_node_enabled && "bg-base-300"
                         ]}
+                        role="switch"
+                        aria-checked={to_string(exit_node_enabled)}
                       >
-                        <span class={[
-                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
-                          @use_tailscale_dns && "translate-x-5",
-                          !@use_tailscale_dns && "translate-x-0"
-                        ]} />
+                        <span
+                          aria-hidden="true"
+                          class={[
+                            "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                            exit_node_enabled && "translate-x-5",
+                            !exit_node_enabled && "translate-x-0"
+                          ]}
+                        />
                       </button>
                     </div>
-
-                    <%= if not @use_tailscale_dns do %>
+                  </div>
+                  <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+                    <div>
+                      <span class="text-base-content/60 font-medium">App Connector:</span>
+                      <span class="ml-1 text-xs font-semibold">
+                        <%= if @pair.inbound_config["advertise_connector"] == true or @pair.inbound_config["advertise_connector"] == "true" do %>
+                          <span class="text-emerald-500">Enabled</span>
+                        <% else %>
+                          <span class="text-base-content/50">Disabled</span>
+                        <% end %>
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <% connector_enabled =
+                        @pair.inbound_config["advertise_connector"] == true or
+                          @pair.inbound_config["advertise_connector"] == "true" %>
+                      <button
+                        type="button"
+                        phx-click="toggle_app_connector"
+                        class={[
+                          "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                          connector_enabled && "bg-emerald-500",
+                          !connector_enabled && "bg-base-300"
+                        ]}
+                        role="switch"
+                        aria-checked={to_string(connector_enabled)}
+                      >
+                        <span
+                          aria-hidden="true"
+                          class={[
+                            "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                            connector_enabled && "translate-x-5",
+                            !connector_enabled && "translate-x-0"
+                          ]}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                  <%= if connector_enabled do %>
+                    <form
+                      id="save_connector_settings_form"
+                      phx-submit="save_connector_settings"
+                      class="space-y-3 pt-3 mt-3 border-t border-base-300/40"
+                    >
                       <div>
                         <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                          Tailscale DNS Resolvers (e.g., Control D):
+                          App Connector Tag:
                         </label>
                         <input
                           type="text"
-                          name="dns_resolvers"
-                          value={@pair.inbound_config["dns_resolvers"] || ""}
-                          class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
-                          placeholder="e.g., 76.76.2.0, 76.76.10.0"
+                          name="connector_tag"
+                          value={@pair.inbound_config["advertise_connector_tag"] || "tag:connector"}
+                          class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1"
+                          placeholder="e.g., tag:connector"
                         />
                       </div>
-                    <% end %>
-                    <div>
-                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                        Advertise Subnet Routes (IP Ranges):
-                      </label>
-                      <input
-                        type="text"
-                        name="advertise_routes"
-                        value={@pair.inbound_config["advertise_routes"] || ""}
-                        class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
-                        placeholder="e.g., 10.0.0.0/8, 192.168.1.0/24"
+                      <div>
+                        <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                          Domain Routes (comma or line separated):
+                        </label>
+                        <textarea
+                          name="connector_domains"
+                          rows="3"
+                          class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
+                          placeholder="e.g., *.example.com&#10;internal-service.local"
+                        ><%= @pair.inbound_config["advertise_connector_domains"] || "" %></textarea>
+                      </div>
+                      <div class="flex justify-end">
+                        <button
+                          type="submit"
+                          class="btn btn-xs btn-primary px-3 py-1.5 h-auto min-h-0 rounded-[4px] cursor-pointer"
+                        >
+                          Apply App Connector Settings
+                        </button>
+                      </div>
+                    </form>
+                  <% end %>
+                  <div class="pt-3 mt-3 border-t border-base-300/40">
+                    <form
+                      id="save_routes_dns_settings_form"
+                      phx-submit="save_routes_dns_settings"
+                      class="space-y-3"
+                    >
+                      <div class="flex items-center justify-between bg-base-200/30 p-2 rounded-[4px] border border-base-300/40">
+                        <span class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                          Use Tailscale DNS Settings (Default)
+                        </span>
+                        <button
+                          type="button"
+                          phx-click="toggle_use_tailscale_dns"
+                          class={[
+                            "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                            @use_tailscale_dns && "bg-emerald-500",
+                            !@use_tailscale_dns && "bg-base-300"
+                          ]}
+                        >
+                          <span class={[
+                            "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                            @use_tailscale_dns && "translate-x-5",
+                            !@use_tailscale_dns && "translate-x-0"
+                          ]} />
+                        </button>
+                      </div>
+
+                      <%= if not @use_tailscale_dns do %>
+                        <div>
+                          <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                            Tailscale DNS Resolvers (e.g., Control D):
+                          </label>
+                          <input
+                            type="text"
+                            name="dns_resolvers"
+                            value={@pair.inbound_config["dns_resolvers"] || ""}
+                            class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
+                            placeholder="e.g., 76.76.2.0, 76.76.10.0"
+                          />
+                        </div>
+                      <% end %>
+                      <div>
+                        <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                          Advertise Subnet Routes (IP Ranges):
+                        </label>
+                        <input
+                          type="text"
+                          name="advertise_routes"
+                          value={@pair.inbound_config["advertise_routes"] || ""}
+                          class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
+                          placeholder="e.g., 10.0.0.0/8, 192.168.1.0/24"
+                        />
+                      </div>
+                      <div class="flex justify-end">
+                        <button
+                          type="submit"
+                          class="btn btn-xs btn-primary px-3 py-1.5 h-auto min-h-0 rounded-[4px] cursor-pointer"
+                        >
+                          Apply Routes & DNS Settings
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                <% else %>
+                  <div class="pt-2 text-xs text-base-content/50 italic">
+                    Start Tailscale to retrieve detailed connection status.
+                  </div>
+                <% end %>
+              </div>
+            </div>
+
+            <div class="pt-6 border-t border-base-300 flex items-center gap-3">
+              <button
+                phx-click="start_ts"
+                disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
+                class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              >
+                Start Tailscale
+              </button>
+              <button
+                phx-click="stop_ts"
+                disabled={@pair.ts_status == :stopped}
+                class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              >
+                Stop Tailscale
+              </button>
+              <button
+                phx-click="restart_ts"
+                disabled={@pair.wg_status != :running}
+                class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              >
+                Restart
+              </button>
+            </div>
+          </div>
+        <% end %>
+
+        <!-- Outbound Gateway Status Card -->
+        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
+                <%= if @pair.outbound_module == Hermit.Vpn.Outbound.Local do %>
+                  🏠 Host Network Connection (Local NAT)
+                <% else %>
+                  🔒 VPN Connection (WireGuard)
+                <% end %>
+              </h2>
+              <div class="flex items-center gap-2.5">
+                <%= if @pair.outbound_module != Hermit.Vpn.Outbound.Local do %>
+                  <button
+                    type="button"
+                    id="edit-wg-config-btn"
+                    phx-click="edit_wg_config"
+                    class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs flex items-center gap-1"
+                  >
+                    <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
+                  </button>
+                <% end %>
+                <%= case @pair.wg_status do %>
+                  <% :running -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Running
+                    </span>
+                  <% :starting -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                      Starting
+                    </span>
+                  <% :stopped -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                      <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
+                    </span>
+                  <% :error -> %>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
+                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                    </span>
+                <% end %>
+              </div>
+            </div>
+
+            <%= if @pair.wg_status == :error and @pair.wg_error_reason do %>
+              <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
+                {@pair.wg_error_reason}
+              </div>
+            <% end %>
+
+            <div class="space-y-2 text-sm text-base-content">
+              <div>
+                <span class="text-base-content/60 font-medium">Interface Name:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.outbound_if ||
+                  "wg0"}</code>
+              </div>
+              <div>
+                <span class="text-base-content/60 font-medium">Namespace:</span>
+                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">hermit_wg_{@id}</code>
+              </div>
+              <%= if @pair.outbound_module != Hermit.Vpn.Outbound.Local do %>
+                <div>
+                  <span class="text-base-content/60 font-medium">Listening Port:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.metrics[
+                    :wg_port
+                  ] || "-"}</code>
+                </div>
+                <div>
+                  <span class="text-base-content/60 font-medium">Interface Address:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
+                    :interface_address
+                  ] || "-"}</code>
+                </div>
+                <div>
+                  <span class="text-base-content/60 font-medium">Peer Endpoint:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
+                    :peer_endpoint
+                  ] || "-"}</code>
+                </div>
+                <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+                  <div>
+                    <span class="text-base-content/60 font-medium">Use Tailscale DNS:</span>
+                    <span class="ml-1 text-xs font-semibold">
+                      <%= if @pair.outbound_config["use_tailscale_dns"] == true or @pair.outbound_config["use_tailscale_dns"] == "true" do %>
+                        <span class="text-emerald-500 font-semibold">Enabled (100.100.100.100)</span>
+                      <% else %>
+                        <span class="text-base-content/50">Disabled</span>
+                      <% end %>
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <% use_tailscale_dns =
+                      @pair.outbound_config["use_tailscale_dns"] == true or
+                        @pair.outbound_config["use_tailscale_dns"] == "true" %>
+                    <button
+                      type="button"
+                      phx-click="toggle_wg_use_tailscale_dns"
+                      class={[
+                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                        use_tailscale_dns && "bg-emerald-500",
+                        !use_tailscale_dns && "bg-base-300"
+                      ]}
+                      role="switch"
+                      aria-checked={to_string(use_tailscale_dns)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        class={[
+                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                          use_tailscale_dns && "translate-x-5",
+                          !use_tailscale_dns && "translate-x-0"
+                        ]}
                       />
-                    </div>
-                    <div class="flex justify-end">
-                      <button
-                        type="submit"
-                        class="btn btn-xs btn-primary px-3 py-1.5 h-auto min-h-0 rounded-[4px] cursor-pointer"
-                      >
-                        Apply Routes & DNS Settings
-                      </button>
-                    </div>
-                  </form>
+                    </button>
+                  </div>
                 </div>
               <% else %>
-                <div class="pt-2 text-xs text-base-content/50 italic">
-                  Start Tailscale to retrieve detailed connection status.
+                <% hash = :erlang.phash2(@id, 250) + 1
+
+                local_ip =
+                  Map.get(@pair.outbound_config || %{}, "local_ip") ||
+                    Map.get(@pair.outbound_config || %{}, :local_ip) || "10.200.#{hash}.2/30"
+
+                host_ip =
+                  Map.get(@pair.outbound_config || %{}, "host_ip") ||
+                    Map.get(@pair.outbound_config || %{}, :host_ip) || "10.200.#{hash}.1/30"
+
+                gateway = String.split(host_ip, "/") |> hd() %>
+                <div>
+                  <span class="text-base-content/60 font-medium">Local Namespace IP:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{local_ip}</code>
+                </div>
+                <div>
+                  <span class="text-base-content/60 font-medium">Host Gateway IP:</span>
+                  <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{gateway}</code>
                 </div>
               <% end %>
             </div>
@@ -414,232 +601,404 @@
 
           <div class="pt-6 border-t border-base-300 flex items-center gap-3">
             <button
-              phx-click="start_ts"
-              disabled={@pair.ts_status in [:running, :starting] or @pair.wg_status != :running}
+              phx-click="start_wg"
+              disabled={@pair.wg_status in [:running, :starting]}
               class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
             >
-              Start Tailscale
+              {if @pair.outbound_module == Hermit.Vpn.Outbound.Local,
+                do: "Start Outbound",
+                else: "Start Wireguard"}
             </button>
             <button
-              phx-click="stop_ts"
-              disabled={@pair.ts_status == :stopped}
+              phx-click="stop_wg"
+              disabled={@pair.wg_status == :stopped}
               class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
             >
-              Stop Tailscale
+              {if @pair.outbound_module == Hermit.Vpn.Outbound.Local,
+                do: "Stop Outbound",
+                else: "Stop Wireguard"}
             </button>
             <button
-              phx-click="restart_ts"
-              disabled={@pair.wg_status != :running}
-              class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
+              phx-click="restart_wg"
+              class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider"
             >
               Restart
             </button>
           </div>
         </div>
-      <% end %>
+      </div>
 
-      <!-- Outbound Gateway Status Card -->
-      <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6 flex flex-col justify-between">
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
-              <%= if @pair.outbound_module == Hermit.Vpn.Outbound.Local do %>
-                🏠 Host Network Connection (Local NAT)
-              <% else %>
-                🔒 VPN Connection (WireGuard)
-              <% end %>
-            </h2>
-            <div class="flex items-center gap-2.5">
-              <%= if @pair.outbound_module != Hermit.Vpn.Outbound.Local do %>
-                <button
-                  type="button"
-                  id="edit-wg-config-btn"
-                  phx-click="edit_wg_config"
-                  class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs flex items-center gap-1"
-                >
-                  <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
-                </button>
-              <% end %>
-              <%= case @pair.wg_status do %>
-                <% :running -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Running
-                  </span>
-                <% :starting -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                    Starting
-                  </span>
-                <% :stopped -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
-                  </span>
-                <% :error -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                  </span>
-              <% end %>
+      <!-- Real-time Metrics Info Dashboard -->
+      <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+        <h2 class="text-lg font-medium tracking-display-md text-base-content">
+          📊 Network Statistics & Throughput
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-base-200 p-4 rounded-[6px] border border-base-300">
+            <div class="text-base-content/60 text-xs font-medium uppercase tracking-wider">
+              Bytes Received (Rx)
+            </div>
+            <div class="text-2xl font-bold text-emerald-600 mt-1 font-mono">
+              {format_bytes(@pair.metrics.bytes_received)}
             </div>
           </div>
+          <div class="bg-base-200 p-4 rounded-[6px] border border-base-300">
+            <div class="text-base-content/60 text-xs font-medium uppercase tracking-wider">
+              Bytes Sent (Tx)
+            </div>
+            <div class="text-2xl font-bold text-base-content mt-1 font-mono">
+              {format_bytes(@pair.metrics.bytes_sent)}
+            </div>
+          </div>
+          <div class="bg-base-200 p-4 rounded-[6px] border border-base-300">
+            <div class="text-base-content/60 text-xs font-medium uppercase tracking-wider">
+              Uptime
+            </div>
+            <div class="text-2xl font-bold text-base-content mt-1 font-mono">
+              {@uptime}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
-          <%= if @pair.wg_status == :error and @pair.wg_error_reason do %>
-            <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
-              {@pair.wg_error_reason}
+    <!-- Active Tab: DNS Control -->
+    <div class={if @active_tab != :dns, do: "hidden"}>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left Column: Config and Rules -->
+        <div class="lg:col-span-2 space-y-6">
+          
+          <!-- DNS Status Toggle Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
+                  🛡️ DNS Filtering Status
+                </h2>
+                <p class="text-xs text-base-content/60 mt-1">
+                  Route DNS queries through a local filtering resolver inside the network namespace.
+                </p>
+              </div>
+              <div>
+                <% dns_enabled = @pair.dns_config && @pair.dns_config["enabled"] == true %>
+                <button
+                  type="button"
+                  phx-click="toggle_dns_enabled"
+                  class={[
+                    "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                    dns_enabled && "bg-emerald-500",
+                    !dns_enabled && "bg-base-300"
+                  ]}
+                >
+                  <span
+                    aria-hidden="true"
+                    class={[
+                      "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                      dns_enabled && "translate-x-5",
+                      !dns_enabled && "translate-x-0"
+                    ]}
+                  />
+                </button>
+              </div>
             </div>
-          <% end %>
 
-          <div class="space-y-2 text-sm text-base-content">
-            <div>
-              <span class="text-base-content/60 font-medium">Interface Name:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.outbound_if ||
-                "wg0"}</code>
-            </div>
-            <div>
-              <span class="text-base-content/60 font-medium">Namespace:</span>
-              <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">hermit_wg_{@id}</code>
-            </div>
-            <%= if @pair.outbound_module != Hermit.Vpn.Outbound.Local do %>
-              <div>
-                <span class="text-base-content/60 font-medium">Listening Port:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@pair.metrics[
-                  :wg_port
-                ] || "-"}</code>
-              </div>
-              <div>
-                <span class="text-base-content/60 font-medium">Interface Address:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
-                  :interface_address
-                ] || "-"}</code>
-              </div>
-              <div>
-                <span class="text-base-content/60 font-medium">Peer Endpoint:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{@wg_info[
-                  :peer_endpoint
-                ] || "-"}</code>
-              </div>
-              <div class="flex items-center justify-between border-t border-base-300/40 pt-2 mt-2">
+            <!-- Banner indicating active filtering status -->
+            <%= if dns_enabled do %>
+              <div class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-[8px] p-4 text-xs flex items-start gap-2">
+                <span class="text-base">🟢</span>
                 <div>
-                  <span class="text-base-content/60 font-medium">Use Tailscale DNS:</span>
-                  <span class="ml-1 text-xs font-semibold">
-                    <%= if @pair.outbound_config["use_tailscale_dns"] == true or @pair.outbound_config["use_tailscale_dns"] == "true" do %>
-                      <span class="text-emerald-500 font-semibold">Enabled (100.100.100.100)</span>
-                    <% else %>
-                      <span class="text-base-content/50">Disabled</span>
-                    <% end %>
-                  </span>
+                  <span class="font-semibold block text-emerald-600">DNS Control Active</span>
+                  Queries inside namespace <code class="bg-emerald-500/5 px-1 py-0.5 rounded font-mono font-semibold">hermit_wg_{@id}</code> are resolved and filtered by Hermit.
                 </div>
-                <div class="flex items-center gap-3">
-                  <% use_tailscale_dns =
-                    @pair.outbound_config["use_tailscale_dns"] == true or
-                      @pair.outbound_config["use_tailscale_dns"] == "true" %>
+              </div>
+
+              <!-- Categories Toggles -->
+              <div class="border-t border-base-300 pt-4 space-y-4">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/70">
+                  Global Filters & Blocklists
+                </h3>
+                
+                <div class="flex items-center justify-between bg-base-200/40 p-3 rounded-[6px] border border-base-300/60">
+                  <div>
+                    <span class="font-medium text-sm text-base-content block">Block Ads & Trackers</span>
+                    <span class="text-xs text-base-content/50">NXDOMAIN response for telemetry and analytical domains</span>
+                  </div>
+                  <% block_ads = @pair.dns_config && @pair.dns_config["block_ads"] == true %>
                   <button
                     type="button"
-                    phx-click="toggle_wg_use_tailscale_dns"
+                    phx-click="toggle_block_ads"
                     class={[
                       "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
-                      use_tailscale_dns && "bg-emerald-500",
-                      !use_tailscale_dns && "bg-base-300"
+                      block_ads && "bg-emerald-500",
+                      !block_ads && "bg-base-300"
                     ]}
-                    role="switch"
-                    aria-checked={to_string(use_tailscale_dns)}
                   >
                     <span
                       aria-hidden="true"
                       class={[
                         "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
-                        use_tailscale_dns && "translate-x-5",
-                        !use_tailscale_dns && "translate-x-0"
+                        block_ads && "translate-x-5",
+                        !block_ads && "translate-x-0"
+                      ]}
+                    />
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between bg-base-200/40 p-3 rounded-[6px] border border-base-300/60">
+                  <div>
+                    <span class="font-medium text-sm text-base-content block">Block Adult Content</span>
+                    <span class="text-xs text-base-content/50">Block explicit domains at the resolver level</span>
+                  </div>
+                  <% block_adult = @pair.dns_config && @pair.dns_config["block_adult"] == true %>
+                  <button
+                    type="button"
+                    phx-click="toggle_block_adult"
+                    class={[
+                      "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                      block_adult && "bg-emerald-500",
+                      !block_adult && "bg-base-300"
+                    ]}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={[
+                        "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                        block_adult && "translate-x-5",
+                        !block_adult && "translate-x-0"
                       ]}
                     />
                   </button>
                 </div>
               </div>
             <% else %>
-              <% hash = :erlang.phash2(@id, 250) + 1
-
-              local_ip =
-                Map.get(@pair.outbound_config || %{}, "local_ip") ||
-                  Map.get(@pair.outbound_config || %{}, :local_ip) || "10.200.#{hash}.2/30"
-
-              host_ip =
-                Map.get(@pair.outbound_config || %{}, "host_ip") ||
-                  Map.get(@pair.outbound_config || %{}, :host_ip) || "10.200.#{hash}.1/30"
-
-              gateway = String.split(host_ip, "/") |> hd() %>
-              <div>
-                <span class="text-base-content/60 font-medium">Local Namespace IP:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{local_ip}</code>
-              </div>
-              <div>
-                <span class="text-base-content/60 font-medium">Host Gateway IP:</span>
-                <code class="bg-base-200 text-base-content/95 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">{gateway}</code>
+              <div class="bg-base-200 border border-base-300 text-base-content/60 rounded-[8px] p-4 text-xs flex items-start gap-2">
+                <span class="text-base">⚪</span>
+                <div>
+                  <span class="font-semibold block text-base-content/80">DNS Control Inactive</span>
+                  Custom rules, blocklists, and logs are disabled. Original configuration resolver settings are in effect.
+                </div>
               </div>
             <% end %>
           </div>
+
+          <!-- Upstream DNS Servers Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+            <h2 class="text-lg font-medium tracking-display-md text-base-content">
+              🌐 Upstream DNS Servers
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Unmatched queries are forwarded to these default upstreams. Separated by commas.
+            </p>
+            <form id="save_upstream_dns_form" phx-submit="save_upstream_dns" class="flex gap-3 items-end">
+              <div class="flex-1">
+                <input
+                  type="text"
+                  name="upstream_dns"
+                  value={(@pair.dns_config && @pair.dns_config["upstream_dns"]) || "1.1.1.1, 8.8.8.8"}
+                  class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] text-xs font-mono rounded-[6px] p-2.5"
+                  placeholder="e.g., 1.1.1.1, 8.8.8.8"
+                />
+              </div>
+              <button
+                type="submit"
+                class="btn btn-primary px-4 py-2.5 h-auto min-h-0 rounded-[6px] uppercase font-semibold text-xs tracking-wider cursor-pointer"
+              >
+                Save Upstream
+              </button>
+            </form>
+          </div>
+
+          <!-- Custom Domain Rules Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6">
+            <div>
+              <h2 class="text-lg font-medium tracking-display-md text-base-content">
+                📝 Custom Domain Rules
+              </h2>
+              <p class="text-xs text-base-content/60 mt-1">
+                Override resolver behavior for specific domains. Subdomains are also matched.
+              </p>
+            </div>
+
+            <!-- Custom Rules Table -->
+            <div class="overflow-x-auto border border-base-300 rounded-[8px]">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-base-200/50 border-b border-base-300 text-base-content/60 text-xs font-semibold uppercase tracking-wider">
+                    <th class="py-2.5 px-4">Domain Pattern</th>
+                    <th class="py-2.5 px-4">Action</th>
+                    <th class="py-2.5 px-4">IP Target</th>
+                    <th class="py-2.5 px-4 text-right">Delete</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-base-300 text-xs">
+                  <%= if is_nil(@pair.dns_config) or is_nil(@pair.dns_config["custom_rules"]) or @pair.dns_config["custom_rules"] == [] do %>
+                    <tr>
+                      <td colspan="4" class="py-6 text-center text-base-content/50 italic">
+                        No custom domain rules configured. Add a rule below.
+                      </td>
+                    </tr>
+                  <% else %>
+                    <%= for rule <- @pair.dns_config["custom_rules"] do %>
+                      <tr class="hover:bg-base-200/30 transition-colors">
+                        <td class="py-3 px-4 font-mono font-medium text-base-content">{rule["domain"]}</td>
+                        <td class="py-3 px-4">
+                          <%= case rule["action"] do %>
+                            <% "block" -> %>
+                              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-red-500/10 text-red-500 border border-red-500/20 uppercase">
+                                Block
+                              </span>
+                            <% "bypass" -> %>
+                              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 uppercase">
+                                Bypass
+                              </span>
+                            <% "redirect" -> %>
+                              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/20 uppercase">
+                                Redirect
+                              </span>
+                          <% end %>
+                        </td>
+                        <td class="py-3 px-4 font-mono text-base-content/75">{rule["value"] || "-"}</td>
+                        <td class="py-3 px-4 text-right">
+                          <button
+                            type="button"
+                            phx-click="delete_custom_rule"
+                            phx-value-domain={rule["domain"]}
+                            class="text-red-500 hover:text-red-700 transition-colors text-xs font-semibold cursor-pointer underline"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    <% end %>
+                  <% end %>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Add Custom Rule Form -->
+            <form id="add_custom_rule_form" phx-submit="add_custom_rule" class="bg-base-200/40 p-4 border border-base-300 rounded-[8px] space-y-4">
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/80">
+                + Add New Custom Rule
+              </h3>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-base-content/60 mb-1">
+                    Domain
+                  </label>
+                  <input
+                    type="text"
+                    name="domain"
+                    required
+                    placeholder="e.g., test.example.com"
+                    class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs font-mono rounded-[6px] p-2"
+                  />
+                </div>
+                <div>
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-base-content/60 mb-1">
+                    Action
+                  </label>
+                  <select
+                    name="action"
+                    phx-change="custom_rule_action_changed"
+                    class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[6px] p-2 h-[34px] cursor-pointer"
+                  >
+                    <option value="block">Block (NXDOMAIN)</option>
+                    <option value="bypass">Bypass (Force Upstream)</option>
+                    <option value="redirect">Redirect (Local IP)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-base-content/60 mb-1">
+                    IP Target (Redirect only)
+                  </label>
+                  <input
+                    type="text"
+                    name="value"
+                    placeholder="e.g., 192.168.1.100"
+                    disabled={@custom_rule_action != "redirect"}
+                    class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs font-mono rounded-[6px] p-2 disabled:bg-base-200/50 disabled:text-base-content/30"
+                  />
+                </div>
+              </div>
+              <div class="flex justify-end">
+                <button
+                  type="submit"
+                  class="btn btn-primary px-4 py-2 h-auto min-h-0 rounded-[6px] uppercase font-semibold text-xs tracking-wider cursor-pointer"
+                >
+                  Add Custom Rule
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
 
-        <div class="pt-6 border-t border-base-300 flex items-center gap-3">
-          <button
-            phx-click="start_wg"
-            disabled={@pair.wg_status in [:running, :starting]}
-            class="flex-1 btn btn-primary py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-          >
-            {if @pair.outbound_module == Hermit.Vpn.Outbound.Local,
-              do: "Start Outbound",
-              else: "Start Wireguard"}
-          </button>
-          <button
-            phx-click="stop_wg"
-            disabled={@pair.wg_status == :stopped}
-            class="flex-1 btn btn-error btn-outline py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider disabled:opacity-50"
-          >
-            {if @pair.outbound_module == Hermit.Vpn.Outbound.Local,
-              do: "Stop Outbound",
-              else: "Stop Wireguard"}
-          </button>
-          <button
-            phx-click="restart_wg"
-            class="flex-1 btn btn-outline-custom py-2 rounded-[6px] transition-colors cursor-pointer text-xs font-medium uppercase tracking-wider"
-          >
-            Restart
-          </button>
+        <!-- Right Column: Live Query Log Console -->
+        <div class="space-y-6">
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col h-[650px]">
+            <div class="flex items-center justify-between pb-4 border-b border-base-300 mb-4">
+              <div>
+                <h2 class="text-lg font-medium tracking-display-md text-base-content">
+                  📜 Real-Time Logs
+                </h2>
+                <p class="text-[10px] text-base-content/50 mt-0.5">
+                  Subscribed to `dns_logs:{@id}`
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="clear_dns_logs"
+                class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs px-2.5 py-1.5 h-auto min-h-0"
+              >
+                Clear Logs
+              </button>
+            </div>
+
+            <!-- Console box -->
+            <div class="flex-1 bg-[#1c1c1c] rounded-[6px] border border-base-300/40 p-4 font-mono text-[11px] text-neutral-300 flex flex-col overflow-hidden">
+              <!-- Console Headers -->
+              <div class="grid grid-cols-12 gap-1 pb-2 border-b border-neutral-800 text-[10px] text-neutral-500 font-bold uppercase tracking-wider">
+                <span class="col-span-2">Time</span>
+                <span class="col-span-1">Type</span>
+                <span class="col-span-2">Action</span>
+                <span class="col-span-4">Domain</span>
+                <span class="col-span-3 text-right">Target</span>
+              </div>
+              
+              <!-- Console Body -->
+              <div
+                id="dns-logs"
+                phx-update="stream"
+                class="flex-1 overflow-y-auto mt-2 space-y-1.5 scrollbar-thin scrollbar-thumb-neutral-800 text-[10px]"
+              >
+                <div
+                  :for={{dom_id, log} <- @streams.dns_logs}
+                  id={dom_id}
+                  class="grid grid-cols-12 gap-1 py-1 border-b border-neutral-800/40 hover:bg-neutral-800/20 items-center text-[10px] transition-colors"
+                >
+                  <span class="col-span-2 text-neutral-500">{format_dns_time(log["timestamp"])}</span>
+                  <span class="col-span-1 text-sky-400 font-semibold">{log["type"]}</span>
+                  <span class="col-span-2">
+                    <%= case log["status"] do %>
+                      <% "blocked" -> %>
+                        <span class="text-red-400 font-bold text-[10px]">BLOCKED</span>
+                      <% "redirected" -> %>
+                        <span class="text-amber-400 font-bold text-[10px]">REDIRECT</span>
+                      <% "resolved" -> %>
+                        <span class="text-emerald-400 font-bold text-[10px]">RESOLVE</span>
+                      <% _ -> %>
+                        <span class="text-neutral-400 text-[10px]">{log["status"]}</span>
+                    <% end %>
+                  </span>
+                  <span class="col-span-4 text-neutral-200 truncate font-mono" title={log["domain"]}>{log["domain"]}</span>
+                  <span class="col-span-3 text-right text-neutral-400 truncate" title={log["answer"]}>{log["answer"]}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Real-time Metrics Info Dashboard -->
-    <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
-      <h2 class="text-lg font-medium tracking-display-md text-base-content">
-        📊 Network Statistics & Throughput
-      </h2>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="bg-base-200 p-4 rounded-[6px] border border-base-300">
-          <div class="text-base-content/60 text-xs font-medium uppercase tracking-wider">
-            Bytes Received (Rx)
-          </div>
-          <div class="text-2xl font-bold text-emerald-600 mt-1 font-mono">
-            {format_bytes(@pair.metrics.bytes_received)}
-          </div>
-        </div>
-        <div class="bg-base-200 p-4 rounded-[6px] border border-base-300">
-          <div class="text-base-content/60 text-xs font-medium uppercase tracking-wider">
-            Bytes Sent (Tx)
-          </div>
-          <div class="text-2xl font-bold text-base-content mt-1 font-mono">
-            {format_bytes(@pair.metrics.bytes_sent)}
-          </div>
-        </div>
-        <div class="bg-base-200 p-4 rounded-[6px] border border-base-300">
-          <div class="text-base-content/60 text-xs font-medium uppercase tracking-wider">
-            Uptime
-          </div>
-          <div class="text-2xl font-bold text-base-content mt-1 font-mono">
-            {@uptime}
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 
   <%= if @show_edit_modal do %>

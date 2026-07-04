@@ -22,13 +22,9 @@ defmodule Hermit.Vpn.PairWorker do
     :wg_config_path,
     :wg_config_content,
     :ts_auth_key,
-    # Keep for legacy compatibility/overall status
     :status,
-    # Keep for legacy compatibility
     :error_reason,
-    # :stopped | :starting | :running | :error
     :wg_status,
-    # :stopped | :starting | :running | :error
     :ts_status,
     :wg_error_reason,
     :ts_error_reason,
@@ -36,6 +32,9 @@ defmodule Hermit.Vpn.PairWorker do
     :storage_dir,
     :started_at,
     :ts_port,
+    :dns_config,
+    :dns_socket,
+    :dns_port_proc,
     ts_retry_count: 0,
     wg_retry_count: 0,
     inbound_module: Hermit.Vpn.Inbound.Tailscale,
@@ -50,7 +49,6 @@ defmodule Hermit.Vpn.PairWorker do
   # --- Client API ---
 
   def start_link(args) do
-    # args expects a map with keys: :id, :wg_config, :ts_auth_key
     GenServer.start_link(__MODULE__, args, name: via_tuple(args.id))
   end
 
@@ -82,7 +80,6 @@ defmodule Hermit.Vpn.PairWorker do
     end
   end
 
-  # Independent control APIs
   def start_wg(id) do
     case ensure_worker_running(id) do
       {:ok, pid} -> GenServer.call(pid, {:start_wg})
@@ -101,6 +98,30 @@ defmodule Hermit.Vpn.PairWorker do
     case ensure_worker_running(id) do
       {:ok, pid} -> GenServer.call(pid, {:restart_wg})
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def update_dns_config(id, new_dns_config) do
+    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
+      nil ->
+        {:error, :not_found}
+
+      pair ->
+        case pair
+             |> Hermit.Vpn.VpnPair.changeset(%{dns_config: new_dns_config})
+             |> Hermit.Repo.update() do
+          {:ok, updated_pair} ->
+            case GenServer.whereis(via_tuple(id)) do
+              nil ->
+                {:ok, :updated_offline}
+
+              pid ->
+                GenServer.call(pid, {:update_dns_config, updated_pair.dns_config})
+            end
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
     end
   end
 
@@ -343,7 +364,8 @@ defmodule Hermit.Vpn.PairWorker do
             outbound_module: outbound_mod,
             inbound_config: inbound_config,
             outbound_config: outbound_config,
-            inbound_type: inbound_type
+            inbound_type: inbound_type,
+            dns_config: pair && pair.dns_config
           }
 
         pid ->
@@ -415,7 +437,8 @@ defmodule Hermit.Vpn.PairWorker do
                 outbound_module: outbound_mod,
                 inbound_config: inbound_config,
                 outbound_config: outbound_config,
-                inbound_type: inbound_type
+                inbound_type: inbound_type,
+                dns_config: pair && pair.dns_config
               }
           end
       end
@@ -464,8 +487,7 @@ defmodule Hermit.Vpn.PairWorker do
     wg_config_path = Path.join(storage_dir, "wg0.conf")
 
     {wg_status, ts_status, overall_status, started_at, inbound_type, inbound_config,
-     outbound_type,
-     outbound_config} =
+     outbound_type, outbound_config, dns_config} =
       try do
         case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
           nil ->
@@ -473,7 +495,14 @@ defmodule Hermit.Vpn.PairWorker do
              args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
              args[:outbound_type] || "wireguard",
              args[:outbound_config] ||
-               %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
+               %{"wg_config" => args[:wg_config] || args[:wg_config_content]},
+             %{
+               "enabled" => false,
+               "block_ads" => false,
+               "block_adult" => false,
+               "upstream_dns" => "1.1.1.1, 8.8.8.8",
+               "custom_rules" => []
+             }}
 
           pair ->
             pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
@@ -492,6 +521,14 @@ defmodule Hermit.Vpn.PairWorker do
                 {pair.outbound_type || "wireguard", pair.outbound_config || %{}}
               end
 
+            dns_c = pair.dns_config || %{
+              "enabled" => false,
+              "block_ads" => false,
+              "block_adult" => false,
+              "upstream_dns" => "1.1.1.1, 8.8.8.8",
+              "custom_rules" => []
+            }
+
             {
               String.to_atom(pair.wg_status || "stopped"),
               String.to_atom(pair.ts_status || "stopped"),
@@ -500,7 +537,8 @@ defmodule Hermit.Vpn.PairWorker do
               inbound_type,
               inbound_config,
               outbound_type,
-              outbound_config
+              outbound_config,
+              dns_c
             }
         end
       rescue
@@ -511,7 +549,14 @@ defmodule Hermit.Vpn.PairWorker do
            args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
            args[:outbound_type] || "wireguard",
            args[:outbound_config] ||
-             %{"wg_config" => args[:wg_config] || args[:wg_config_content]}}
+             %{"wg_config" => args[:wg_config] || args[:wg_config_content]},
+           %{
+             "enabled" => false,
+             "block_ads" => false,
+             "block_adult" => false,
+             "upstream_dns" => "1.1.1.1, 8.8.8.8",
+             "custom_rules" => []
+           }}
       end
 
     inbound_module =
@@ -570,7 +615,10 @@ defmodule Hermit.Vpn.PairWorker do
       outbound_module: outbound_module,
       inbound_config: inbound_config,
       outbound_config: outbound_config,
-      inbound_type: inbound_type
+      inbound_type: inbound_type,
+      dns_config: dns_config,
+      dns_socket: nil,
+      dns_port_proc: nil
     }
 
     cond do
@@ -631,7 +679,10 @@ defmodule Hermit.Vpn.PairWorker do
           {:noreply, updated_state}
 
         :ok ->
-          case state.outbound_module.bootstrap(state.id, state.storage_dir, state.outbound_config) do
+          dns_enabled = is_map(state.dns_config) and state.dns_config["enabled"] == true
+          outbound_config_with_dns = Map.put(state.outbound_config || %{}, :dns_enabled, dns_enabled)
+
+          case state.outbound_module.bootstrap(state.id, state.storage_dir, outbound_config_with_dns) do
             {:ok, iface} ->
               updated_state = %{
                 state
@@ -640,6 +691,8 @@ defmodule Hermit.Vpn.PairWorker do
                   wg_retry_count: 0,
                   outbound_if: iface
               }
+
+              updated_state = apply_dns_settings(updated_state)
 
               updated_state = broadcast_update(updated_state)
               updated_state = schedule_metrics_poll(updated_state)
@@ -690,19 +743,19 @@ defmodule Hermit.Vpn.PairWorker do
     {:reply, state, state}
   end
 
-  # Legacy callbacks (map to split state logic)
   @impl true
   def handle_call(:pause, _from, state) do
     Logger.info("Pausing VPN pair (both components): #{state.id}")
 
-    # Stop Inbound (Tailscale)
     if state.ts_port do
       stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
 
-    # Stop Outbound (WireGuard)
+    state = stop_dns_daemon_if_running(state)
+    state = close_dns_socket_if_open(state)
+
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state =
@@ -744,14 +797,15 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call(:restart, _from, state) do
     Logger.info("Restarting VPN pair (both components): #{state.id}")
 
-    # Stop Inbound (Tailscale)
     if state.ts_port do
       stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
 
-    # Stop Outbound (WireGuard)
+    state = stop_dns_daemon_if_running(state)
+    state = close_dns_socket_if_open(state)
+
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state =
@@ -773,7 +827,14 @@ defmodule Hermit.Vpn.PairWorker do
     {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap}}
   end
 
-  # Independent control callbacks
+  @impl true
+  def handle_call({:update_dns_config, new_dns_config}, _from, state) do
+    state = %{state | dns_config: new_dns_config}
+    state = apply_dns_settings(state)
+    updated_state = broadcast_update(state)
+    {:reply, {:ok, updated_state}, updated_state}
+  end
+
   @impl true
   def handle_call({:start_wg}, _from, state) do
     updated_state = %{state | wg_status: :starting, wg_error_reason: nil}
@@ -785,12 +846,15 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:stop_wg}, _from, state) do
     Logger.info("Stopping WireGuard for pair: #{state.id}")
 
-    # Stop Inbound (Tailscale/Proxy) if running, because it runs inside the WG network namespace.
     if state.ts_port do
       stop_inbound_process(state.ts_port)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
+
+    state = stop_dns_daemon_if_running(state)
+    state = close_dns_socket_if_open(state)
+
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state =
@@ -814,10 +878,30 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:restart_wg}, _from, state) do
     Logger.info("Restarting WireGuard for pair: #{state.id}")
 
+    if state.ts_port do
+      stop_inbound_process(state.ts_port)
+    end
+
+    state.inbound_module.cleanup(state.id, state.storage_dir)
+
+    state = stop_dns_daemon_if_running(state)
+    state = close_dns_socket_if_open(state)
+
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
     updated_state =
-      %{state | wg_status: :starting, wg_error_reason: nil}
+      %{
+        state
+        | wg_status: :starting,
+          ts_status: :starting,
+          wg_error_reason: nil,
+          ts_error_reason: nil,
+          ts_port: nil,
+          started_at: nil,
+          wg_retry_count: 0,
+          ts_retry_count: 0,
+          metrics: @default_metrics
+      }
       |> cancel_metrics_poll()
 
     updated_state = broadcast_update(updated_state)
@@ -1027,7 +1111,6 @@ defmodule Hermit.Vpn.PairWorker do
           case state.outbound_module.get_metrics(state.id, state.storage_dir) do
             {:ok, %{bytes_received: bytes_received}}
             when bytes_received > 0 or state.outbound_module == Hermit.Vpn.Outbound.Local ->
-              # Start Tailscale inside the network namespace
               case state.inbound_module.bootstrap(
                      state.id,
                      state.outbound_if || "wg0",
@@ -1035,7 +1118,6 @@ defmodule Hermit.Vpn.PairWorker do
                      state.inbound_config
                    ) do
                 {:ok, port} ->
-                  # Approve exit node in background Task so it doesn't block startup
                   Task.start(fn ->
                     state.inbound_module.approve_exit_node(state.id)
                   end)
@@ -1110,15 +1192,12 @@ defmodule Hermit.Vpn.PairWorker do
           {:noreply, updated_state}
 
         _error ->
-          # Get metrics failed. Check if outbound is actually down
           case state.outbound_module.get_status(state.id, state.storage_dir) do
             :running ->
-              # Outbound is still running, maybe a temporary failure
               updated_state = schedule_metrics_poll(state)
               {:noreply, updated_state}
 
             _ ->
-              # WG namespace is not running/exists!
               if state.status != :stopped do
                 Logger.error(
                   "WireGuard namespace is down for pair #{state.id}. Triggering recovery..."
@@ -1129,6 +1208,9 @@ defmodule Hermit.Vpn.PairWorker do
                 end
 
                 state.inbound_module.cleanup(state.id, state.storage_dir)
+
+                state = stop_dns_daemon_if_running(state)
+                state = close_dns_socket_if_open(state)
 
                 error_state =
                   %{
@@ -1156,22 +1238,28 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:EXIT, port, reason}, state) when is_port(port) do
-    if port == state.ts_port do
-      Logger.error("Tailscale port for pair #{state.id} exited: #{inspect(reason)}")
+    cond do
+      port == state.ts_port ->
+        Logger.error("Tailscale port for pair #{state.id} exited: #{inspect(reason)}")
 
-      error_state = %{
-        state
-        | ts_status: :error,
-          ts_error_reason: "Tailscale daemon exited unexpectedly: #{inspect(reason)}",
-          ts_port: nil,
-          started_at: nil
-      }
+        error_state = %{
+          state
+          | ts_status: :error,
+            ts_error_reason: "Tailscale daemon exited unexpectedly: #{inspect(reason)}",
+            ts_port: nil,
+            started_at: nil
+        }
 
-      updated_state = broadcast_update(error_state)
-      maybe_schedule_ts_recovery(updated_state)
-      {:noreply, updated_state}
-    else
-      {:noreply, state}
+        updated_state = broadcast_update(error_state)
+        maybe_schedule_ts_recovery(updated_state)
+        {:noreply, updated_state}
+
+      port == state.dns_port_proc ->
+        Logger.error("DNS proxy port for pair #{state.id} exited: #{inspect(reason)}")
+        {:noreply, %{state | dns_port_proc: nil}}
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -1183,8 +1271,11 @@ defmodule Hermit.Vpn.PairWorker do
           "Recovering WireGuard for pair: #{state.id} (attempt #{state.wg_retry_count + 1})"
         )
 
-        # Cleanup both inbound and outbound first
         state.inbound_module.cleanup(state.id, state.storage_dir)
+
+        state = stop_dns_daemon_if_running(state)
+        state = close_dns_socket_if_open(state)
+
         state.outbound_module.cleanup(state.id, state.storage_dir)
 
         updated_state =
@@ -1260,27 +1351,55 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:EXIT, pid, reason}, state) do
-    if pid == state.ts_port do
-      Logger.error("Inbound proxy PID for pair #{state.id} exited: #{inspect(reason)}")
+    cond do
+      pid == state.ts_port ->
+        Logger.error("Inbound proxy PID for pair #{state.id} exited: #{inspect(reason)}")
 
-      error_state = %{
-        state
-        | ts_status: :error,
-          ts_error_reason: "Inbound proxy exited unexpectedly: #{inspect(reason)}",
-          ts_port: nil,
-          started_at: nil
-      }
+        error_state = %{
+          state
+          | ts_status: :error,
+            ts_error_reason: "Inbound proxy exited unexpectedly: #{inspect(reason)}",
+            ts_port: nil,
+            started_at: nil
+        }
 
-      updated_state = broadcast_update(error_state)
-      maybe_schedule_ts_recovery(updated_state)
-      {:noreply, updated_state}
-    else
-      Logger.info(
-        "Received EXIT signal from #{inspect(pid)}, shutting down PairWorker #{state.id}. Reason: #{inspect(reason)}"
-      )
+        updated_state = broadcast_update(error_state)
+        maybe_schedule_ts_recovery(updated_state)
+        {:noreply, updated_state}
 
-      {:stop, reason, state}
+      pid == state.dns_port_proc ->
+        Logger.warning("DNS mock log generator task exited: #{inspect(reason)}")
+        {:noreply, %{state | dns_port_proc: nil}}
+
+      true ->
+        Logger.info(
+          "Received EXIT signal from #{inspect(pid)}, shutting down PairWorker #{state.id}. Reason: #{inspect(reason)}"
+        )
+
+        {:stop, reason, state}
     end
+  end
+
+  @impl true
+  def handle_info({:udp, socket, _ip, _port, packet}, %{dns_socket: socket} = state) do
+    case Jason.decode(packet) do
+      {:ok, log} ->
+        counter = System.unique_integer([:monotonic])
+        :ets.insert(:dns_query_logs, {{state.id, counter}, log})
+        Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{state.id}", {:dns_log, log})
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:mock_dns_log, log}, state) do
+    counter = System.unique_integer([:monotonic])
+    :ets.insert(:dns_query_logs, {{state.id, counter}, log})
+    Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{state.id}", {:dns_log, log})
+    {:noreply, state}
   end
 
   @impl true
@@ -1294,6 +1413,9 @@ defmodule Hermit.Vpn.PairWorker do
     if state.ts_port do
       stop_inbound_process(state.ts_port)
     end
+
+    state = stop_dns_daemon_if_running(state)
+    state = close_dns_socket_if_open(state)
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
     state.outbound_module.cleanup(state.id, state.storage_dir)
@@ -1358,10 +1480,6 @@ defmodule Hermit.Vpn.PairWorker do
 
   defp trigger_handshake(wg_name) do
     if not mock?() do
-      # Run a quick, non-blocking / short-timeout curl inside the namespace to trigger handshake.
-      # We ignore the exit code/result because we only care about the packet being sent.
-      # Using 1.1.1.1 is standard, fast, and does not require DNS.
-      # We run this asynchronously using Task.start/1 to prevent blocking the worker.
       Task.start(fn ->
         System.cmd("ip", [
           "netns",
@@ -1444,7 +1562,6 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp broadcast_update(state) do
-    # Calculate legacy overall status and error_reason
     {overall_status, error_reason} =
       cond do
         state.wg_status == :error ->
@@ -1533,7 +1650,6 @@ defmodule Hermit.Vpn.PairWorker do
     now = System.system_time(:second)
     last_poll = Map.get(state.metrics || %{}, :inbound_fetched_at, 0)
 
-    # Poll if we haven't polled in the last 300 seconds (5 minutes), or if cache is missing/not running
     now - last_poll >= 300 or not has_inbound_info?(state.metrics || %{}, state.inbound_module)
   end
 
@@ -1546,4 +1662,182 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp has_inbound_info?(_metrics, _module), do: false
+
+  # --- DNS Filtering Management ---
+
+  defp apply_dns_settings(state) do
+    write_dns_rules(state)
+    dns_enabled = is_map(state.dns_config) and state.dns_config["enabled"] == true
+
+    if dns_enabled do
+      state = ensure_dns_socket_open(state)
+      write_netns_resolv_conf(state, ["127.0.0.1"])
+      ensure_dns_daemon_running(state)
+    else
+      state = stop_dns_daemon_if_running(state)
+      state = close_dns_socket_if_open(state)
+      restore_original_resolv_conf(state)
+      state
+    end
+  end
+
+  defp write_dns_rules(state) do
+    path = Path.join(state.storage_dir, "dns_rules.json")
+    File.mkdir_p!(state.storage_dir)
+    File.write!(path, Jason.encode!(state.dns_config || %{}))
+  end
+
+  defp ensure_dns_socket_open(%{dns_socket: nil} = state) do
+    socket_path = Path.join(state.storage_dir, "dns_log.sock")
+    File.rm(socket_path)
+    File.mkdir_p!(state.storage_dir)
+    case :gen_udp.open(0, [:binary, active: true, ifaddr: {:local, socket_path}]) do
+      {:ok, socket} ->
+        %{state | dns_socket: socket}
+      {:error, reason} ->
+        Logger.error("Failed to open Unix DNS log socket for pair #{state.id}: #{inspect(reason)}")
+        state
+    end
+  end
+  defp ensure_dns_socket_open(state), do: state
+
+  defp close_dns_socket_if_open(%{dns_socket: socket} = state) when not is_nil(socket) do
+    :gen_udp.close(socket)
+    File.rm(Path.join(state.storage_dir, "dns_log.sock"))
+    %{state | dns_socket: nil}
+  end
+  defp close_dns_socket_if_open(state), do: state
+
+  defp write_netns_resolv_conf(state, dns_servers) do
+    if not mock?() do
+      netns_dns_dir = "/etc/netns/hermit_wg_#{state.id}"
+      File.mkdir_p!(netns_dns_dir)
+      dns_lines = dns_servers |> Enum.map(&"nameserver #{&1}") |> Enum.join("\n")
+      File.write!(Path.join(netns_dns_dir, "resolv.conf"), dns_lines)
+    end
+    :ok
+  end
+
+  defp ensure_dns_daemon_running(%{dns_port_proc: nil} = state) do
+    case start_dns_daemon(state) do
+      {:ok, proc} ->
+        %{state | dns_port_proc: proc}
+      _ ->
+        state
+    end
+  end
+  defp ensure_dns_daemon_running(state), do: state
+
+  defp stop_dns_daemon_if_running(%{dns_port_proc: proc} = state) when not is_nil(proc) do
+    stop_dns_process(proc)
+    %{state | dns_port_proc: nil}
+  end
+  defp stop_dns_daemon_if_running(state), do: state
+
+  defp start_dns_daemon(state) do
+    if mock?() do
+      mock_log_task = start_mock_log_generator(state.id)
+      {:ok, mock_log_task}
+    else
+      upstream = Map.get(state.dns_config || %{}, "upstream_dns") || "1.1.1.1, 8.8.8.8"
+      rules_path = Path.join(state.storage_dir, "dns_rules.json")
+      socket_path = Path.join(state.storage_dir, "dns_log.sock")
+      
+      args = [
+        "netns", "exec", "hermit_wg_#{state.id}",
+        "python3", "/app/priv/scripts/dns_server.py",
+        "--id", state.id,
+        "--upstream", upstream,
+        "--rules", rules_path,
+        "--log-socket", socket_path,
+        "--port", "53"
+      ]
+      
+      try do
+        port = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: args])
+        Logger.info("DNS Proxy Daemon started inside netns for pair #{state.id}")
+        {:ok, port}
+      rescue
+        e ->
+          Logger.error("Failed to start DNS Proxy Daemon for pair #{state.id}: #{inspect(e)}")
+          {:error, e}
+      end
+    end
+  end
+
+  defp start_mock_log_generator(pair_id) do
+    worker_pid = self()
+    {:ok, task} = Task.start_link(fn ->
+      mock_domains = [
+        {"google.com", "A", "resolved", "142.250.190.46"},
+        {"doubleclick.net", "A", "blocked", "NXDOMAIN"},
+        {"netflix.com", "A", "redirected", "1.2.3.4"},
+        {"facebook.com", "A", "resolved", "157.240.22.35"},
+        {"pornhub.com", "AAAA", "blocked", "NXDOMAIN"},
+        {"api.github.com", "A", "resolved", "140.82.121.5"}
+      ]
+      
+      generator_loop(pair_id, worker_pid, mock_domains)
+    end)
+    task
+  end
+
+  defp generator_loop(pair_id, worker_pid, mock_domains) do
+    Process.sleep(Enum.random(4000..8000))
+    {domain, type, status, answer} = Enum.random(mock_domains)
+    log = %{
+      "pair_id" => pair_id,
+      "domain" => domain,
+      "type" => type,
+      "status" => status,
+      "answer" => answer,
+      "duration" => Enum.random(5..120),
+      "timestamp" => System.system_time(:second)
+    }
+    
+    send(worker_pid, {:mock_dns_log, log})
+    generator_loop(pair_id, worker_pid, mock_domains)
+  end
+
+  defp get_original_dns(state) do
+    case state.outbound_config do
+      %{"dns_servers" => list} when is_list(list) ->
+        list
+      _ ->
+        case Regex.run(~r/^\s*DNS\s*=\s*([^\s#\n\r]+)/m, state.wg_config_content || "") do
+          [_, dns] ->
+            dns
+            |> String.split(",")
+            |> Enum.map(&String.trim/1)
+            |> Enum.reject(&(&1 == ""))
+          _ ->
+            ["1.1.1.1"]
+        end
+    end
+  end
+
+  defp restore_original_resolv_conf(state) do
+    write_netns_resolv_conf(state, get_original_dns(state))
+  end
+
+  defp stop_dns_process(nil), do: :ok
+  defp stop_dns_process(port_or_pid) do
+    Process.unlink(port_or_pid)
+
+    if is_port(port_or_pid) do
+      try do
+        Port.close(port_or_pid)
+      rescue
+        _ -> :ok
+      end
+    else
+      try do
+        Process.exit(port_or_pid, :kill)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    :ok
+  end
 end

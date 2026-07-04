@@ -50,20 +50,27 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
             Map.get(config, "use_tailscale_dns") == "true" or
             Map.get(config, :use_tailscale_dns) == true
 
-        dns_servers =
-          if use_tailscale_dns do
-            ["100.100.100.100"]
-          else
-            case Regex.run(~r/^\s*DNS\s*=\s*([^\s#\n\r]+)/m, config_content) do
-              [_, dns] ->
-                dns
-                |> String.split(",")
-                |> Enum.map(&String.trim/1)
-                |> Enum.reject(&(&1 == ""))
+        dns_enabled = Map.get(config, :dns_enabled) == true
 
-              _ ->
-                []
-            end
+        dns_servers =
+          cond do
+            dns_enabled ->
+              ["127.0.0.1"]
+
+            use_tailscale_dns ->
+              ["100.100.100.100"]
+
+            true ->
+              case Regex.run(~r/^\s*DNS\s*=\s*([^\s#\n\r]+)/m, config_content) do
+                [_, dns] ->
+                  dns
+                  |> String.split(",")
+                  |> Enum.map(&String.trim/1)
+                  |> Enum.reject(&(&1 == ""))
+
+                _ ->
+                  []
+              end
           end
 
         mtu =

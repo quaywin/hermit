@@ -130,10 +130,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
               should_update_dns =
                 cond do
-                  dns_mode == "custom" and dns_resolvers && String.trim(dns_resolvers) != "" -> true
-                  dns_mode == "default" -> true
-                  is_binary(dns_resolvers) and String.trim(dns_resolvers) != "" -> true
-                  true -> false
+                  (dns_mode == "custom" and dns_resolvers) && String.trim(dns_resolvers) != "" ->
+                    true
+
+                  dns_mode == "default" ->
+                    true
+
+                  is_binary(dns_resolvers) and String.trim(dns_resolvers) != "" ->
+                    true
+
+                  true ->
+                    false
                 end
 
               if should_update_dns do
@@ -243,10 +250,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
             should_update_dns =
               cond do
-                dns_mode == "custom" and dns_resolvers && String.trim(dns_resolvers) != "" -> true
-                dns_mode == "default" -> true
-                is_binary(dns_resolvers) and String.trim(dns_resolvers) != "" -> true
-                true -> false
+                (dns_mode == "custom" and dns_resolvers) && String.trim(dns_resolvers) != "" ->
+                  true
+
+                dns_mode == "default" ->
+                  true
+
+                is_binary(dns_resolvers) and String.trim(dns_resolvers) != "" ->
+                  true
+
+                true ->
+                  false
               end
 
             if should_update_dns do
@@ -461,7 +475,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             _ -> true
           end
 
-
         advertise_routes = Map.get(config, "advertise_routes") || ""
 
         # Only call do_approve_exit_node if the node is actually advertising routes!
@@ -580,6 +593,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         Logger.info(
           "Mock: Updating local DNS settings for #{pair_id} to #{dns_mode} (resolvers: #{dns_resolvers_str})"
         )
+
         {:ok, :updated}
 
       true ->
@@ -600,7 +614,11 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           if dns_servers != [] do
             dns_lines = dns_servers |> Enum.map(&"nameserver #{&1}") |> Enum.join("\n")
             File.write!(Path.join(netns_dns_dir, "resolv.conf"), dns_lines)
-            Logger.info("Successfully updated local DNS config for hermit_wg_#{pair_id} to: #{inspect(dns_servers)}")
+
+            Logger.info(
+              "Successfully updated local DNS config for hermit_wg_#{pair_id} to: #{inspect(dns_servers)}"
+            )
+
             {:ok, :updated}
           else
             File.rm(Path.join(netns_dns_dir, "resolv.conf"))
@@ -1011,7 +1029,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     end
   end
 
-    defp clean_routes(nil), do: ""
+  defp clean_routes(nil), do: ""
+
   defp clean_routes(routes) when is_binary(routes) do
     routes
     |> String.split(",")

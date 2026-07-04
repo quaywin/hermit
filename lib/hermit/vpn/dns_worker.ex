@@ -3,42 +3,64 @@ defmodule Hermit.Vpn.DnsWorker do
   require Logger
 
   # State:
+  # - :profile_id (integer)
   # - :status (:stopped | :starting | :running | :error)
   # - :error_reason (nil | string)
   # - :ts_ip (nil | string)
   # - :ts_port (nil | port/pid)
   # - :mock_timer (nil | timer)
-  defstruct [
-    status: :stopped,
-    error_reason: nil,
-    ts_ip: nil,
-    ts_port: nil,
-    mock_timer: nil
-  ]
-
-  @name __MODULE__
+  defstruct profile_id: nil,
+            status: :stopped,
+            error_reason: nil,
+            ts_ip: nil,
+            ts_port: nil,
+            mock_timer: nil,
+            tailscale_override_dns: false
 
   # --- Client API ---
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: @name)
+    profile_id = opts[:profile_id]
+    name = {:via, Registry, {Hermit.Vpn.Registry, {:dns_worker, profile_id}}}
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  def sync_state do
-    GenServer.call(@name, :sync_state)
+  def sync_state(profile_id) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, profile_id}) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, :sync_state)
+        catch
+          :exit, _ -> {:error, :not_found}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
   end
 
-  def get_status do
-    GenServer.call(@name, :get_status)
+  def get_status(profile_id) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, profile_id}) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, :get_status)
+        catch
+          :exit, _ -> {:stopped, nil, nil}
+        end
+
+      [] ->
+        {:stopped, nil, nil}
+    end
   end
 
   # --- GenServer Callbacks ---
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
+    profile_id = opts[:profile_id]
     # Perform initial sync on startup
     send(self(), :initial_sync)
-    {:ok, %__MODULE__{}}
+    {:ok, %__MODULE__{profile_id: profile_id}}
   end
 
   @impl true
@@ -60,13 +82,12 @@ defmodule Hermit.Vpn.DnsWorker do
 
   @impl true
   def handle_info(:generate_mock_log, state) do
-    # Generate mock DNS query log to port 5453 in mock mode
     if mock?() and state.status == :running do
       spawn(fn ->
-        send_mock_query()
+        send_mock_query(state.profile_id)
       end)
     end
-    # Reschedule
+
     timer = Process.send_after(self(), :generate_mock_log, 3000)
     {:noreply, %{state | mock_timer: timer}}
   end
@@ -75,7 +96,9 @@ defmodule Hermit.Vpn.DnsWorker do
   def handle_info({:EXIT, port, reason}, state) do
     if port == state.ts_port do
       Logger.error("DNS Tailscale daemon process exited: #{inspect(reason)}")
-      {:noreply, %{state | status: :error, error_reason: "Daemon exited: #{inspect(reason)}", ts_port: nil}}
+
+      {:noreply,
+       %{state | status: :error, error_reason: "Daemon exited: #{inspect(reason)}", ts_port: nil}}
     else
       {:noreply, state}
     end
@@ -89,55 +112,86 @@ defmodule Hermit.Vpn.DnsWorker do
   # --- Internal Lifecycle Management ---
 
   defp do_sync_state(state) do
-    config = Hermit.Vpn.DnsConfig.get_global()
+    config =
+      Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
+      |> Hermit.Repo.preload(:inbound_profile)
 
     cond do
       config.enabled and state.status in [:stopped, :error] ->
-        Logger.info("DNS Server is enabled globally. Bootstrapping Dedicated DNS Node...")
-        case start_dns_node(state) do
+        Logger.info(
+          "DNS Server is enabled for profile #{state.profile_id}. Bootstrapping Dedicated DNS Node..."
+        )
+
+        case start_dns_node(state, config) do
           {:ok, new_state} ->
-            # Call Tailscale API to set Nameserver if configured
             if config.tailscale_override_dns do
-              Task.start(fn -> update_tailscale_dns_config(new_state.ts_ip) end)
+              Task.start(fn -> update_tailscale_dns_config(new_state.ts_ip, config) end)
             end
-            {{:ok, :started}, new_state}
+
+            {{:ok, :started},
+             %{new_state | tailscale_override_dns: config.tailscale_override_dns}}
 
           {:error, reason} ->
-            {{:error, reason}, %{state | status: :error, error_reason: to_string(reason)}}
+            {{:error, reason}, %{state | status: :error, error_reason: inspect(reason)}}
         end
 
       not config.enabled and state.status in [:running, :starting, :error] ->
-        Logger.info("DNS Server is disabled globally. Stopping Dedicated DNS Node...")
+        Logger.info(
+          "DNS Server is disabled for profile #{state.profile_id}. Stopping Dedicated DNS Node..."
+        )
+
         new_state = stop_dns_node(state)
-        # Clear Tailscale nameservers if configured
-        if config.tailscale_override_dns do
-          Task.start(fn -> clear_tailscale_dns_config() end)
+
+        if config.tailscale_override_dns or state.tailscale_override_dns == true do
+          Task.start(fn -> clear_tailscale_dns_config(config) end)
         end
-        {{:ok, :stopped}, new_state}
+
+        {{:ok, :stopped}, %{new_state | tailscale_override_dns: false}}
+
+      config.enabled and state.status == :running ->
+        if state.tailscale_override_dns != config.tailscale_override_dns do
+          if config.tailscale_override_dns do
+            Task.start(fn -> update_tailscale_dns_config(state.ts_ip, config) end)
+          else
+            Task.start(fn -> clear_tailscale_dns_config(config) end)
+          end
+
+          {{:ok, :updated_dns_integration},
+           %{state | tailscale_override_dns: config.tailscale_override_dns}}
+        else
+          {{:ok, :already_synced}, state}
+        end
 
       true ->
-        # Already in desired state
         {{:ok, :already_synced}, state}
     end
   end
 
-  defp start_dns_node(state) do
+  defp get_dns_credentials(dns_config) do
+    profile_config = (dns_config.inbound_profile && dns_config.inbound_profile.config) || %{}
+
+    auth_key = Map.get(profile_config, "ts_auth_key") || ""
+    api_key = Map.get(profile_config, "ts_api_key") || ""
+    tailnet = Map.get(profile_config, "ts_tailnet") || ""
+    login_server = Map.get(profile_config, "login_server") || ""
+
+    {auth_key, api_key, tailnet, login_server}
+  end
+
+  defp start_dns_node(state, dns_config) do
     if mock?() do
-      # Start mock DNS worker
       timer = Process.send_after(self(), :generate_mock_log, 1000)
       {:ok, %{state | status: :running, ts_ip: "100.64.0.100", mock_timer: timer}}
     else
-      storage_dir = Path.join(get_storage_base_path(), "dns")
+      storage_dir = Path.join(get_storage_base_path(), "dns_#{state.profile_id}")
       File.mkdir_p!(storage_dir)
 
-      # Read credentials
-      auth_key = Hermit.Vpn.Setting.get_value("tailscale_auth_key", "")
-      login_server = Hermit.Vpn.Setting.get_value("tailscale_login_server", "")
+      {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(dns_config)
 
       if auth_key == "" do
-        {:error, "Tailscale auth key not configured in settings"}
+        {:error, "Tailscale auth key not configured"}
       else
-        case bootstrap_namespace(storage_dir, auth_key, login_server) do
+        case bootstrap_namespace(state.profile_id, storage_dir, auth_key, login_server) do
           {:ok, port, ip} ->
             {:ok, %{state | status: :running, ts_ip: ip, ts_port: port, error_reason: nil}}
 
@@ -154,7 +208,7 @@ defmodule Hermit.Vpn.DnsWorker do
     if mock?() do
       %{state | status: :stopped, ts_ip: nil, mock_timer: nil}
     else
-      cleanup_namespace()
+      cleanup_namespace(state.profile_id)
       if state.ts_port, do: stop_port_process(state.ts_port)
       %{state | status: :stopped, ts_ip: nil, ts_port: nil, error_reason: nil}
     end
@@ -162,35 +216,171 @@ defmodule Hermit.Vpn.DnsWorker do
 
   # --- Namespace Setup & Linux Commands ---
 
-  defp bootstrap_namespace(storage_dir, auth_key, login_server) do
-    # Namespace: hermit_dns
-    # IPs: host=10.200.254.1/30, namespace=10.200.254.2/30
-    ns = "hermit_dns"
-    host_if = "dns_host"
-    ns_if = "dns_ns"
+  defp bootstrap_namespace(profile_id, storage_dir, auth_key, login_server) do
+    ns = "hermit_dns_#{profile_id}"
+    host_if = "dns_h_#{profile_id}"
+    ns_if = "dns_n_#{profile_id}"
+    table_id = 1000 + profile_id
+    host_ip = "10.200.#{profile_id}.1"
+    ns_ip = "10.200.#{profile_id}.2"
+    subnet = "10.200.#{profile_id}.0/30"
+    port = 5400 + profile_id
 
-    cleanup_namespace()
+    cleanup_namespace(profile_id)
+
+    # Setup isolated resolv.conf for the namespace to prevent tailscaled from overwriting host resolv.conf
+    netns_dns_dir = "/etc/netns/#{ns}"
+    File.mkdir_p!(netns_dns_dir)
+
+    if File.exists?("/etc/resolv.conf") do
+      case File.read("/etc/resolv.conf") do
+        {:ok, resolv_content} ->
+          clean_content =
+            resolv_content
+            |> String.split("\n")
+            |> Enum.reject(&String.contains?(&1, "100.100.100.100"))
+            |> Enum.join("\n")
+
+          clean_content =
+            if String.contains?(clean_content, "nameserver") do
+              clean_content
+            else
+              clean_content <> "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+            end
+
+          File.write!(Path.join(netns_dns_dir, "resolv.conf"), clean_content)
+
+        _ ->
+          File.write!(
+            Path.join(netns_dns_dir, "resolv.conf"),
+            "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+          )
+      end
+    else
+      File.write!(
+        Path.join(netns_dns_dir, "resolv.conf"),
+        "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+      )
+    end
 
     result =
       with {:ok, _} <- run_cmd("ip", ["netns", "add", ns]),
-           {:ok, _} <- run_cmd("ip", ["link", "add", host_if, "type", "veth", "peer", "name", ns_if]),
+           {:ok, _} <-
+             run_cmd("ip", ["link", "add", host_if, "type", "veth", "peer", "name", ns_if]),
            {:ok, _} <- run_cmd("ip", ["link", "set", ns_if, "netns", ns]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", ns_if, "name", "eth0"]),
-           {:ok, _} <- run_cmd("ip", ["addr", "add", "10.200.254.1/30", "dev", host_if]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "addr", "add", "10.200.254.2/30", "dev", "eth0"]),
+           {:ok, _} <-
+             run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", ns_if, "name", "eth0"]),
+           {:ok, _} <- run_cmd("ip", ["addr", "add", "#{host_ip}/30", "dev", host_if]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "ip",
+               "addr",
+               "add",
+               "#{ns_ip}/30",
+               "dev",
+               "eth0"
+             ]),
            {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
            {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
            {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "route", "add", "default", "via", "10.200.254.1", "dev", "eth0"]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "ip",
+               "route",
+               "add",
+               "default",
+               "via",
+               host_ip,
+               "dev",
+               "eth0"
+             ]),
            # NAT routing on Host
-           {:ok, _} <- run_cmd("iptables", ["-t", "nat", "-A", "POSTROUTING", "-s", "10.200.254.0/30", "-j", "MASQUERADE"]),
-           {:ok, _} <- run_cmd("iptables", ["-A", "FORWARD", "-s", "10.200.254.0/30", "-j", "ACCEPT"]),
-           {:ok, _} <- run_cmd("iptables", ["-A", "FORWARD", "-d", "10.200.254.0/30", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"]),
+           {:ok, _} <-
+             run_cmd("iptables", [
+               "-t",
+               "nat",
+               "-A",
+               "POSTROUTING",
+               "-s",
+               subnet,
+               "-j",
+               "MASQUERADE"
+             ]),
+           {:ok, _} <- run_cmd("iptables", ["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
+           {:ok, _} <-
+             run_cmd("iptables", [
+               "-A",
+               "FORWARD",
+               "-d",
+               subnet,
+               "-m",
+               "state",
+               "--state",
+               "ESTABLISHED,RELATED",
+               "-j",
+               "ACCEPT"
+             ]),
            # DNAT port redirection inside namespace
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "10.200.254.1:5453"]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "10.200.254.1:5453"]),
-           # Route Tailscale traffic from host to namespace
-           {:ok, _} <- run_cmd("ip", ["route", "add", "100.64.0.0/10", "via", "10.200.254.2"]) do
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "iptables",
+               "-t",
+               "nat",
+               "-A",
+               "PREROUTING",
+               "-p",
+               "udp",
+               "--dport",
+               "53",
+               "-j",
+               "DNAT",
+               "--to-destination",
+               "#{host_ip}:#{port}"
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "iptables",
+               "-t",
+               "nat",
+               "-A",
+               "PREROUTING",
+               "-p",
+               "tcp",
+               "--dport",
+               "53",
+               "-j",
+               "DNAT",
+               "--to-destination",
+               "#{host_ip}:#{port}"
+             ]),
+
+           # Source policy routing on host (replacing global route)
+           {:ok, _} <-
+             run_cmd("ip", ["rule", "add", "from", host_ip, "table", to_string(table_id)]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "route",
+               "add",
+               "default",
+               "via",
+               ns_ip,
+               "dev",
+               host_if,
+               "table",
+               to_string(table_id)
+             ]) do
         :ok
       else
         {:error, reason} -> {:error, reason}
@@ -198,43 +388,44 @@ defmodule Hermit.Vpn.DnsWorker do
 
     case result do
       :ok ->
-        socket_path = "/run/tailscaled.dns.socket"
+        socket_path = "/run/tailscaled.dns_#{profile_id}.socket"
         File.rm(socket_path)
 
         state_path = Path.join(storage_dir, "tailscaled.state")
         pid_path = Path.join(storage_dir, "tailscaled.pid")
 
-        # Start tailscaled in namespace
         port_args = [
-          "netns", "exec", ns,
+          "netns",
+          "exec",
+          ns,
           "tailscaled",
           "--socket=#{socket_path}",
           "--state=#{state_path}",
-          "--port=41642",
+          "--port=#{41640 + profile_id}",
           "--no-logs-no-support"
         ]
 
         try do
-          port = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
+          daemon_port = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
 
-          case Port.info(port, :os_pid) do
+          case Port.info(daemon_port, :os_pid) do
             {:os_pid, os_pid} -> File.write!(pid_path, "#{os_pid}")
             _ -> :ok
           end
 
-          # Wait for socket
           wait_for_socket(socket_path)
 
-          # Authenticate
           ts_up_args = [
-            "netns", "exec", ns,
+            "netns",
+            "exec",
+            ns,
             "tailscale",
             "--socket=#{socket_path}",
             "up",
             "--authkey=#{auth_key}",
             "--accept-dns=true",
             "--accept-routes=false",
-            "--hostname=hermit-dns",
+            "--hostname=hermit-dns-#{profile_id}",
             "--timeout=30s"
           ]
 
@@ -247,11 +438,59 @@ defmodule Hermit.Vpn.DnsWorker do
 
           case run_cmd("ip", ts_up_args) do
             {:ok, _} ->
-              # Fetch Tailscale IP
-              case System.cmd("ip", ["netns", "exec", ns, "tailscale", "--socket=#{socket_path}", "ip", "-4"]) do
+              # Avoid masquerading DNS query packets forwarded from tailscale0 to host
+              _ =
+                run_cmd("ip", [
+                  "netns",
+                  "exec",
+                  ns,
+                  "iptables",
+                  "-t",
+                  "nat",
+                  "-I",
+                  "POSTROUTING",
+                  "-p",
+                  "udp",
+                  "-d",
+                  host_ip,
+                  "--dport",
+                  to_string(port),
+                  "-j",
+                  "RETURN"
+                ])
+
+              _ =
+                run_cmd("ip", [
+                  "netns",
+                  "exec",
+                  ns,
+                  "iptables",
+                  "-t",
+                  "nat",
+                  "-I",
+                  "POSTROUTING",
+                  "-p",
+                  "tcp",
+                  "-d",
+                  host_ip,
+                  "--dport",
+                  to_string(port),
+                  "-j",
+                  "RETURN"
+                ])
+
+              case System.cmd("ip", [
+                     "netns",
+                     "exec",
+                     ns,
+                     "tailscale",
+                     "--socket=#{socket_path}",
+                     "ip",
+                     "-4"
+                   ]) do
                 {ip_out, 0} ->
                   ip = String.trim(ip_out)
-                  {:ok, port, ip}
+                  {:ok, daemon_port, ip}
 
                 _ ->
                   {:error, "Failed to retrieve Tailscale IP"}
@@ -266,39 +505,53 @@ defmodule Hermit.Vpn.DnsWorker do
         end
 
       {:error, reason} ->
-        cleanup_namespace()
+        cleanup_namespace(profile_id)
         {:error, reason}
     end
   end
 
-  defp cleanup_namespace do
-    ns = "hermit_dns"
-    host_if = "dns_host"
+  defp cleanup_namespace(profile_id) do
+    ns = "hermit_dns_#{profile_id}"
+    host_if = "dns_h_#{profile_id}"
+    table_id = 1000 + profile_id
+    host_ip = "10.200.#{profile_id}.1"
+    subnet = "10.200.#{profile_id}.0/30"
 
-    # Delete interface (deletes namespace side automatically)
     System.cmd("ip", ["link", "delete", host_if])
 
-    # Delete namespace
     if netns_exists?(ns) do
       System.cmd("ip", ["netns", "del", ns])
     end
 
-    # Remove host route
-    System.cmd("ip", ["route", "delete", "100.64.0.0/10", "via", "10.200.254.2"])
+    # Clean up netns DNS config directory
+    File.rm_rf("/etc/netns/#{ns}")
 
-    # Remove iptables MASQUERADE & FORWARD rules
-    System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", "10.200.254.0/30", "-j", "MASQUERADE"])
-    System.cmd("iptables", ["-D", "FORWARD", "-s", "10.200.254.0/30", "-j", "ACCEPT"])
-    System.cmd("iptables", ["-D", "FORWARD", "-d", "10.200.254.0/30", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+    System.cmd("ip", ["rule", "delete", "from", host_ip, "table", to_string(table_id)])
+    System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
+
+    System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
+    System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
+
+    System.cmd("iptables", [
+      "-D",
+      "FORWARD",
+      "-d",
+      subnet,
+      "-m",
+      "state",
+      "--state",
+      "ESTABLISHED,RELATED",
+      "-j",
+      "ACCEPT"
+    ])
 
     :ok
   end
 
   # --- Tailscale DNS Config API Update ---
 
-  defp update_tailscale_dns_config(dns_ip) do
-    api_key = Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
-    tailnet = Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+  defp update_tailscale_dns_config(dns_ip, dns_config) do
+    {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
 
     if api_key != "" and tailnet != "" and dns_ip != "" do
       Logger.info("Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
@@ -310,7 +563,9 @@ defmodule Hermit.Vpn.DnsWorker do
           Logger.info("Successfully registered Dedicated DNS Node on Tailscale.")
 
         {:ok, %{status: status, body: body}} ->
-          Logger.error("Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}")
+          Logger.error(
+            "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
+          )
 
         {:error, reason} ->
           Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
@@ -318,9 +573,8 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
-  defp clear_tailscale_dns_config do
-    api_key = Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
-    tailnet = Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+  defp clear_tailscale_dns_config(dns_config) do
+    {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
 
     if api_key != "" and tailnet != "" do
       Logger.info("Clearing Tailscale global nameservers...")
@@ -351,6 +605,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp run_cmd(cmd, args) do
     flat_args = List.flatten(args)
+
     case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
       {output, 0} -> {:ok, String.trim(output)}
       {output, code} -> {:error, {code, String.trim(output)}}
@@ -385,6 +640,7 @@ defmodule Hermit.Vpn.DnsWorker do
           System.cmd("kill", [pid])
           Process.sleep(200)
           System.cmd("kill", ["-9", pid])
+
         _ ->
           :ok
       end
@@ -393,6 +649,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp wait_for_socket(path, retries \\ 10)
   defp wait_for_socket(_path, 0), do: :ok
+
   defp wait_for_socket(path, retries) do
     if File.exists?(path) do
       :ok
@@ -403,34 +660,41 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   # Mock Log Generation Helper
-  defp send_mock_query do
+  defp send_mock_query(profile_id) do
     domains = [
-      "google.com", "github.com", "doubleclick.net", "pornhub.com",
-      "elixir-lang.org", "wikipedia.org", "netflix.com", "mixpanel.com"
+      "google.com",
+      "github.com",
+      "doubleclick.net",
+      "pornhub.com",
+      "elixir-lang.org",
+      "wikipedia.org",
+      "netflix.com",
+      "mixpanel.com"
     ]
+
     domain = Enum.random(domains)
-    # Simple DNS query packet: Transaction ID (0x1234), flags (0x0100 - recursion desired), Questions=1, Answer/Authority/Additional=0
-    # Question: domain label sequence, type=A (0x0001), class=IN (0x0001)
-    qname = domain
-            |> String.split(".")
-            |> Enum.map(fn label -> <<byte_size(label)>> <> label end)
-            |> Enum.join()
+
+    qname =
+      domain
+      |> String.split(".")
+      |> Enum.map(fn label -> <<byte_size(label)>> <> label end)
+      |> Enum.join()
+
     qname = qname <> <<0>>
 
-    packet = <<0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> qname <> <<0x00, 0x01, 0x00, 0x01>>
-    
-    # Open socket and send to localhost:5453
+    packet =
+      <<0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
+        qname <> <<0x00, 0x01, 0x00, 0x01>>
+
+    port = 5400 + profile_id
+
     case :gen_udp.open(0, [:binary, active: false]) do
       {:ok, socket} ->
-        # Send from a simulated Tailscale client IP
-
-        # Since we send UDP directly to 127.0.0.1:5453, we are acting as the client,
-        # but to test DNS Server's parsing of client IP, it will see 127.0.0.1.
-        # This is completely fine for mock logs verification!
-        :gen_udp.send(socket, {127, 0, 0, 1}, 5453, packet)
+        :gen_udp.send(socket, {127, 0, 0, 1}, port, packet)
         :gen_udp.close(socket)
 
-      _ -> :ok
+      _ ->
+        :ok
     end
   end
 end

@@ -19,6 +19,7 @@ defmodule HermitWeb.Router do
 
     live "/", DashboardLive
     live "/tunnels/:id", TunnelDetailLive
+    live "/inbounds/:id", InboundDetailLive
   end
 
   # Other scopes may use custom stacks.

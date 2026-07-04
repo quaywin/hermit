@@ -16,14 +16,6 @@ defmodule Hermit.Vpn.VpnPair do
     field(:ts_error_reason, :string)
     field(:started_at, :integer)
 
-    field(:dns_config, :map, default: %{
-      "enabled" => false,
-      "block_ads" => false,
-      "block_adult" => false,
-      "upstream_dns" => "1.1.1.1, 8.8.8.8",
-      "custom_rules" => []
-    })
-
     timestamps()
   end
 
@@ -39,15 +31,13 @@ defmodule Hermit.Vpn.VpnPair do
       :ts_status,
       :wg_error_reason,
       :ts_error_reason,
-      :started_at,
-      :dns_config
+      :started_at
     ])
     |> validate_required([:pair_id, :inbound_profile_id, :outbound_profile_id])
     |> validate_format(:pair_id, ~r/^[a-z0-9_]+$/,
       message: "must contain only lowercase letters, numbers, and underscores"
     )
     |> validate_wg_config_if_present()
-    |> validate_dns_config()
   end
 
   defp validate_wg_config_if_present(changeset) do
@@ -63,42 +53,6 @@ defmodule Hermit.Vpn.VpnPair do
       changeset
     end
   end
-
-  defp validate_dns_config(changeset) do
-    case get_field(changeset, :dns_config) do
-      nil ->
-        changeset
-
-      config when is_map(config) ->
-        custom_rules = Map.get(config, "custom_rules") || Map.get(config, :custom_rules)
-
-        cond do
-          is_nil(custom_rules) ->
-            changeset
-
-          is_list(custom_rules) ->
-            if Enum.all?(custom_rules, &valid_rule?/1) do
-              changeset
-            else
-              add_error(changeset, :dns_config, "contains invalid custom rules")
-            end
-
-          true ->
-            add_error(changeset, :dns_config, "custom_rules must be a list")
-        end
-
-      _ ->
-        add_error(changeset, :dns_config, "must be a map")
-    end
-  end
-
-  defp valid_rule?(rule) when is_map(rule) do
-    domain = Map.get(rule, "domain") || Map.get(rule, :domain)
-    action = Map.get(rule, "action") || Map.get(rule, :action)
-    action in ["block", "bypass", "redirect"] and is_binary(domain) and domain != ""
-  end
-
-  defp valid_rule?(_), do: false
 
   @doc """
   Checks if the given outbound profile is already in use by another active tunnel.

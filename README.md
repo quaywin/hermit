@@ -8,34 +8,72 @@ The application provides a real-time web dashboard to monitor bandwidth usage, m
 
 ---
 
-## Key Features & Architecture
+## Architecture & Network Flow
 
-Hermit uses a decoupled architecture where a VPN tunnel is defined by pairing an **Inbound Profile** with an **Outbound Profile**.
+Hermit uses a decoupled architecture where a VPN tunnel (VPN Pair) is created by combining an **Inbound Profile** with an **Outbound Profile**. The architecture splits system operations into two separate, coordinated planes: the **Traffic Plane** (for normal internet data) and the **DNS Control Plane** (for name resolution and dynamic filtering).
+
+### 1. Traffic Plane (General Data Flow)
+This plane manages the encapsulation and transport of regular network traffic (HTTP, TCP/UDP streams) through isolated namespaces.
 
 ```mermaid
-graph TD
-    Host[Host / External Client] -->|1. Traffic In| Inbound[Inbound Profile: SOCKS5/HTTP / Tailscale]
-    subgraph NetNS [Isolated Network Namespace netns]
-        Inbound -->|2. Inside Namespace| Outbound[Outbound Profile: WireGuard wg0]
+flowchart TD
+    Client[Client / Host Application] -->|1. Request In| Inbound[Inbound Profile <br> SOCKS5/HTTP or Tailscale]
+    subgraph NetNS["VPN Pair Namespace (hermit_wg_pair_id)"]
+        Inbound -->|2. Internal Forwarding| Outbound[Outbound Profile <br> WireGuard wg0]
     end
-    Outbound -->|3. Traffic Out| Internet[VPN / Internet Tunnel]
-    
-    Dashboard[Web Dashboard :3000] -.->|Orchestrates & Monitors| NetNS
+    Outbound -->|3. Encrypted Tunnel Out| Internet[VPN / External Internet]
 ```
 
-### 1. Inbound Profiles
-Inbound profiles define how traffic enters the isolated network namespace from the host or external network:
-- **SOCKS5/HTTP Proxy**: Runs a dual proxy setup inside the namespace: `microsocks` (SOCKS5 on port 1080) and `tinyproxy` (HTTP on port 8080). A host-level relayer handles traffic multiplexing. You can specify a dedicated host port, or configure `0` (or leave it blank) to let the OS dynamically assign an ephemeral port.
-- **Tailscale**: Connects the namespace to your Tailscale network (tailnet) as a node. You can supply a specific Tailscale Auth Key, or fall back to the global key configured in Settings.
+* **Inbound Profiles**: Define how traffic enters the isolated namespace.
+  * **SOCKS5/HTTP Proxy**: Spawns dual proxy daemons (`microsocks` SOCKS5 on 1080, `tinyproxy` HTTP on 8080) inside the namespace, multiplexed via a host-level relayer.
+  * **Tailscale**: Binds the namespace to your Tailscale network (tailnet) as an active node.
+* **Outbound Profiles**: Define how traffic exits the namespace.
+  * **WireGuard**: Interfaces are isolated inside the namespace (`wg0`) to route all outbound data through WireGuard.
+* **VPN Pairs**: The orchestrator ties these components together into a single running instance, preventing resource conflicts automatically.
 
-### 2. Outbound Profiles
-Outbound profiles define how traffic leaves the namespace:
-- **WireGuard**: Routes all outbound traffic from the namespace through a WireGuard tunnel. Requires a valid WireGuard configuration payload (the `wg0.conf` contents).
+---
 
-### 3. VPN Pairs (Tunnels) & Conflict Prevention
-- A **VPN Pair** is a running instance combining an Inbound and an Outbound Profile.
-- To prevent routing and interface collisions, Hermit automatically performs conflict checks and blocks you from activating multiple concurrent tunnels that use the same Outbound Profile.
-- Features real-time status reporting (starting, running, stopped, error reasons) and bandwidth tracking.
+### 2. DNS Control Plane (Resolution & Filtering Flow)
+This plane intercepts all DNS queries originating from the Traffic Plane namespaces, applies real-time blocklists, and resolves upstream addresses efficiently.
+
+To save CPU and memory, multiple VPN Pairs using the same Inbound Profile **share a single, dedicated DNS Node**, eliminating the need to run heavy `tailscaled` processes or DNS filters inside every single tunnel.
+
+```mermaid
+flowchart TD
+    VPN_Pair["VPN Pairs (Tunnels)"] -->|1. DNS Query| Elixir_DNS["Elixir DNS Server (Host)"]
+    
+    %% Fast Path
+    Elixir_DNS -->|Fast Path: Cached / Blocked| Fast_Return["Instant Response (0-1 ms)"]
+    Fast_Return -->|Resolve immediately| VPN_Pair
+    
+    %% Slow Path
+    Elixir_DNS -->|Slow Path: Cache Miss| TS_Node["Shared Tailscale DNS Node"]
+    TS_Node -->|2. Resolve Upstream| Internet["Tailscale DNS / MagicDNS"]
+    Internet -->|3. Return IP| TS_Node
+    TS_Node -->|4. Update Cache| Elixir_DNS
+```
+
+* **Interception**: When a VPN Pair namespace has DNS filtering enabled, its local `resolv.conf` is pointed to `127.0.0.1`. Custom `iptables` rules intercept all port 53 traffic and forward it over a virtual `veth` link to the host.
+* **Centralized Filtering (Fast Path vs. Slow Path)**: The Elixir DNS Server on the host evaluates the query to decide the routing:
+  * **Fast Path (Blocked or Cached)**: If the query matches any blocklists (AdGuard, GoodbyeAds, Adult content), matches custom redirection rules, or is already present in the shared ETS Cache, the server immediately returns the response to the VPN Pair namespace. This takes 0-1 ms and bypasses the external network entirely.
+  * **Slow Path (Upstream Forwarding)**: If the query is a cache miss and is not blocked, it proceeds to upstream resolution.
+
+* **Upstream Forwarding & MagicDNS**: If a query must go upstream:
+  * The host DNS server forwards it to the dedicated DNS namespace (`hermit_dns_profile_id`) created for that Inbound Profile.
+  * This namespace runs its own `tailscaled` daemon, ensuring private nodes (`MagicDNS`) and tailnet-wide DNS configurations are resolved securely.
+  * The shared architecture isolates profiles from each other while keeping resource footprints tiny.
+
+---
+
+## How Traffic and DNS Planes Connect
+
+When you run a VPN Pair, its network namespace is configured as follows:
+
+| Connection Feature | Plane / Mechanism | Network Route |
+| :--- | :--- | :--- |
+| **Web & API Traffic** | Traffic Plane | Routed directly through the outbound WireGuard (`wg0`) interface. |
+| **DNS Queries (Filtered)** | DNS Control Plane | Redirected locally, sent to Host Elixir, checked against blocklists, then resolved through the profile-shared Tailscale DNS node. |
+| **DNS Queries (Disabled)** | Traffic Plane | Handled as standard IP packets, resolved directly through external IP resolvers (e.g. Google, Cloudflare) via the active VPN tunnel. |
 
 ---
 

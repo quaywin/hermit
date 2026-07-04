@@ -60,12 +60,28 @@ const Hooks = {
       }
     },
   },
+  LocalTime: {
+    mounted() {
+      this.format();
+    },
+    updated() {
+      this.format();
+    },
+    format() {
+      const timestamp = this.el.getAttribute("data-timestamp");
+      if (timestamp) {
+        const date = new Date(parseInt(timestamp) * 1000);
+        const pad = (num) => String(num).padStart(2, "0");
+        this.el.textContent = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+      }
+    }
+  }
 };
 
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: { _csrf_token: csrfToken },
-  hooks: { Flash: Hooks.Flash, ...colocatedHooks },
+  hooks: { ...Hooks, ...colocatedHooks },
 });
 
 // Show progress bar on live navigation and form submits

@@ -12,9 +12,10 @@ defmodule Hermit.Application do
       {Phoenix.PubSub, name: Hermit.PubSub},
       {Registry, keys: :unique, name: Hermit.Vpn.Registry},
       {Hermit.Vpn.DynamicSupervisor, []},
+      {Hermit.Dns.BlocklistLoader, []},
       {Hermit.Vpn.DnsLogReceiver, []},
-      {Hermit.Dns.Server, port: 5453},
-      {Hermit.Vpn.DnsWorker, []},
+      {Hermit.Vpn.DnsDeviceResolver, []},
+      {Hermit.Vpn.DnsSupervisor, []},
       HermitWeb.Endpoint
     ]
 
@@ -26,8 +27,8 @@ defmodule Hermit.Application do
       {:ok, pid} ->
         run_migrations()
         seed_default_local_profile()
-        seed_dns_config()
         boot_vpn_pairs()
+        boot_dns_nodes()
         {:ok, pid}
 
       other ->
@@ -62,11 +63,28 @@ defmodule Hermit.Application do
       IO.inspect(e, label: "Failed to seed default local outbound profile")
   end
 
-  defp seed_dns_config do
-    Hermit.Vpn.DnsConfig.get_global()
-  rescue
-    e ->
-      IO.inspect(e, label: "Failed to seed default global DNS config")
+  defp boot_dns_nodes do
+    if Application.get_env(:hermit, :boot_persisted_pairs, true) do
+      Task.start(fn ->
+        try do
+          dns_configs = Hermit.Repo.all(Hermit.Vpn.DnsConfig)
+
+          Enum.each(dns_configs, fn config ->
+            if config.enabled do
+              case Hermit.Vpn.DnsSupervisor.start_dns(config.inbound_profile_id) do
+                {:ok, _} -> :ok
+                _ -> :error
+              end
+            end
+          end)
+        rescue
+          e ->
+            IO.inspect(e, label: "Error booting persisted DNS nodes")
+        end
+      end)
+    else
+      :ok
+    end
   end
 
   defp boot_vpn_pairs do

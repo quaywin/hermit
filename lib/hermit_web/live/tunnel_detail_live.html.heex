@@ -42,7 +42,6 @@
       >
         Overview
       </button>
-
     </div>
 
     <!-- Active Tab: Overview -->
@@ -237,7 +236,9 @@
                           <span class="text-base-content/80">{@system_dns}</span>
                           <span class="text-base-content/50 italic ml-1">(System Fallback)</span>
                         <% else %>
-                          <span class="text-base-content/80">{@pair.inbound_config["dns_resolvers"]}</span>
+                          <span class="text-base-content/80">{@pair.inbound_config[
+                            "dns_resolvers"
+                          ]}</span>
                         <% end %>
                       <% end %>
                     </div>
@@ -329,7 +330,9 @@
                         <input
                           type="text"
                           name="connector_tag"
-                          value={@pair.inbound_config["advertise_connector_tag"] || "tag:connector"}
+                          value={
+                            @pair.inbound_config["advertise_connector_tag"] || "tag:connector"
+                          }
                           class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1"
                           placeholder="e.g., tag:connector"
                         />
@@ -655,8 +658,6 @@
         </div>
       </div>
     </div>
-
-
   </div>
 
   <%= if @show_edit_modal do %>

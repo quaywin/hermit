@@ -12,9 +12,9 @@ defmodule Hermit.Vpn.DnsLogReceiver do
 
   def get_recent_logs(pair_id, limit \\ 100) do
     pattern = {{pair_id, :"$1"}, :"$2"}
-    
+
     records = :ets.select(@table, [{pattern, [], [:"$$"]}])
-    
+
     records
     |> Enum.sort_by(fn [counter, _log] -> counter end, :desc)
     |> Enum.take(limit)
@@ -30,7 +30,7 @@ defmodule Hermit.Vpn.DnsLogReceiver do
   @impl true
   def init(opts) do
     port = opts[:port] || 5300
-    
+
     :ets.new(@table, [:ordered_set, :public, :named_table, read_concurrency: true])
 
     case :gen_udp.open(port, [:binary, active: true, reuseaddr: true]) do
@@ -45,9 +45,24 @@ defmodule Hermit.Vpn.DnsLogReceiver do
   end
 
   @impl true
-  def handle_info({:udp, _socket, _ip, _port, packet}, state) do
+  def handle_info({:udp, _socket, ip, _port, packet}, state) do
     case Jason.decode(packet) do
       {:ok, %{"pair_id" => pair_id} = log} ->
+        client_ip = log["client_ip"] || ip_to_string(ip)
+        profile_id = get_profile_id(pair_id)
+
+        client_name =
+          if profile_id do
+            Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip)
+          else
+            client_ip
+          end
+
+        log =
+          log
+          |> Map.put("client_ip", client_ip)
+          |> Map.put("client_name", client_name || client_ip)
+
         counter = System.unique_integer([:monotonic])
         :ets.insert(@table, {{pair_id, counter}, log})
 
@@ -76,6 +91,32 @@ defmodule Hermit.Vpn.DnsLogReceiver do
 
   # --- Helpers ---
 
+  defp get_profile_id(pair_id) do
+    case Integer.parse(pair_id) do
+      {profile_id, ""} ->
+        profile_id
+
+      _ ->
+        try do
+          case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id) do
+            nil -> nil
+            pair -> pair.inbound_profile_id
+          end
+        rescue
+          _ -> nil
+        end
+    end
+  end
+
+  defp ip_to_string(ip) when is_tuple(ip) do
+    case :inet.ntoa(ip) do
+      charlist when is_list(charlist) -> List.to_string(charlist)
+      _ -> "unknown"
+    end
+  end
+
+  defp ip_to_string(other), do: to_string(other)
+
   defp prune_logs(pair_id) do
     pattern = {{pair_id, :"$1"}, :_}
     keys = :ets.select(@table, [{pattern, [], [:"$1"]}])
@@ -83,7 +124,7 @@ defmodule Hermit.Vpn.DnsLogReceiver do
     if length(keys) > 100 do
       sorted_keys = Enum.sort(keys)
       to_delete_count = length(sorted_keys) - 100
-      
+
       Enum.take(sorted_keys, to_delete_count)
       |> Enum.each(fn counter ->
         :ets.delete(@table, {pair_id, counter})

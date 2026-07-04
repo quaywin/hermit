@@ -3,22 +3,52 @@ defmodule Hermit.Vpn.DnsConfig do
   import Ecto.Changeset
 
   schema "dns_configs" do
-    field :enabled, :boolean, default: false
-    field :block_ads, :boolean, default: false
-    field :block_adult, :boolean, default: false
-    field :upstream_dns, :string, default: "1.1.1.1, 8.8.8.8"
-    field :custom_rules, {:array, :map}, default: []
-    field :tailscale_override_dns, :boolean, default: false
+    field(:enabled, :boolean, default: false)
+    field(:block_ads, :boolean, default: false)
+    field(:block_goodbyeads, :boolean, default: false)
+    field(:block_adult, :boolean, default: false)
+    field(:upstream_dns, :string, default: "1.1.1.1, 8.8.8.8")
+    field(:custom_rules, {:array, :map}, default: [])
+    field(:tailscale_override_dns, :boolean, default: false)
+    field(:enable_query_logging, :boolean, default: false)
+
+    belongs_to(:inbound_profile, Hermit.Vpn.InboundProfile)
 
     timestamps()
   end
 
   def changeset(dns_config, attrs) do
     dns_config
-    |> cast(attrs, [:enabled, :block_ads, :block_adult, :upstream_dns, :custom_rules, :tailscale_override_dns])
+    |> cast(attrs, [
+      :enabled,
+      :block_ads,
+      :block_goodbyeads,
+      :block_adult,
+      :upstream_dns,
+      :custom_rules,
+      :tailscale_override_dns,
+      :enable_query_logging,
+      :inbound_profile_id
+    ])
     |> validate_required([:upstream_dns, :custom_rules])
     |> validate_upstream_dns()
     |> validate_custom_rules()
+    |> validate_inbound_profile_presence()
+  end
+
+  defp validate_inbound_profile_presence(changeset) do
+    enabled = get_field(changeset, :enabled)
+    inbound_profile_id = get_field(changeset, :inbound_profile_id)
+
+    if enabled && is_nil(inbound_profile_id) do
+      add_error(
+        changeset,
+        :inbound_profile_id,
+        "must be selected when Global DNS Filtering is enabled"
+      )
+    else
+      changeset
+    end
   end
 
   defp validate_upstream_dns(changeset) do
@@ -27,19 +57,20 @@ defmodule Hermit.Vpn.DnsConfig do
         changeset
 
       upstream ->
-        ips = String.split(upstream, [",", " "], trim: true)
-        if Enum.all?(ips, &valid_ip?/1) do
+        targets = String.split(upstream, [",", " "], trim: true)
+
+        if Enum.all?(targets, &valid_ip_or_url?/1) do
           changeset
         else
-          add_error(changeset, :upstream_dns, "contains invalid IP address(es)")
+          add_error(changeset, :upstream_dns, "contains invalid IP address(es) or URL(s)")
         end
     end
   end
 
-  defp valid_ip?(ip) do
-    case :inet.parse_address(String.to_charlist(ip)) do
+  defp valid_ip_or_url?(val) do
+    case :inet.parse_address(String.to_charlist(val)) do
       {:ok, _} -> true
-      _ -> false
+      _ -> String.starts_with?(val, "https://")
     end
   end
 
@@ -68,27 +99,25 @@ defmodule Hermit.Vpn.DnsConfig do
 
   defp valid_rule?(_), do: false
 
-  # Seed helper
-  def get_global do
-    try do
-      case Hermit.Repo.one(__MODULE__) do
-        nil ->
-          %__MODULE__{}
-          |> changeset(%{custom_rules: []})
-          |> Hermit.Repo.insert!()
+  # Profile-specific helpers
+  def get_for_profile(profile_id) do
+    case Hermit.Repo.get_by(__MODULE__, inbound_profile_id: profile_id) do
+      nil ->
+        %__MODULE__{inbound_profile_id: profile_id}
+        |> changeset(%{custom_rules: []})
+        |> Hermit.Repo.insert!()
+        |> Hermit.Repo.preload(:inbound_profile)
 
-        config ->
-          config
-      end
-    rescue
-      _ ->
-        %__MODULE__{enabled: false, custom_rules: []}
+      config ->
+        config
+        |> Hermit.Repo.preload(:inbound_profile)
     end
   end
 
-  def update_global(attrs) do
-    get_global()
-    |> changeset(attrs)
-    |> Hermit.Repo.update()
+  def update_for_profile(profile_id, attrs) do
+    case get_for_profile(profile_id) |> changeset(attrs) |> Hermit.Repo.update() do
+      {:ok, updated} -> {:ok, Hermit.Repo.preload(updated, :inbound_profile)}
+      {:error, changeset} -> {:error, changeset}
+    end
   end
 end

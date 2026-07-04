@@ -2,6 +2,8 @@ RTK - Rust Token Killer (Codex CLI)
 
 **Usage**: Token-optimized CLI proxy for shell commands.
 
+**Environment**: Currently developing inside the `hermit_orchestrator` Docker container.
+
 ## Rule
 
 Always prefix shell commands with `rtk`.

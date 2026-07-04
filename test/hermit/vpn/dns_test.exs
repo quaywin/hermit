@@ -1,64 +1,6 @@
 defmodule Hermit.Vpn.DnsTest do
   use ExUnit.Case, async: false
-  alias Hermit.Vpn.VpnPair
   alias Hermit.Vpn.DnsLogReceiver
-
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Hermit.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Hermit.Repo, {:shared, self()})
-    :ok
-  end
-
-  test "VpnPair validates dns_config maps and rules" do
-    # 1. Valid dns_config map with defaults
-    changeset = VpnPair.changeset(%VpnPair{}, %{
-      pair_id: "dns_test_pair",
-      inbound_profile_id: 1,
-      outbound_profile_id: 1,
-      dns_config: %{
-        "enabled" => true,
-        "block_ads" => true,
-        "block_adult" => false,
-        "upstream_dns" => "1.1.1.1, 8.8.8.8",
-        "custom_rules" => [
-          %{"domain" => "google.com", "action" => "bypass"},
-          %{"domain" => "ad.doubleclick.net", "action" => "block"},
-          %{"domain" => "my-home.local", "action" => "redirect", "value" => "10.0.0.5"}
-        ]
-      }
-    })
-    assert changeset.valid?
-
-    # 2. Invalid custom rule format (missing domain)
-    changeset = VpnPair.changeset(%VpnPair{}, %{
-      pair_id: "dns_test_pair",
-      inbound_profile_id: 1,
-      outbound_profile_id: 1,
-      dns_config: %{
-        "enabled" => true,
-        "custom_rules" => [
-          %{"action" => "block"}
-        ]
-      }
-    })
-    refute changeset.valid?
-    assert Keyword.has_key?(changeset.errors, :dns_config)
-
-    # 3. Invalid custom rule action (unsupported action)
-    changeset = VpnPair.changeset(%VpnPair{}, %{
-      pair_id: "dns_test_pair",
-      inbound_profile_id: 1,
-      outbound_profile_id: 1,
-      dns_config: %{
-        "enabled" => true,
-        "custom_rules" => [
-          %{"domain" => "test.com", "action" => "unknown"}
-        ]
-      }
-    })
-    refute changeset.valid?
-    assert Keyword.has_key?(changeset.errors, :dns_config)
-  end
 
   test "DnsLogReceiver listens on UDP and broadcasts received logs" do
     # Subscribe to test logging PubSub
@@ -76,7 +18,7 @@ defmodule Hermit.Vpn.DnsTest do
       "duration" => 25,
       "timestamp" => System.system_time(:second)
     }
-    
+
     # Send mock log by directly sending message to the DnsLogReceiver process
     send(DnsLogReceiver, {:udp, nil, nil, nil, Jason.encode!(log)})
 
@@ -96,5 +38,57 @@ defmodule Hermit.Vpn.DnsTest do
     # The cast is async, sleep briefly
     Process.sleep(50)
     assert DnsLogReceiver.get_recent_logs(pair_id) == []
+  end
+
+  test "DnsLogReceiver enriches logs with client_ip and resolved client_name" do
+    # Use numeric pair_id so get_profile_id/1 returns a valid integer directly
+    pair_id = "999"
+    topic = "dns_logs:#{pair_id}"
+    Phoenix.PubSub.subscribe(Hermit.PubSub, topic)
+
+    # 1. Send log without client_ip -> should default to sender IP (e.g. 127.0.0.1) and name "localhost"
+    log1 = %{
+      "pair_id" => pair_id,
+      "domain" => "github.com",
+      "type" => "A",
+      "status" => "resolved",
+      "answer" => "140.82.121.4",
+      "duration" => 15,
+      "timestamp" => System.system_time(:second)
+    }
+
+    # Simulate sending from localhost IP {127, 0, 0, 1}
+    send(DnsLogReceiver, {:udp, nil, {127, 0, 0, 1}, nil, Jason.encode!(log1)})
+
+    assert_receive {:dns_log, received_log1}, 1000
+    assert received_log1["client_ip"] == "127.0.0.1"
+
+    # Wait for the async task to populate the mock cache
+    Process.sleep(50)
+
+    # Send again to check that cached name is used
+    send(DnsLogReceiver, {:udp, nil, {127, 0, 0, 1}, nil, Jason.encode!(log1)})
+    assert_receive {:dns_log, received_log1_cached}, 1000
+    assert received_log1_cached["client_name"] == "localhost"
+
+    # 2. Send log with explicit mock client IP "100.64.0.5" -> should resolve to "mock-client"
+    log2 = %{
+      "pair_id" => pair_id,
+      "client_ip" => "100.64.0.5",
+      "domain" => "google.com",
+      "type" => "A",
+      "status" => "resolved",
+      "answer" => "142.250.190.46",
+      "duration" => 25,
+      "timestamp" => System.system_time(:second)
+    }
+
+    send(DnsLogReceiver, {:udp, nil, {127, 0, 0, 1}, nil, Jason.encode!(log2)})
+    Process.sleep(50)
+
+    # Send again to use cached device name
+    send(DnsLogReceiver, {:udp, nil, {127, 0, 0, 1}, nil, Jason.encode!(log2)})
+    assert_receive {:dns_log, received_log2_cached}, 1000
+    assert received_log2_cached["client_name"] == "mock-client"
   end
 end

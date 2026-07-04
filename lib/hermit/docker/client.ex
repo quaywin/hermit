@@ -111,7 +111,9 @@ defmodule Hermit.Docker.Client do
                  ]),
                {:addresses, :ok} <- {:addresses, add_addresses(wg_name, addresses)},
                {:ok, _} <-
-                 run_cmd("ip", [
+                 run_cmd("timeout", [
+                   "5",
+                   "ip",
                    "netns",
                    "exec",
                    wg_name,

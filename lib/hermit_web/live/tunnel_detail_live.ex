@@ -20,8 +20,6 @@ defmodule HermitWeb.TunnelDetailLive do
          |> push_navigate(to: ~p"/")}
 
       pair ->
-
-
         {:ok,
          socket
          |> assign(id: id)
@@ -439,7 +437,7 @@ defmodule HermitWeb.TunnelDetailLive do
     {:noreply, assign(socket, active_tab: active_tab)}
   end
 
-    @impl true
+  @impl true
   def handle_info({:vpn_pair_updated, pair}, socket) do
     if pair.id == socket.assigns.id do
       current_use_dns = socket.assigns.use_tailscale_dns
@@ -602,6 +600,4 @@ defmodule HermitWeb.TunnelDetailLive do
       true -> "#{Float.round(bytes / (1024 * 1024), 2)} MiB"
     end
   end
-
-
 end

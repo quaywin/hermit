@@ -422,5 +422,4 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     Application.put_env(:hermit, :docker, original_docker_config)
     GenServer.stop(pid)
   end
-
 end

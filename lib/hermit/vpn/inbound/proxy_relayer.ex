@@ -494,6 +494,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
         System.cmd("kill", ["#{os_pid}"])
         Process.sleep(100)
         System.cmd("kill", ["-9", "#{os_pid}"])
+
         try do
           Port.close(port)
         rescue

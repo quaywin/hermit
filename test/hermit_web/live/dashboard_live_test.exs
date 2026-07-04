@@ -381,4 +381,87 @@ defmodule HermitWeb.DashboardLiveTest do
     assert html =~
              "Cannot start VPN Pair: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
   end
+
+  test "renders and configures global DNS settings in DNS Control tab", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # 1. Switch to DNS tab
+    html = view |> element("button[phx-value-tab=dns]") |> render_click()
+    assert html =~ "🛡️ Global DNS Filtering"
+    assert html =~ "DNS Control Inactive"
+
+    # 2. Toggle DNS Enabled (Status changes to active)
+    html = view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    assert html =~ "Centralized DNS Node Running"
+    assert html =~ "100.64.0.100"
+
+    # 3. Toggle Filters
+    html = view |> element("button[phx-click=toggle_block_ads]") |> render_click()
+    assert html =~ "Ads/Trackers blocking enabled!"
+    html = view |> element("button[phx-click=toggle_block_adult]") |> render_click()
+    assert html =~ "Adult content blocking enabled!"
+
+    # 4. Save Upstream DNS
+    html =
+      view
+      |> form("#save_upstream_dns_form", %{"upstream_dns" => "1.1.1.1, 9.9.9.9"})
+      |> render_submit()
+    assert html =~ "Global Upstream DNS servers updated."
+
+    # 5. Add Custom Rules (Block)
+    html =
+      view
+      |> form("#add_custom_rule_form", %{
+        "domain" => "ad.example.com",
+        "action" => "block"
+      })
+      |> render_submit()
+    assert html =~ "Custom rule for ad.example.com added."
+    assert html =~ "ad.example.com"
+    assert html =~ "Block"
+
+    # 6. Add Custom Redirect Rule
+    _ = view |> element("select[name=action]") |> render_change(%{"action" => "redirect"})
+    html =
+      view
+      |> form("#add_custom_rule_form", %{
+        "domain" => "my-redirect.com",
+        "action" => "redirect",
+        "value" => "192.168.1.5"
+      })
+      |> render_submit()
+    assert html =~ "Custom rule for my-redirect.com added."
+    assert html =~ "my-redirect.com"
+    assert html =~ "192.168.1.5"
+
+    # 7. Delete rule
+    html = view |> element("button[phx-value-domain='ad.example.com']", "Delete") |> render_click()
+    assert html =~ "Custom rule for ad.example.com deleted."
+    
+    # Verify in DB directly since flash message contains the domain
+    updated_config = Hermit.Vpn.DnsConfig.get_global()
+    assert Enum.find(updated_config.custom_rules, &(&1["domain"] == "ad.example.com")) == nil
+
+    # 8. Test live logs streaming
+    log = %{
+      "pair_id" => "global",
+      "domain" => "live-test.org",
+      "type" => "A",
+      "status" => "resolved",
+      "answer" => "1.1.1.1",
+      "duration" => 8,
+      "timestamp" => System.system_time(:second)
+    }
+    Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:global", {:dns_log, log})
+    Process.sleep(50)
+
+    html = render(view)
+    assert html =~ "live-test.org"
+    assert html =~ "1.1.1.1"
+
+    # Clear logs
+    html = view |> element("button[phx-click=clear_dns_logs]", "Clear Logs") |> render_click()
+    refute html =~ "live-test.org"
+  end
+
 end

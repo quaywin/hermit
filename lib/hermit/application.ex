@@ -13,6 +13,8 @@ defmodule Hermit.Application do
       {Registry, keys: :unique, name: Hermit.Vpn.Registry},
       {Hermit.Vpn.DynamicSupervisor, []},
       {Hermit.Vpn.DnsLogReceiver, []},
+      {Hermit.Dns.Server, port: 5453},
+      {Hermit.Vpn.DnsWorker, []},
       HermitWeb.Endpoint
     ]
 
@@ -24,6 +26,7 @@ defmodule Hermit.Application do
       {:ok, pid} ->
         run_migrations()
         seed_default_local_profile()
+        seed_dns_config()
         boot_vpn_pairs()
         {:ok, pid}
 
@@ -57,6 +60,13 @@ defmodule Hermit.Application do
   rescue
     e ->
       IO.inspect(e, label: "Failed to seed default local outbound profile")
+  end
+
+  defp seed_dns_config do
+    Hermit.Vpn.DnsConfig.get_global()
+  rescue
+    e ->
+      IO.inspect(e, label: "Failed to seed default global DNS config")
   end
 
   defp boot_vpn_pairs do

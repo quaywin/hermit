@@ -9,7 +9,6 @@ defmodule HermitWeb.TunnelDetailLive do
   def mount(%{"id" => id}, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
-      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_logs:#{id}")
       :timer.send_interval(1000, self(), :tick)
     end
 
@@ -21,11 +20,7 @@ defmodule HermitWeb.TunnelDetailLive do
          |> push_navigate(to: ~p"/")}
 
       pair ->
-        recent_logs =
-          Hermit.Vpn.DnsLogReceiver.get_recent_logs(id)
-          |> Enum.map(fn log ->
-            Map.put(log, :id, "#{log["timestamp"] || System.system_time(:second)}-#{System.unique_integer([:monotonic])}")
-          end)
+
 
         {:ok,
          socket
@@ -34,9 +29,7 @@ defmodule HermitWeb.TunnelDetailLive do
          |> assign(show_edit_modal: false)
          |> assign(form: nil)
          |> assign(active_tab: :overview)
-         |> assign(custom_rule_action: "block")
-         |> assign_pair(pair)
-         |> stream(:dns_logs, recent_logs, limit: 100)}
+         |> assign_pair(pair)}
     end
   end
 
@@ -440,165 +433,13 @@ defmodule HermitWeb.TunnelDetailLive do
     active_tab =
       case tab do
         "overview" -> :overview
-        "dns" -> :dns
         _ -> :overview
       end
 
     {:noreply, assign(socket, active_tab: active_tab)}
   end
 
-  @impl true
-  def handle_event("toggle_dns_enabled", _params, socket) do
-    id = socket.assigns.id
-    dns_config = socket.assigns.pair.dns_config || %{}
-    enabled = not (dns_config["enabled"] == true)
-    new_dns_config = Map.put(dns_config, "enabled", enabled)
-
-    case PairWorker.update_dns_config(id, new_dns_config) do
-      {:ok, updated_pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(updated_pair)
-         |> put_flash(:info, "DNS filtering #{if enabled, do: "enabled", else: "disabled"}.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to update DNS settings: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("toggle_block_ads", _params, socket) do
-    id = socket.assigns.id
-    dns_config = socket.assigns.pair.dns_config || %{}
-    block_ads = not (dns_config["block_ads"] == true)
-    new_dns_config = Map.put(dns_config, "block_ads", block_ads)
-
-    case PairWorker.update_dns_config(id, new_dns_config) do
-      {:ok, updated_pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(updated_pair)
-         |> put_flash(:info, "Ads/Trackers blocking #{if block_ads, do: "enabled", else: "disabled"}!")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to update settings: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("toggle_block_adult", _params, socket) do
-    id = socket.assigns.id
-    dns_config = socket.assigns.pair.dns_config || %{}
-    block_adult = not (dns_config["block_adult"] == true)
-    new_dns_config = Map.put(dns_config, "block_adult", block_adult)
-
-    case PairWorker.update_dns_config(id, new_dns_config) do
-      {:ok, updated_pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(updated_pair)
-         |> put_flash(:info, "Adult content blocking #{if block_adult, do: "enabled", else: "disabled"}!")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to update settings: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("save_upstream_dns", %{"upstream_dns" => upstream}, socket) do
-    id = socket.assigns.id
-    dns_config = socket.assigns.pair.dns_config || %{}
-    new_dns_config = Map.put(dns_config, "upstream_dns", String.trim(upstream))
-
-    case PairWorker.update_dns_config(id, new_dns_config) do
-      {:ok, updated_pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(updated_pair)
-         |> put_flash(:info, "Upstream DNS servers updated.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to update upstream DNS: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("custom_rule_action_changed", %{"action" => action}, socket) do
-    {:noreply, assign(socket, custom_rule_action: action)}
-  end
-
-  @impl true
-  def handle_event("add_custom_rule", %{"domain" => domain, "action" => action} = params, socket) do
-    id = socket.assigns.id
-    dns_config = socket.assigns.pair.dns_config || %{}
-    custom_rules = dns_config["custom_rules"] || []
-
-    domain = String.trim(domain) |> String.downcase()
-    value = if action == "redirect", do: String.trim(Map.get(params, "value", "")), else: nil
-
-    cond do
-      domain == "" ->
-        {:noreply, put_flash(socket, :error, "Domain name cannot be empty.")}
-
-      action == "redirect" and (is_nil(value) or value == "") ->
-        {:noreply, put_flash(socket, :error, "IP / Target is required for Redirect action.")}
-
-      true ->
-        new_rule = %{"domain" => domain, "action" => action, "value" => value}
-        updated_rules = Enum.reject(custom_rules, fn r -> r["domain"] == domain end) ++ [new_rule]
-        new_dns_config = Map.put(dns_config, "custom_rules", updated_rules)
-
-        case PairWorker.update_dns_config(id, new_dns_config) do
-          {:ok, updated_pair} ->
-            {:noreply,
-             socket
-             |> assign_pair(updated_pair)
-             |> assign(custom_rule_action: "block")
-             |> put_flash(:info, "Custom rule for #{domain} added.")}
-
-          {:error, %Ecto.Changeset{} = changeset} ->
-            error_msg =
-              case changeset.errors[:dns_config] do
-                {msg, _} -> msg
-                _ -> "Invalid DNS configuration."
-              end
-            {:noreply, put_flash(socket, :error, error_msg)}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Failed to add rule: #{inspect(reason)}")}
-        end
-    end
-  end
-
-  @impl true
-  def handle_event("delete_custom_rule", %{"domain" => domain}, socket) do
-    id = socket.assigns.id
-    dns_config = socket.assigns.pair.dns_config || %{}
-    custom_rules = dns_config["custom_rules"] || []
-
-    updated_rules = Enum.reject(custom_rules, fn r -> r["domain"] == domain end)
-    new_dns_config = Map.put(dns_config, "custom_rules", updated_rules)
-
-    case PairWorker.update_dns_config(id, new_dns_config) do
-      {:ok, updated_pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(updated_pair)
-         |> put_flash(:info, "Custom rule for #{domain} deleted.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to delete rule: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("clear_dns_logs", _params, socket) do
-    id = socket.assigns.id
-    Hermit.Vpn.DnsLogReceiver.clear_logs(id)
-    {:noreply, stream(socket, :dns_logs, [], reset: true)}
-  end
-
-  @impl true
+    @impl true
   def handle_info({:vpn_pair_updated, pair}, socket) do
     if pair.id == socket.assigns.id do
       current_use_dns = socket.assigns.use_tailscale_dns
@@ -622,12 +463,6 @@ defmodule HermitWeb.TunnelDetailLive do
       end
 
     {:noreply, assign(socket, uptime: uptime)}
-  end
-
-  @impl true
-  def handle_info({:dns_log, log}, socket) do
-    log_with_id = Map.put(log, :id, "#{log["timestamp"] || System.system_time(:second)}-#{System.unique_integer([:monotonic])}")
-    {:noreply, stream_insert(socket, :dns_logs, log_with_id, at: 0, limit: 100)}
   end
 
   @impl true
@@ -768,10 +603,5 @@ defmodule HermitWeb.TunnelDetailLive do
     end
   end
 
-  def format_dns_time(timestamp) do
-    case DateTime.from_unix(timestamp) do
-      {:ok, datetime} -> Calendar.strftime(datetime, "%H:%M:%S")
-      _ -> "-"
-    end
-  end
+
 end

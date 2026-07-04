@@ -43,6 +43,13 @@
       >
         Outbound Profiles
       </button>
+      <button
+        phx-click="set_tab"
+        phx-value-tab="dns"
+        class={"pb-4 text-xs font-medium uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :dns, do: "border-[#3ecf8e] text-base-content", else: "border-transparent text-base-content/60 hover:text-base-content")}
+      >
+        DNS Control
+      </button>
     </div>
 
     <!-- Active Tab Content -->
@@ -622,6 +629,375 @@
       </div>
     </div>
   </div>
+
+    <div class={if @active_tab != :dns, do: "hidden"}>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left Column: Config and Rules -->
+        <div class="lg:col-span-2 space-y-6">
+          
+          <!-- DNS Status Toggle Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h2 class="text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
+                  🛡️ Global DNS Filtering
+                </h2>
+                <p class="text-xs text-base-content/60 mt-1">
+                  Route DNS queries from client devices in the Tailnet through a centralized filtering resolver.
+                </p>
+              </div>
+              <div>
+                <% dns_enabled = @dns_config && @dns_config.enabled == true %>
+                <button
+                  type="button"
+                  phx-click="toggle_dns_enabled"
+                  class={[
+                    "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                    dns_enabled && "bg-emerald-500",
+                    !dns_enabled && "bg-base-300"
+                  ]}
+                >
+                  <span
+                    aria-hidden="true"
+                    class={[
+                      "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                      dns_enabled && "translate-x-5",
+                      !dns_enabled && "translate-x-0"
+                    ]}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <!-- Dedicated IP Status -->
+            <%= if dns_enabled do %>
+              <div class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-[8px] p-4 text-xs space-y-2">
+                <div class="flex items-start gap-2">
+                  <span class="text-base">🟢</span>
+                  <div>
+                    <span class="font-semibold block text-emerald-600">Centralized DNS Node Running</span>
+                    DNS Node IP: <code class="bg-emerald-500/5 px-1.5 py-0.5 rounded font-mono font-bold text-xs"><%= @dns_ip || "allocating..." %></code>
+                  </div>
+                </div>
+                <%= if @dns_error do %>
+                  <div class="bg-red-500/5 border border-red-500/20 rounded-[4px] p-2 text-[10px] text-red-500 font-mono">
+                    <%= @dns_error %>
+                  </div>
+                <% end %>
+              </div>
+
+              <!-- Categories Toggles -->
+              <div class="border-t border-base-300 pt-4 space-y-4">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/70">
+                  Global Filters & Blocklists
+                </h3>
+                
+                <div class="flex items-center justify-between bg-base-200/40 p-3 rounded-[6px] border border-base-300/60">
+                  <div>
+                    <span class="font-medium text-sm text-base-content block">Block Ads & Trackers</span>
+                    <span class="text-xs text-base-content/50">Return NXDOMAIN response for telemetry and advertising domains</span>
+                  </div>
+                  <% block_ads = @dns_config && @dns_config.block_ads == true %>
+                  <button
+                    type="button"
+                    phx-click="toggle_block_ads"
+                    class={[
+                      "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                      block_ads && "bg-emerald-500",
+                      !block_ads && "bg-base-300"
+                    ]}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={[
+                        "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                        block_ads && "translate-x-5",
+                        !block_ads && "translate-x-0"
+                      ]}
+                    />
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between bg-base-200/40 p-3 rounded-[6px] border border-base-300/60">
+                  <div>
+                    <span class="font-medium text-sm text-base-content block">Block Adult Content</span>
+                    <span class="text-xs text-base-content/50">Filter adult and explicit content globally</span>
+                  </div>
+                  <% block_adult = @dns_config && @dns_config.block_adult == true %>
+                  <button
+                    type="button"
+                    phx-click="toggle_block_adult"
+                    class={[
+                      "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                      block_adult && "bg-emerald-500",
+                      !block_adult && "bg-base-300"
+                    ]}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={[
+                        "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                        block_adult && "translate-x-5",
+                        !block_adult && "translate-x-0"
+                      ]}
+                    />
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between bg-base-200/40 p-3 rounded-[6px] border border-base-300/60">
+                  <div>
+                    <span class="font-medium text-sm text-base-content block">Override Tailscale Nameservers</span>
+                    <span class="text-xs text-base-content/50">Automatically register DNS IP in Tailscale Admin Settings</span>
+                  </div>
+                  <% override_dns = @dns_config && @dns_config.tailscale_override_dns == true %>
+                  <button
+                    type="button"
+                    phx-click="toggle_override_dns"
+                    class={[
+                      "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                      override_dns && "bg-emerald-500",
+                      !override_dns && "bg-base-300"
+                    ]}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={[
+                        "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                        override_dns && "translate-x-5",
+                        !override_dns && "translate-x-0"
+                      ]}
+                    />
+                  </button>
+                </div>
+              </div>
+            <% else %>
+              <div class="bg-base-200 border border-base-300 text-base-content/60 rounded-[8px] p-4 text-xs flex items-start gap-2">
+                <span class="text-base">⚪</span>
+                <div>
+                  <span class="font-semibold block text-base-content/80">DNS Control Inactive</span>
+                  Centralized filters and rules are offline. Turn on status toggle to boot dedicated DNS node.
+                </div>
+              </div>
+            <% end %>
+          </div>
+
+          <!-- Upstream DNS Servers Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+            <h2 class="text-lg font-medium tracking-display-md text-base-content">
+              🌐 Upstream DNS Servers
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Forward unmatched queries to these upstream default resolvers (separated by commas).
+            </p>
+            <form id="save_upstream_dns_form" phx-submit="save_upstream_dns" class="flex gap-3 items-end">
+              <div class="flex-1">
+                <input
+                  type="text"
+                  name="upstream_dns"
+                  value={(@dns_config && @dns_config.upstream_dns) || "1.1.1.1, 8.8.8.8"}
+                  class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] text-xs font-mono rounded-[6px] p-2.5"
+                  placeholder="e.g., 1.1.1.1, 8.8.8.8"
+                />
+              </div>
+              <button
+                type="submit"
+                class="btn btn-primary px-4 py-2.5 h-auto min-h-0 rounded-[6px] uppercase font-semibold text-xs tracking-wider cursor-pointer"
+              >
+                Save Upstream
+              </button>
+            </form>
+          </div>
+
+          <!-- Custom Domain Rules Card -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-6">
+            <div>
+              <h2 class="text-lg font-medium tracking-display-md text-base-content">
+                📝 Custom Domain Rules
+              </h2>
+              <p class="text-xs text-base-content/60 mt-1">
+                Override actions for specific domains. Rules apply recursively to subdomains.
+              </p>
+            </div>
+
+            <!-- Custom Rules Table -->
+            <div class="overflow-x-auto border border-base-300 rounded-[8px]">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-base-200/50 border-b border-base-300 text-base-content/60 text-xs font-semibold uppercase tracking-wider">
+                    <th class="py-2.5 px-4">Domain Pattern</th>
+                    <th class="py-2.5 px-4">Action</th>
+                    <th class="py-2.5 px-4">IP Target</th>
+                    <th class="py-2.5 px-4 text-right">Delete</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-base-300 text-xs">
+                  <%= if is_nil(@dns_config) or is_nil(@dns_config.custom_rules) or @dns_config.custom_rules == [] do %>
+                    <tr>
+                      <td colspan="4" class="py-6 text-center text-base-content/50 italic">
+                        No custom rules configured. Add a rule below.
+                      </td>
+                    </tr>
+                  <% else %>
+                    <%= for rule <- @dns_config.custom_rules do %>
+                      <tr class="hover:bg-base-200/30 transition-colors">
+                        <td class="py-3 px-4 font-mono font-medium text-base-content">{rule["domain"]}</td>
+                        <td class="py-3 px-4">
+                          <%= case rule["action"] do %>
+                            <% "block" -> %>
+                              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-red-500/10 text-red-500 border border-red-500/20 uppercase">
+                                Block
+                              </span>
+                            <% "bypass" -> %>
+                              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 uppercase">
+                                Bypass
+                              </span>
+                            <% "redirect" -> %>
+                              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/20 uppercase">
+                                Redirect
+                              </span>
+                          <% end %>
+                        </td>
+                        <td class="py-3 px-4 font-mono text-base-content/75">{rule["value"] || "-"}</td>
+                        <td class="py-3 px-4 text-right">
+                          <button
+                            type="button"
+                            phx-click="delete_custom_rule"
+                            phx-value-domain={rule["domain"]}
+                            class="text-red-500 hover:text-red-700 transition-colors text-xs font-semibold cursor-pointer underline"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    <% end %>
+                  <% end %>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Add Custom Rule Form -->
+            <form id="add_custom_rule_form" phx-submit="add_custom_rule" class="bg-base-200/40 p-4 border border-base-300 rounded-[8px] space-y-4">
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/80">
+                + Add New Custom Rule
+              </h3>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-base-content/60 mb-1">
+                    Domain
+                  </label>
+                  <input
+                    type="text"
+                    name="domain"
+                    required
+                    placeholder="e.g., test.example.com"
+                    class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs font-mono rounded-[6px] p-2"
+                  />
+                </div>
+                <div>
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-base-content/60 mb-1">
+                    Action
+                  </label>
+                  <select
+                    name="action"
+                    phx-change="custom_rule_action_changed"
+                    class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[6px] p-2 h-[34px] cursor-pointer"
+                  >
+                    <option value="block">Block (NXDOMAIN)</option>
+                    <option value="bypass">Bypass (Force Upstream)</option>
+                    <option value="redirect">Redirect (Local IP)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-base-content/60 mb-1">
+                    IP Target (Redirect only)
+                  </label>
+                  <input
+                    type="text"
+                    name="value"
+                    placeholder="e.g., 192.168.1.100"
+                    disabled={@custom_rule_action != "redirect"}
+                    class="w-full bg-base-100 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs font-mono rounded-[6px] p-2 disabled:bg-base-200/50 disabled:text-base-content/30"
+                  />
+                </div>
+              </div>
+              <div class="flex justify-end">
+                <button
+                  type="submit"
+                  class="btn btn-primary px-4 py-2 h-auto min-h-0 rounded-[6px] uppercase font-semibold text-xs tracking-wider cursor-pointer"
+                >
+                  Add Custom Rule
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Right Column: Live Query Log Console -->
+        <div class="space-y-6">
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col h-[650px]">
+            <div class="flex items-center justify-between pb-4 border-b border-base-300 mb-4">
+              <div>
+                <h2 class="text-lg font-medium tracking-display-md text-base-content">
+                  📜 Live Query Logs
+                </h2>
+                <p class="text-[10px] text-base-content/50 mt-0.5">
+                  Subscribed to `dns_logs:global`
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="clear_dns_logs"
+                class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs px-2.5 py-1.5 h-auto min-h-0"
+              >
+                Clear Logs
+              </button>
+            </div>
+
+            <!-- Console box -->
+            <div class="flex-1 bg-[#1c1c1c] rounded-[6px] border border-base-300/40 p-4 font-mono text-[11px] text-neutral-300 flex flex-col overflow-hidden">
+              <!-- Console Headers -->
+              <div class="grid grid-cols-12 gap-1 pb-2 border-b border-neutral-800 text-[10px] text-neutral-500 font-bold uppercase tracking-wider">
+                <span class="col-span-2">Time</span>
+                <span class="col-span-1">Type</span>
+                <span class="col-span-2">Action</span>
+                <span class="col-span-4">Domain</span>
+                <span class="col-span-3 text-right">Target</span>
+              </div>
+              
+              <!-- Console Body -->
+              <div
+                id="dns-logs"
+                phx-update="stream"
+                class="flex-1 overflow-y-auto mt-2 space-y-1.5 scrollbar-thin scrollbar-thumb-neutral-800 text-[10px]"
+              >
+                <div
+                  :for={{dom_id, log} <- @streams.dns_logs}
+                  id={dom_id}
+                  class="grid grid-cols-12 gap-1 py-1 border-b border-neutral-800/40 hover:bg-neutral-800/20 items-center text-[10px] transition-colors"
+                >
+                  <span class="col-span-2 text-neutral-500">{format_dns_time(log["timestamp"])}</span>
+                  <span class="col-span-1 text-sky-400 font-semibold">{log["type"]}</span>
+                  <span class="col-span-2">
+                    <%= case log["status"] do %>
+                      <% "blocked" -> %>
+                        <span class="text-red-400 font-bold text-[10px]">BLOCKED</span>
+                      <% "redirected" -> %>
+                        <span class="text-amber-400 font-bold text-[10px]">REDIRECT</span>
+                      <% "resolved" -> %>
+                        <span class="text-emerald-400 font-bold text-[10px]">RESOLVE</span>
+                      <% _ -> %>
+                        <span class="text-neutral-400 text-[10px]">{log["status"]}</span>
+                    <% end %>
+                  </span>
+                  <span class="col-span-4 text-neutral-200 truncate font-mono" title={log["domain"]}>{log["domain"]}</span>
+                  <span class="col-span-3 text-right text-neutral-400 truncate" title={log["answer"]}>{log["answer"]}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
   <%= if @editing_inbound_profile do %>
     <dialog id="edit-inbound-modal" class="modal modal-open z-50 backdrop-blur-sm">

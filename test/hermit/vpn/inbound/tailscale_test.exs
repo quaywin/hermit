@@ -125,10 +125,10 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
     end
   end
 
-  describe "update_dns_settings_api/2" do
+  describe "update_dns_settings_local/3" do
     test "returns updated on mock mode" do
       assert {:ok, :updated} =
-               Tailscale.update_dns_settings_api("test_pair", "76.76.2.0, 76.76.10.0")
+               Tailscale.update_dns_settings_local("test_pair", "custom", "76.76.2.0, 76.76.10.0")
     end
   end
 

@@ -132,4 +132,55 @@ defmodule Hermit.Dns.ServerCacheTest do
       end
     end
   end
+
+  test "DNS Server forwards Tailscale internal domains to 100.100.100.100" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_SplitDNS",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_split"}
+      })
+
+    profile_id = profile.id
+    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+        enabled: true,
+        upstream_dns: "1.1.1.1",
+        custom_rules: []
+      })
+
+    port = 35355
+    {:ok, server_pid} = Server.start_link(profile_id: profile_id, port: port)
+
+    try do
+      _domain = "my-device.ts.net"
+      qname = <<9>> <> "my-device" <> <<2>> <> "ts" <> <<3>> <> "net" <> <<0>>
+      question = qname <> <<0, 1, 0, 1>>
+
+      {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
+      query_id = <<0x77, 0x77>>
+      query_packet = query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
+
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, port, query_packet)
+
+      case :gen_udp.recv(client_sock, 0, 3000) do
+        {:ok, {{127, 0, 0, 1}, ^port, response}} ->
+          assert binary_part(response, 0, 2) == query_id
+          <<_id::binary-size(2), flags::binary-size(2), _rest::binary>> = response
+          <<_qr::1, _opcode::4, _aa::1, _tc::1, _rd::1, _ra::1, _z::3, rcode::4>> = flags
+          assert rcode in [0, 2, 3]
+
+        {:error, reason} ->
+          flunk("DNS Server did not respond: #{inspect(reason)}")
+      end
+
+      :gen_udp.close(client_sock)
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
 end

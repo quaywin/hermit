@@ -149,6 +149,21 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "dev",
                    "eth0"
                  ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "iptables",
+                   "-t",
+                   "nat",
+                   "-A",
+                   "POSTROUTING",
+                   "-o",
+                   "eth0",
+                   "-j",
+                   "MASQUERADE"
+                 ]),
              {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
              {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
              {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),

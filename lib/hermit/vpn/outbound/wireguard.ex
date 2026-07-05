@@ -204,6 +204,21 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    "-j",
                    "TCPMSS",
                    "--clamp-mss-to-pmtu"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "iptables",
+                   "-t",
+                   "nat",
+                   "-A",
+                   "POSTROUTING",
+                   "-o",
+                   "wg0",
+                   "-j",
+                   "MASQUERADE"
                  ]) do
             # Setup network namespace specific DNS
             if dns_servers != [] do

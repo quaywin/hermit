@@ -12,12 +12,32 @@ defmodule Hermit.Vpn.OutboundProfile do
 
   @doc false
   def changeset(outbound_profile, attrs) do
+    attrs = stringify_config_keys(attrs)
+
     outbound_profile
     |> cast(attrs, [:name, :type, :config])
     |> validate_required([:name, :type])
     |> validate_inclusion(:type, ["wireguard", "local"])
     |> validate_config()
   end
+
+  defp stringify_config_keys(attrs) do
+    case attrs do
+      %{"config" => config} when is_map(config) ->
+        Map.put(attrs, "config", stringify_keys(config))
+
+      %{config: config} when is_map(config) ->
+        Map.put(attrs, :config, stringify_keys(config))
+
+      _ ->
+        attrs
+    end
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
+  end
+  defp stringify_keys(val), do: val
 
   defp validate_config(changeset) do
     type = get_field(changeset, :type)

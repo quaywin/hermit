@@ -320,17 +320,29 @@ defmodule Hermit.Dns.Server do
 
   # Split routing: if domain is domestic, prioritize private/local IP upstreams
   defp select_upstreams_for_domain(domain, upstreams) do
-    if is_domestic_domain?(domain) do
-      Enum.sort_by(upstreams, fn target ->
-        case target do
-          {:udp, ip} -> if local_ip?(ip), do: 0, else: 1
-          # Put DoH at the bottom for domestic domains
-          _ -> 2
-        end
-      end)
-    else
-      upstreams
+    cond do
+      is_tailscale_domain?(domain) ->
+        # For Tailscale magic DNS domains, prepend Tailscale nameserver 100.100.100.100
+        ts_ns = {:udp, {100, 100, 100, 100}}
+        [ts_ns | List.delete(upstreams, ts_ns)]
+
+      is_domestic_domain?(domain) ->
+        Enum.sort_by(upstreams, fn target ->
+          case target do
+            {:udp, ip} -> if local_ip?(ip), do: 0, else: 1
+            # Put DoH at the bottom for domestic domains
+            _ -> 2
+          end
+        end)
+
+      true ->
+        upstreams
     end
+  end
+
+  defp is_tailscale_domain?(domain) do
+    String.ends_with?(domain, ".ts.net") or
+      String.ends_with?(domain, ".tailscale.net")
   end
 
   defp is_domestic_domain?(domain) do

@@ -512,7 +512,9 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   defp assign_pair(socket, pair) do
-    inbound_config = pair.inbound_config || %{}
+    inbound_config = stringify_keys(pair.inbound_config || %{})
+    outbound_config = stringify_keys(pair.outbound_config || %{})
+    pair = %{pair | inbound_config: inbound_config, outbound_config: outbound_config}
 
     use_tailscale_dns =
       case Map.get(inbound_config, "dns_mode") do
@@ -609,4 +611,9 @@ defmodule HermitWeb.TunnelDetailLive do
       true -> "#{Float.round(bytes / (1024 * 1024), 2)} MiB"
     end
   end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
+  end
+  defp stringify_keys(val), do: val
 end

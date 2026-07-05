@@ -393,32 +393,45 @@ defmodule Hermit.Vpn.DnsWorker do
                "--to-destination",
                "#{host_ip}:#{port}"
              ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "iptables",
-               "-t",
-               "nat",
-               "-A",
-               "PREROUTING",
-               "-p",
-               "tcp",
-               "--dport",
-               "53",
-               "-j",
-               "DNAT",
-               "--to-destination",
-               "#{host_ip}:#{port}"
-             ]),
+          {:ok, _} <-
+            run_cmd("ip", [
+              "netns",
+              "exec",
+              ns,
+              "iptables",
+              "-t",
+              "nat",
+              "-A",
+              "PREROUTING",
+              "-p",
+              "tcp",
+              "--dport",
+              "53",
+              "-j",
+              "DNAT",
+              "--to-destination",
+              "#{host_ip}:#{port}"
+            ]),
+          # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
+          {:ok, _} <-
+            run_cmd("ip", [
+              "netns",
+              "exec",
+              ns,
+              "iptables",
+              "-I",
+              "FORWARD",
+              "1",
+              "-j",
+              "ACCEPT"
+            ]),
 
-           # Source policy routing on host (replacing global route)
-           {:ok, _} <-
-             run_cmd("ip", ["rule", "add", "from", host_ip, "table", to_string(table_id)]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "route",
+          # Source policy routing on host (replacing global route)
+          {:ok, _} <-
+            run_cmd("ip", ["rule", "add", "from", host_ip, "to", "100.64.0.0/10", "table", to_string(table_id)]),
+          {:ok, _} <-
+            run_cmd("ip", [
+              "route",
                "add",
                "default",
                "via",
@@ -573,7 +586,7 @@ defmodule Hermit.Vpn.DnsWorker do
     # Clean up netns DNS config directory
     File.rm_rf("/etc/netns/#{ns}")
 
-    System.cmd("ip", ["rule", "delete", "from", host_ip, "table", to_string(table_id)])
+    System.cmd("ip", ["rule", "delete", "from", host_ip, "to", "100.64.0.0/10", "table", to_string(table_id)])
     System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
 
     System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])

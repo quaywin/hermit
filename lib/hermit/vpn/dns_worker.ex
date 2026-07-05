@@ -290,29 +290,63 @@ defmodule Hermit.Vpn.DnsWorker do
               "-w",
               "net.ipv4.ip_forward=1"
             ]),
-          {:ok, _} <-
-            run_cmd("ip", [
-              "netns",
-              "exec",
-              ns,
-              "sysctl",
-              "-w",
-              "net.ipv6.conf.all.forwarding=1"
-            ]),
-          {:ok, _} <-
-            run_cmd("ip", [
-              "netns",
-              "exec",
-              ns,
-              "ip",
-              "route",
-              "add",
-              "default",
-              "via",
-              host_ip,
-              "dev",
-              "eth0"
-            ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "sysctl",
+             "-w",
+             "net.ipv6.conf.all.forwarding=1"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "sysctl",
+             "-w",
+             "net.ipv4.conf.all.rp_filter=0"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "sysctl",
+             "-w",
+             "net.ipv4.conf.default.rp_filter=0"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "sysctl",
+             "-w",
+             "net.ipv4.conf.eth0.rp_filter=0"
+           ]),
+         {:ok, _} <-
+           run_cmd("sysctl", [
+             "-w",
+             "net.ipv4.conf.#{host_if}.rp_filter=0"
+           ]),
+         # Add route for Tailscale range to host main table to satisfy rp_filter=2 (ignore if already exists)
+         _ = run_cmd("ip", ["route", "add", "100.64.0.0/10", "dev", host_if]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "ip",
+             "route",
+             "add",
+             "default",
+             "via",
+             host_ip,
+             "dev",
+             "eth0"
+           ]),
           # NAT routing on Host
           {:ok, _} <-
             run_cmd("iptables", [

@@ -133,6 +133,8 @@ defmodule Hermit.Application do
       try do
         System.cmd("sysctl", ["-w", "net.ipv4.ip_forward=1"])
         System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"])
+        System.cmd("sysctl", ["-w", "net.ipv4.conf.all.rp_filter=2"])
+        System.cmd("sysctl", ["-w", "net.ipv4.conf.default.rp_filter=2"])
       rescue
         e ->
           IO.inspect(e, label: "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)")

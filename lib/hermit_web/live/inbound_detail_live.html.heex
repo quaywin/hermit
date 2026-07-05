@@ -53,6 +53,12 @@
         >
           DNS Control
         </.link>
+        <.link
+          patch={~p"/inbounds/#{@profile.id}?tab=routing"}
+          class={"pb-4 text-xs font-medium uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :routing, do: "border-[#3ecf8e] text-base-content", else: "border-transparent text-base-content/60 hover:text-base-content")}
+        >
+          Routing Overview
+        </.link>
       <% end %>
     </div>
 
@@ -634,6 +640,117 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    <% end %>
+
+    <%= if @profile.type == "tailscale" and @active_tab == :routing do %>
+      <div class="space-y-6">
+        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-base font-medium text-base-content">
+                🗺️ Tailscale Routing Overview
+              </h3>
+              <p class="text-xs text-base-content/50">
+                List of active tunnels (VPN Pairs) connected to this Tailscale inbound profile, showing their subnet routes and App Connector settings.
+              </p>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="border-b border-base-300 text-base-content/60 font-medium uppercase tracking-wider text-[10px]">
+                  <th class="py-3 px-4">Tunnel ID</th>
+                  <th class="py-3 px-4">Tailscale Hostname</th>
+                  <th class="py-3 px-4">Subnet Routes</th>
+                  <th class="py-3 px-4">App Connector</th>
+                  <th class="py-3 px-4">Connector Tag</th>
+                  <th class="py-3 px-4">Domain Routes</th>
+                  <th class="py-3 px-4 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-base-200 text-base-content/80">
+                <%= if Enum.empty?(@vpn_pairs) do %>
+                  <tr>
+                    <td colspan="7" class="py-8 text-center text-base-content/50 font-medium italic">
+                      No active tunnels are using this inbound profile.
+                    </td>
+                  </tr>
+                <% else %>
+                  <%= for pair <- @vpn_pairs do %>
+                    <tr class="hover:bg-base-200/20 transition-colors">
+                      <td class="py-3 px-4 font-mono font-semibold">
+                        <.link navigate={~p"/tunnels/#{pair.id}"} class="text-[#3ecf8e] hover:underline">
+                          {pair.id}
+                        </.link>
+                      </td>
+                      <td class="py-3 px-4 font-mono text-base-content/70">
+                        hermit-node-{String.replace(pair.id, "_", "-")}
+                      </td>
+                      <td class="py-3 px-4">
+                        <%= if pair.inbound_config["advertise_routes"] && String.trim(pair.inbound_config["advertise_routes"]) != "" do %>
+                          <span class="font-mono bg-base-200 px-1.5 py-0.5 rounded-[4px] border border-base-300 text-xs">
+                            {pair.inbound_config["advertise_routes"]}
+                          </span>
+                        <% else %>
+                          <span class="text-base-content/40 italic">None</span>
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4">
+                        <%= if pair.inbound_config["advertise_connector"] == true or pair.inbound_config["advertise_connector"] == "true" do %>
+                          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                            Active
+                          </span>
+                        <% else %>
+                          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-base-300/35 text-base-content/55">
+                            <span class="h-1.5 w-1.5 rounded-full bg-base-content/35"></span>
+                            Disabled
+                          </span>
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4 font-mono text-[11px] text-base-content/70">
+                        <%= if pair.inbound_config["advertise_connector"] == true or pair.inbound_config["advertise_connector"] == "true" do %>
+                          {pair.inbound_config["advertise_connector_tag"] || ("tag:connector-" <> String.replace(pair.id, "_", "-"))}
+                        <% else %>
+                          -
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4 max-w-xs truncate font-mono text-[11px] text-base-content/70" title={pair.inbound_config["advertise_connector_domains"]}>
+                        <%= if (pair.inbound_config["advertise_connector"] == true or pair.inbound_config["advertise_connector"] == "true") && pair.inbound_config["advertise_connector_domains"] && String.trim(pair.inbound_config["advertise_connector_domains"]) != "" do %>
+                          {pair.inbound_config["advertise_connector_domains"]}
+                        <% else %>
+                          -
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4">
+                        <div class="flex items-center justify-center gap-2 text-[10px] font-mono">
+                          <span class={[
+                            "px-1.5 py-0.5 rounded-[4px] font-semibold uppercase tracking-wider text-[9px]",
+                            pair.wg_status == :running && "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20",
+                            pair.wg_status == :starting && "bg-amber-500/10 text-amber-500 border border-amber-500/20",
+                            pair.wg_status == :stopped && "bg-base-300/40 text-base-content/60 border border-base-300"
+                          ]}>
+                            WG: {pair.wg_status}
+                          </span>
+                          <span class={[
+                            "px-1.5 py-0.5 rounded-[4px] font-semibold uppercase tracking-wider text-[9px]",
+                            pair.ts_status == :running && "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20",
+                            pair.ts_status == :starting && "bg-amber-500/10 text-amber-500 border border-amber-500/20",
+                            pair.ts_status == :stopped && "bg-base-300/40 text-base-content/60 border border-base-300"
+                          ]}>
+                            TS: {pair.ts_status}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  <% end %>
+                <% end %>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

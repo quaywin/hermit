@@ -56,6 +56,7 @@ defmodule HermitWeb.InboundDetailLive do
          |> assign(dns_ip: dns_ip)
          |> assign(dns_error: dns_error)
          |> assign(custom_rule_action: "block")
+         |> assign(vpn_pairs: [])
          |> assign(editing_inbound_form: to_form(changeset))
          |> stream(:dns_logs, recent_logs, reset: true)}
     end
@@ -66,7 +67,40 @@ defmodule HermitWeb.InboundDetailLive do
     active_tab =
       case Map.get(params, "tab", "config") do
         "dns" when socket.assigns.profile.type == "tailscale" -> :dns
+        "routing" when socket.assigns.profile.type == "tailscale" -> :routing
         _ -> :config
+      end
+
+    socket =
+      if active_tab == :routing do
+        vpn_pairs =
+          from(p in Hermit.Vpn.VpnPair,
+            where: p.inbound_profile_id == ^socket.assigns.profile.id
+          )
+          |> Hermit.Repo.all()
+          |> Hermit.Repo.preload(:inbound_profile)
+          |> Enum.map(fn pair ->
+            case Hermit.Vpn.PairWorker.get_state(pair.pair_id) do
+              {:error, _} ->
+                %{
+                  id: pair.pair_id,
+                  wg_status: String.to_atom(pair.wg_status || "stopped"),
+                  ts_status: String.to_atom(pair.ts_status || "stopped"),
+                  inbound_config: (pair.inbound_profile && pair.inbound_profile.config) || %{}
+                }
+              worker_state ->
+                %{
+                  id: worker_state.id,
+                  wg_status: worker_state.wg_status,
+                  ts_status: worker_state.ts_status,
+                  inbound_config: worker_state.inbound_config || %{}
+                }
+            end
+          end)
+
+        assign(socket, vpn_pairs: vpn_pairs)
+      else
+        socket
       end
 
     {:noreply, assign(socket, active_tab: active_tab)}

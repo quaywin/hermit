@@ -50,13 +50,8 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
             Map.get(config, "use_tailscale_dns") == "true" or
             Map.get(config, :use_tailscale_dns) == true
 
-        dns_enabled = Map.get(config, :dns_enabled) == true
-
         dns_servers =
           cond do
-            dns_enabled ->
-              ["127.0.0.1"]
-
             use_tailscale_dns ->
               ["100.100.100.100"]
 

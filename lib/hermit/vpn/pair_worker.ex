@@ -627,12 +627,10 @@ defmodule Hermit.Vpn.PairWorker do
           {:noreply, updated_state}
 
         :ok ->
-          outbound_config_with_dns = Map.put(state.outbound_config || %{}, :dns_enabled, false)
-
           case state.outbound_module.bootstrap(
                  state.id,
                  state.storage_dir,
-                 outbound_config_with_dns
+                 state.outbound_config || %{}
                ) do
             {:ok, iface} ->
               updated_state = %{

@@ -223,7 +223,8 @@ defmodule Hermit.Dns.Packet do
 
   defp parse_ips_from_rrs(rest, count, acc) do
     case skip_name(rest) do
-      {:ok, <<type::16, _class::16, _ttl::32, rd_len::16, rd_data::binary-size(rd_len), next::binary>>} ->
+      {:ok,
+       <<type::16, _class::16, _ttl::32, rd_len::16, rd_data::binary-size(rd_len), next::binary>>} ->
         new_acc =
           case {type, rd_data} do
             {1, <<a, b, c, d>>} ->

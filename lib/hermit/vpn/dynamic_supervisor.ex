@@ -18,14 +18,59 @@ defmodule Hermit.Vpn.DynamicSupervisor do
 
     Logger.info("DynamicSupervisor: starting VPN pair child for ID: #{pair_id}")
 
-    vpn_pair = %Hermit.Vpn.VpnPair{
-      pair_id: pair_id,
-      inbound_profile_id: inbound_profile_id,
-      outbound_profile_id: outbound_profile_id,
-      status: "running",
-      wg_status: "starting",
-      ts_status: "starting"
-    }
+    inbound_profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, inbound_profile_id)
+    outbound_profile = Hermit.Repo.get(Hermit.Vpn.OutboundProfile, outbound_profile_id)
+
+    inbound_config = (inbound_profile && inbound_profile.config) || %{}
+    inbound_type = (inbound_profile && inbound_profile.type) || "tailscale"
+
+    outbound_config = (outbound_profile && outbound_profile.config) || %{}
+    outbound_type = (outbound_profile && outbound_profile.type) || "wireguard"
+
+    existing_pair = Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id)
+
+    vpn_pair =
+      if existing_pair do
+        pair_inbound_config =
+          if existing_pair.inbound_config && map_size(existing_pair.inbound_config) > 0 do
+            existing_pair.inbound_config
+          else
+            inbound_config
+          end
+
+        pair_outbound_config =
+          if existing_pair.outbound_config && map_size(existing_pair.outbound_config) > 0 do
+            existing_pair.outbound_config
+          else
+            outbound_config
+          end
+
+        %{
+          existing_pair
+          | inbound_profile_id: inbound_profile_id,
+            outbound_profile_id: outbound_profile_id,
+            inbound_type: existing_pair.inbound_type || inbound_type,
+            inbound_config: pair_inbound_config,
+            outbound_type: existing_pair.outbound_type || outbound_type,
+            outbound_config: pair_outbound_config,
+            status: "running",
+            wg_status: "starting",
+            ts_status: "starting"
+        }
+      else
+        %Hermit.Vpn.VpnPair{
+          pair_id: pair_id,
+          inbound_profile_id: inbound_profile_id,
+          outbound_profile_id: outbound_profile_id,
+          inbound_type: inbound_type,
+          inbound_config: inbound_config,
+          outbound_type: outbound_type,
+          outbound_config: outbound_config,
+          status: "running",
+          wg_status: "starting",
+          ts_status: "starting"
+        }
+      end
 
     worker_args = %{
       id: pair_id,

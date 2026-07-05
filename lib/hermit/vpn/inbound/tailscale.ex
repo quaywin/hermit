@@ -124,6 +124,45 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               ts_up_args ++ ["--advertise-routes="]
             end
 
+          if advertise_connector do
+            tag = get_connector_tag(pair_id, config)
+
+            domains_str =
+              Map.get(config, "advertise_connector_domains") ||
+                Map.get(config, :advertise_connector_domains) || ""
+
+            domains =
+              String.split(domains_str, [",", "\n"])
+              |> Enum.map(&String.trim/1)
+              |> Enum.reject(&(&1 == ""))
+
+            api_key =
+              Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
+                Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+            tailnet =
+              Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+                Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+            if api_key != "" and tailnet != "" do
+              Logger.info(
+                "Pre-updating Tailscale App Connector ACL for domains: #{inspect(domains)}"
+              )
+
+              case do_update_app_connector_acl(api_key, tailnet, tag, domains) do
+                {:ok, _} ->
+                  Logger.info("Tailscale ACL pre-updated successfully.")
+
+                {:error, reason} ->
+                  Logger.warning("Failed to pre-update Tailscale ACL: #{inspect(reason)}")
+              end
+            else
+              Logger.warning(
+                "Tailscale API credentials not configured. Skipping pre-update of ACL."
+              )
+            end
+          end
+
           case run_cmd("ip", ts_up_args) do
             {:ok, _} ->
               dns_resolvers = Map.get(config, "dns_resolvers") || Map.get(config, :dns_resolvers)
@@ -277,29 +316,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               end
             end
 
-            if advertise_connector do
-              tag = get_connector_tag(pair_id, config)
-
-              domains_str =
-                Map.get(config, "advertise_connector_domains") ||
-                  Map.get(config, :advertise_connector_domains) || ""
-
-              domains =
-                String.split(domains_str, [",", "\n"])
-                |> Enum.map(&String.trim/1)
-                |> Enum.reject(&(&1 == ""))
-
-              if domains != [] do
-                case update_app_connector_acl(pair_id, tag, domains) do
-                  {:ok, _} ->
-                    Logger.info("Tailscale ACL updated successfully for app connector.")
-
-                  {:error, reason} ->
-                    Logger.warning("Failed to auto-update Tailscale ACL: #{inspect(reason)}")
-                end
-              end
-            end
-
             {:ok, :updated}
 
           {:error, reason} ->
@@ -405,17 +421,20 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               {output, 0} ->
                 case Jason.decode(output) do
                   {:ok, data} ->
-                    self_node = Map.get(data, "Self", %{})
-                    ips = Map.get(self_node, "TailscaleIPs", [])
-                    backend_state = Map.get(data, "BackendState", "Unknown")
+                    self_node = Map.get(data, "Self")
+                    self_node = if is_map(self_node), do: self_node, else: %{}
+                    ips = Map.get(self_node, "TailscaleIPs") || []
+                    backend_state = Map.get(data, "BackendState") || "Unknown"
 
-                    user_id = Map.get(self_node, "UserID", 0)
-                    users = Map.get(data, "User", %{})
-                    user_info = Map.get(users, to_string(user_id), %{})
-                    user_login = Map.get(user_info, "LoginName", "Unknown")
+                    user_id = Map.get(self_node, "UserID") || 0
+                    users = Map.get(data, "User")
+                    users = if is_map(users), do: users, else: %{}
+                    user_info = Map.get(users, to_string(user_id))
+                    user_info = if is_map(user_info), do: user_info, else: %{}
+                    user_login = Map.get(user_info, "LoginName") || "Unknown"
 
-                    dns_name = Map.get(self_node, "DNSName", "")
-                    exit_node = Map.get(self_node, "ExitNode", false)
+                    dns_name = Map.get(self_node, "DNSName") || ""
+                    exit_node = Map.get(self_node, "ExitNode") || false
 
                     %{
                       ts_ips: ips,
@@ -455,7 +474,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   def approve_exit_node(pair_id) do
     cond do
       mock?() ->
-        Logger.info("Mock: Approving Tailscale exit node for #{pair_id}")
+        Logger.info("Mock: Approving Tailscale routes/connector for #{pair_id}")
         {:ok, :approved}
 
       true ->
@@ -465,40 +484,84 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             p -> Hermit.Repo.preload(p, :inbound_profile)
           end
 
-        config = (pair && pair.inbound_profile && pair.inbound_profile.config) || %{}
+        config = get_inbound_config(pair)
 
-        advertise_exit_node =
-          case Map.get(config, "advertise_exit_node") do
-            false -> false
-            "false" -> false
-            nil -> true
-            _ -> true
-          end
+        api_key =
+          Map.get(config, "ts_api_key") ||
+            (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
 
-        advertise_routes = Map.get(config, "advertise_routes") || ""
+        tailnet =
+          Map.get(config, "ts_tailnet") ||
+            (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
 
-        # Only call do_approve_exit_node if the node is actually advertising routes!
-        if advertise_exit_node or clean_routes(advertise_routes) != "" do
-          api_key =
-            Map.get(config, "ts_api_key") || Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+        if api_key == "" or tailnet == "" do
+          Logger.warning(
+            "Tailscale API credentials not configured. Skipping auto-approval and connector ACL updates."
+          )
 
-          tailnet =
-            Map.get(config, "ts_tailnet") || Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
-
-          if api_key == "" or tailnet == "" do
-            Logger.warning(
-              "Tailscale API credentials not configured. Skipping auto-approval of routes."
-            )
-
-            {:error, :missing_credentials}
-          else
-            expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
-            Logger.info("Starting Tailscale routes approval for #{expected_hostname}")
-            do_approve_exit_node(api_key, tailnet, expected_hostname, 5)
-          end
+          {:error, :missing_credentials}
         else
-          Logger.info("Node #{pair_id} is not advertising any routes. Skipping auto-approval.")
-          {:ok, :skipped}
+          # 1. Handle Routes approval (Exit node or Subnets)
+          advertise_exit_node =
+            case Map.get(config, "advertise_exit_node") do
+              false -> false
+              "false" -> false
+              nil -> true
+              _ -> true
+            end
+
+          advertise_routes = Map.get(config, "advertise_routes") || ""
+
+          routes_res =
+            if advertise_exit_node or clean_routes(advertise_routes) != "" do
+              expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
+              Logger.info("Starting Tailscale routes approval for #{expected_hostname}")
+              do_approve_exit_node(api_key, tailnet, expected_hostname, 5)
+            else
+              Logger.info(
+                "Node #{pair_id} is not advertising any routes. Skipping routes approval."
+              )
+
+              {:ok, :skipped}
+            end
+
+          # 2. Handle App Connector ACL update
+          advertise_connector =
+            case Map.get(config, "advertise_connector") do
+              true -> true
+              "true" -> true
+              _ -> false
+            end
+
+          tag = get_connector_tag(pair_id, config)
+
+          domains =
+            if advertise_connector do
+              domains_str =
+                Map.get(config, "advertise_connector_domains") ||
+                  Map.get(config, :advertise_connector_domains) || ""
+
+              String.split(domains_str, [",", "\n"])
+              |> Enum.map(&String.trim/1)
+              |> Enum.reject(&(&1 == ""))
+            else
+              []
+            end
+
+          Logger.info(
+            "Updating Tailscale App Connector ACL for domains: #{inspect(domains)} (tag: #{tag})"
+          )
+
+          connector_res = do_update_app_connector_acl(api_key, tailnet, tag, domains)
+
+          case {routes_res, connector_res} do
+            {{:error, r_err}, {:error, c_err}} -> {:error, {:multiple_errors, r_err, c_err}}
+            {{:error, r_err}, _} -> {:error, {:routes_error, r_err}}
+            {_, {:error, c_err}} -> {:error, {:connector_error, c_err}}
+            _ -> {:ok, :approved}
+          end
         end
     end
   end
@@ -604,7 +667,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           dns_servers =
             if dns_mode == "default" do
-              ["100.100.100.100"]
+              ["100.100.100.100", "1.1.1.1", "8.8.8.8"]
             else
               String.split(dns_resolvers_str, [",", "\n"])
               |> Enum.map(&String.trim/1)
@@ -638,10 +701,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   def update_app_connector_acl(pair_id, tag, domains) when is_list(domains) do
     cond do
       mock?() ->
-        Logger.info(
-          "Mock: Updating Tailscale ACL for #{pair_id} tag #{tag} with domains #{inspect(domains)}"
-        )
-
+        Logger.info("Mock: Updating Tailscale App Connector ACL for tag #{tag}")
         {:ok, :updated}
 
       true ->
@@ -651,12 +711,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             p -> Hermit.Repo.preload(p, :inbound_profile)
           end
 
+        config = get_inbound_config(pair)
+
         api_key =
-          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
+          Map.get(config, "ts_api_key") ||
+            (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
             Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
 
         tailnet =
-          (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
+          Map.get(config, "ts_tailnet") ||
+            (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
             Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
 
         if api_key == "" or tailnet == "" do
@@ -673,6 +737,129 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               Logger.error("Exception raised during Tailscale ACL update: #{inspect(e)}")
               {:error, {:exception, e}}
           end
+        end
+    end
+  end
+
+  @doc """
+  Queries and parses the tailscale app connectors list directly from the ACL.
+  """
+  def get_app_connectors(profile) do
+    api_key =
+      profile.config["ts_api_key"] || Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+    tailnet =
+      profile.config["ts_tailnet"] || Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+    cond do
+      mock?() ->
+        docker_config = Application.get_env(:hermit, :docker, [])
+        connectors = Keyword.get(docker_config, :mock_app_connectors, [])
+        {:ok, connectors}
+
+      api_key == "" or tailnet == "" ->
+        {:error, :missing_credentials}
+
+      true ->
+        acl_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/acl"
+
+        case Req.get(acl_url,
+               auth: {:basic, "#{api_key}:"},
+               headers: [{"accept", "application/json"}],
+               receive_timeout: 4000
+             ) do
+          {:ok, %{status: 200, body: acl}} ->
+            wrapped? = Map.has_key?(acl, "acl")
+
+            acl_map_result =
+              if wrapped? do
+                acl_str = Map.get(acl, "acl")
+                clean_str = clean_hujson(acl_str)
+
+                case Jason.decode(clean_str) do
+                  {:ok, parsed} -> {:ok, parsed}
+                  {:error, _} -> {:error, :hujson_parse_failed}
+                end
+              else
+                {:ok, acl}
+              end
+
+            case acl_map_result do
+              {:ok, acl_map} ->
+                node_attrs = Map.get(acl_map, "nodeAttrs", [])
+
+                star_attr =
+                  Enum.find(node_attrs, fn attr ->
+                    targets = Map.get(attr, "target", [])
+                    "*" in targets or targets == ["*"]
+                  end)
+
+                connectors =
+                  if star_attr do
+                    app = Map.get(star_attr, "app", %{})
+                    Map.get(app, "tailscale.com/app-connectors", [])
+                  else
+                    []
+                  end
+
+                {:ok, connectors}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+
+          {:ok, %{status: status, body: body}} ->
+            {:error, {:acl_fetch_failed, status, body}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  Updates the Tailscale ACL for a given tag/domains directly using Profile credentials.
+  """
+  def update_profile_connector_acl(profile, tag, domains) do
+    api_key =
+      profile.config["ts_api_key"] || Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+    tailnet =
+      profile.config["ts_tailnet"] || Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+    cond do
+      mock?() ->
+        Logger.info("Mock: Updating Tailscale ACL for profile tag #{tag}")
+        docker_config = Application.get_env(:hermit, :docker, [])
+        mock_connectors = Keyword.get(docker_config, :mock_app_connectors, [])
+
+        updated_mock_connectors =
+          Enum.map(mock_connectors, fn conn ->
+            if tag in Map.get(conn, "connectors", []) or tag == conn["name"] do
+              Map.put(conn, "domains", domains)
+            else
+              conn
+            end
+          end)
+
+        Application.put_env(
+          :hermit,
+          :docker,
+          Keyword.put(docker_config, :mock_app_connectors, updated_mock_connectors)
+        )
+
+        {:ok, :updated}
+
+      api_key == "" or tailnet == "" ->
+        {:error, :missing_credentials}
+
+      true ->
+        try do
+          do_update_app_connector_acl(api_key, tailnet, tag, domains)
+        rescue
+          e ->
+            Logger.error("Exception raised during Tailscale ACL update: #{inspect(e)}")
+            {:error, {:exception, e}}
         end
     end
   end
@@ -824,42 +1011,78 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
       updated_connectors_list =
         if Enum.any?(connectors_list, fn conn -> tag in Map.get(conn, "connectors", []) end) do
-          Enum.map(connectors_list, fn conn ->
-            if tag in Map.get(conn, "connectors", []) do
-              Map.put(conn, "domains", domains)
-            else
-              conn
-            end
-          end)
+          if domains == [] do
+            Enum.reject(connectors_list, fn conn -> tag in Map.get(conn, "connectors", []) end)
+          else
+            Enum.map(connectors_list, fn conn ->
+              if tag in Map.get(conn, "connectors", []) do
+                Map.put(conn, "domains", domains)
+              else
+                conn
+              end
+            end)
+          end
         else
-          new_connector = %{
-            "name" => connector_name,
-            "connectors" => [tag],
-            "domains" => domains
-          }
-
-          connectors_list ++ [new_connector]
-        end
-
-      updated_app = Map.put(app, "tailscale.com/app-connectors", updated_connectors_list)
-      updated_attr = Map.put(attr, "app", updated_app)
-      List.replace_at(node_attrs, target_star_index, updated_attr)
-    else
-      new_attr = %{
-        "target" => ["*"],
-        "app" => %{
-          "tailscale.com/app-connectors" => [
-            %{
+          if domains == [] do
+            connectors_list
+          else
+            new_connector = %{
               "name" => connector_name,
               "connectors" => [tag],
               "domains" => domains
             }
-          ]
-        }
-      }
 
-      node_attrs ++ [new_attr]
+            connectors_list ++ [new_connector]
+          end
+        end
+
+      updated_connectors_list = cleanup_other_connectors(updated_connectors_list, tag, domains)
+      updated_app = Map.put(app, "tailscale.com/app-connectors", updated_connectors_list)
+      updated_attr = Map.put(attr, "app", updated_app)
+      List.replace_at(node_attrs, target_star_index, updated_attr)
+    else
+      if domains == [] do
+        node_attrs
+      else
+        new_attr = %{
+          "target" => ["*"],
+          "app" => %{
+            "tailscale.com/app-connectors" => [
+              %{
+                "name" => connector_name,
+                "connectors" => [tag],
+                "domains" => domains
+              }
+            ]
+          }
+        }
+
+        node_attrs ++ [new_attr]
+      end
     end
+  end
+
+  defp cleanup_other_connectors(connectors, _current_tag, []), do: connectors
+
+  defp cleanup_other_connectors(connectors, current_tag, domains) do
+    domains_down = Enum.map(domains, &String.downcase/1)
+
+    connectors
+    |> Enum.map(fn conn ->
+      if current_tag not in Map.get(conn, "connectors", []) do
+        existing_domains = Map.get(conn, "domains", [])
+
+        updated_domains =
+          Enum.reject(existing_domains, fn d -> String.downcase(d) in domains_down end)
+
+        Map.put(conn, "domains", updated_domains)
+      else
+        conn
+      end
+    end)
+    |> Enum.reject(fn conn ->
+      Map.get(conn, "domains", []) == [] and current_tag not in Map.get(conn, "connectors", [])
+    end)
   end
 
   defp update_grants(grants, tag) do
@@ -1032,10 +1255,40 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   defp get_connector_tag(pair_id, config) do
     tag =
       Map.get(config, "advertise_connector_tag") ||
-        Map.get(config, :advertise_connector_tag) ||
-        "tag:connector-#{String.replace(pair_id, "_", "-")}"
+        Map.get(config, :advertise_connector_tag)
 
-    if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
+    default_tag = "tag:connector-#{String.replace(pair_id, "_", "-")}"
+
+    resolved_tag =
+      if is_binary(tag) and String.trim(tag) != "" do
+        tag = String.trim(tag)
+        normalized_id = String.replace(pair_id, "_", "-")
+
+        case Regex.run(~r/^tag:connector-(.+)$/, tag) do
+          [_, other_id] when other_id != normalized_id ->
+            default_tag
+
+          _ ->
+            tag
+        end
+      else
+        default_tag
+      end
+
+    if String.starts_with?(resolved_tag, "tag:"), do: resolved_tag, else: "tag:#{resolved_tag}"
+  end
+
+  defp get_inbound_config(pair) do
+    cond do
+      pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
+        pair.inbound_config
+
+      pair && pair.inbound_profile ->
+        pair.inbound_profile.config || %{}
+
+      true ->
+        %{}
+    end
   end
 
   defp clean_routes(nil), do: ""

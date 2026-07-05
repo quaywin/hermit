@@ -69,6 +69,7 @@ defmodule Hermit.Dns.Server do
         Logger.warning(
           "Failed to start Elixir DNS Server for profile #{profile_id} on port #{port}: #{inspect(reason)}. Will retry..."
         )
+
         {:error, reason, state}
     end
   end
@@ -292,7 +293,9 @@ defmodule Hermit.Dns.Server do
 
           :error ->
             # Split routing based on domain
-            target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
+            target_upstreams =
+              select_upstreams_for_domain(query.domain, upstreams)
+
             active_upstream = state.active_upstream
             server_pid = self()
 
@@ -526,12 +529,18 @@ defmodule Hermit.Dns.Server do
                   {:ok, resp_packet, duration}
 
                 other ->
-                  Logger.warning("DNS Server: UDP query response from upstream #{inspect(upstream)} failed: #{inspect(other)}")
+                  Logger.warning(
+                    "DNS Server: UDP query response from upstream #{inspect(upstream)} failed: #{inspect(other)}"
+                  )
+
                   {:error, {:recv_error, other}}
               end
 
             other ->
-              Logger.warning("DNS Server: UDP send to upstream #{inspect(upstream)} failed: #{inspect(other)}")
+              Logger.warning(
+                "DNS Server: UDP send to upstream #{inspect(upstream)} failed: #{inspect(other)}"
+              )
+
               {:error, {:send_error, other}}
           end
         after
@@ -539,7 +548,10 @@ defmodule Hermit.Dns.Server do
         end
 
       other ->
-        Logger.error("DNS Server: UDP socket creation to query upstream #{inspect(upstream)} failed: #{inspect(other)}")
+        Logger.error(
+          "DNS Server: UDP socket creation to query upstream #{inspect(upstream)} failed: #{inspect(other)}"
+        )
+
         {:error, {:socket_error, other}}
     end
   end

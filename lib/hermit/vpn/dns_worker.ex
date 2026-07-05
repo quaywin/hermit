@@ -284,94 +284,95 @@ defmodule Hermit.Vpn.DnsWorker do
            {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
            {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
            {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "mtu", "1400"]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "mtu", "1400"]),
-          {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
-          {:ok, _} <-
-            run_cmd("ip", [
-              "netns",
-              "exec",
-              ns,
-              "sysctl",
-              "-w",
-              "net.ipv4.ip_forward=1"
-            ]),
-         {:ok, _} <-
-           run_cmd("ip", [
-             "netns",
-             "exec",
-             ns,
-             "sysctl",
-             "-w",
-             "net.ipv6.conf.all.forwarding=1"
-           ]),
-         {:ok, _} <-
-           run_cmd("ip", [
-             "netns",
-             "exec",
-             ns,
-             "sysctl",
-             "-w",
-             "net.ipv4.conf.all.rp_filter=0"
-           ]),
-         {:ok, _} <-
-           run_cmd("ip", [
-             "netns",
-             "exec",
-             ns,
-             "sysctl",
-             "-w",
-             "net.ipv4.conf.default.rp_filter=0"
-           ]),
-         {:ok, _} <-
-           run_cmd("ip", [
-             "netns",
-             "exec",
-             ns,
-             "sysctl",
-             "-w",
-             "net.ipv4.conf.eth0.rp_filter=0"
-           ]),
-         {:ok, _} <-
-           run_cmd("sysctl", [
-             "-w",
-             "net.ipv4.conf.#{host_if}.rp_filter=0"
-           ]),
-         {:ok, _} <-
-           run_cmd("ip", [
-             "netns",
-             "exec",
-             ns,
-             "ip",
-             "route",
-             "add",
-             "default",
-             "via",
-             host_ip,
-             "dev",
-             "eth0"
-           ]),
-          # NAT routing on Host
-          {:ok, _} <-
-            run_cmd("iptables", [
-              "-t",
-              "nat",
-              "-I",
-              "POSTROUTING",
-              "-s",
-              subnet,
-              "-j",
-              "MASQUERADE"
-            ]),
-          {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
-          {:ok, _} <-
-            run_cmd("iptables", [
-              "-I",
-              "FORWARD",
-              "-d",
-              subnet,
-              "-j",
-              "ACCEPT"
-            ]),
+           {:ok, _} <-
+             run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "mtu", "1400"]),
+           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "sysctl",
+               "-w",
+               "net.ipv4.ip_forward=1"
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "sysctl",
+               "-w",
+               "net.ipv6.conf.all.forwarding=1"
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "sysctl",
+               "-w",
+               "net.ipv4.conf.all.rp_filter=0"
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "sysctl",
+               "-w",
+               "net.ipv4.conf.default.rp_filter=0"
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "sysctl",
+               "-w",
+               "net.ipv4.conf.eth0.rp_filter=0"
+             ]),
+           {:ok, _} <-
+             run_cmd("sysctl", [
+               "-w",
+               "net.ipv4.conf.#{host_if}.rp_filter=0"
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "ip",
+               "route",
+               "add",
+               "default",
+               "via",
+               host_ip,
+               "dev",
+               "eth0"
+             ]),
+           # NAT routing on Host
+           {:ok, _} <-
+             run_cmd("iptables", [
+               "-t",
+               "nat",
+               "-I",
+               "POSTROUTING",
+               "-s",
+               subnet,
+               "-j",
+               "MASQUERADE"
+             ]),
+           {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
+           {:ok, _} <-
+             run_cmd("iptables", [
+               "-I",
+               "FORWARD",
+               "-d",
+               subnet,
+               "-j",
+               "ACCEPT"
+             ]),
            # DNAT port redirection inside namespace
            {:ok, _} <-
              run_cmd("ip", [
@@ -392,45 +393,54 @@ defmodule Hermit.Vpn.DnsWorker do
                "--to-destination",
                "#{host_ip}:#{port}"
              ]),
-          {:ok, _} <-
-            run_cmd("ip", [
-              "netns",
-              "exec",
-              ns,
-              "iptables",
-              "-t",
-              "nat",
-              "-A",
-              "PREROUTING",
-              "-p",
-              "tcp",
-              "--dport",
-              "53",
-              "-j",
-              "DNAT",
-              "--to-destination",
-              "#{host_ip}:#{port}"
-            ]),
-          # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
-          {:ok, _} <-
-            run_cmd("ip", [
-              "netns",
-              "exec",
-              ns,
-              "iptables",
-              "-I",
-              "FORWARD",
-              "1",
-              "-j",
-              "ACCEPT"
-            ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "iptables",
+               "-t",
+               "nat",
+               "-A",
+               "PREROUTING",
+               "-p",
+               "tcp",
+               "--dport",
+               "53",
+               "-j",
+               "DNAT",
+               "--to-destination",
+               "#{host_ip}:#{port}"
+             ]),
+           # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
+           {:ok, _} <-
+             run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "iptables",
+               "-I",
+               "FORWARD",
+               "1",
+               "-j",
+               "ACCEPT"
+             ]),
 
-          # Source policy routing on host (replacing global route)
-          {:ok, _} <-
-            run_cmd("ip", ["rule", "add", "from", host_ip, "to", "100.64.0.0/10", "table", to_string(table_id)]),
-          {:ok, _} <-
-            run_cmd("ip", [
-              "route",
+           # Source policy routing on host (replacing global route)
+           {:ok, _} <-
+             run_cmd("ip", [
+               "rule",
+               "add",
+               "from",
+               host_ip,
+               "to",
+               "100.64.0.0/10",
+               "table",
+               to_string(table_id)
+             ]),
+           {:ok, _} <-
+             run_cmd("ip", [
+               "route",
                "add",
                "default",
                "via",
@@ -585,7 +595,17 @@ defmodule Hermit.Vpn.DnsWorker do
     # Clean up netns DNS config directory
     File.rm_rf("/etc/netns/#{ns}")
 
-    System.cmd("ip", ["rule", "delete", "from", host_ip, "to", "100.64.0.0/10", "table", to_string(table_id)])
+    System.cmd("ip", [
+      "rule",
+      "delete",
+      "from",
+      host_ip,
+      "to",
+      "100.64.0.0/10",
+      "table",
+      to_string(table_id)
+    ])
+
     System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
 
     System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
@@ -679,6 +699,7 @@ defmodule Hermit.Vpn.DnsWorker do
     host_nameservers =
       Enum.filter(lines, fn line ->
         trimmed = String.trim(line)
+
         if String.starts_with?(trimmed, "nameserver ") do
           ip = String.replace(trimmed, "nameserver ", "") |> String.trim()
           # Exclude loopback (127.*), link-local (169.254.*), and tailscale IP

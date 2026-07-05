@@ -112,40 +112,26 @@ defmodule Hermit.Vpn.PairWorker do
 
           {:error, changeset}
         else
-          if pair.outbound_profile_id do
-            case Hermit.Repo.get(Hermit.Vpn.OutboundProfile, pair.outbound_profile_id) do
-              nil ->
-                {:error, :profile_not_found}
+          outbound_config = pair.outbound_config || %{}
+          updated_outbound_config = Map.put(outbound_config, "wg_config", new_wg_config)
 
-              profile ->
-                new_config = Map.put(profile.config || %{}, "wg_config", new_wg_config)
+          case pair
+               |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: updated_outbound_config})
+               |> Hermit.Repo.update() do
+            {:ok, _} ->
+              case GenServer.whereis(via_tuple(id)) do
+                nil ->
+                  case ensure_worker_running(id) do
+                    {:ok, pid} -> GenServer.call(pid, {:update_wg_config, new_wg_config})
+                    _ -> {:ok, :updated_offline}
+                  end
 
-                case profile
-                     |> Hermit.Vpn.OutboundProfile.changeset(%{config: new_config})
-                     |> Hermit.Repo.update() do
-                  {:ok, _} ->
-                    case GenServer.whereis(via_tuple(id)) do
-                      nil ->
-                        case ensure_worker_running(id) do
-                          {:ok, pid} -> GenServer.call(pid, {:update_wg_config, new_wg_config})
-                          _ -> {:ok, :updated_offline}
-                        end
+                pid ->
+                  GenServer.call(pid, {:update_wg_config, new_wg_config})
+              end
 
-                      pid ->
-                        GenServer.call(pid, {:update_wg_config, new_wg_config})
-                    end
-
-                  {:error, _changeset} ->
-                    pair_changeset =
-                      pair
-                      |> Hermit.Vpn.VpnPair.changeset(%{wg_config: new_wg_config})
-                      |> Ecto.Changeset.add_error(:wg_config, "is invalid")
-
-                    {:error, pair_changeset}
-                end
-            end
-          else
-            {:error, :no_outbound_profile}
+            {:error, changeset} ->
+              {:error, changeset}
           end
         end
     end
@@ -157,36 +143,28 @@ defmodule Hermit.Vpn.PairWorker do
         {:error, :not_found}
 
       pair ->
-        if pair.inbound_profile_id do
-          case Hermit.Repo.get(Hermit.Vpn.InboundProfile, pair.inbound_profile_id) do
-            nil ->
-              {:error, :profile_not_found}
+        case pair
+             |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: new_config})
+             |> Hermit.Repo.update() do
+          {:ok, updated_pair} ->
+            deduplicate_domains(id, updated_pair.inbound_config, pair.inbound_profile_id)
 
-            profile ->
-              case profile
-                   |> Hermit.Vpn.InboundProfile.changeset(%{config: new_config})
-                   |> Hermit.Repo.update() do
-                {:ok, updated_profile} ->
-                  case GenServer.whereis(via_tuple(id)) do
-                    nil ->
-                      case ensure_worker_running(id) do
-                        {:ok, pid} ->
-                          GenServer.call(pid, {:update_inbound_config, updated_profile.config})
+            case GenServer.whereis(via_tuple(id)) do
+              nil ->
+                case ensure_worker_running(id) do
+                  {:ok, pid} ->
+                    GenServer.call(pid, {:update_inbound_config, updated_pair.inbound_config})
 
-                        _ ->
-                          {:ok, :updated_offline}
-                      end
+                  _ ->
+                    {:ok, :updated_offline}
+                end
 
-                    pid ->
-                      GenServer.call(pid, {:update_inbound_config, updated_profile.config})
-                  end
+              pid ->
+                GenServer.call(pid, {:update_inbound_config, updated_pair.inbound_config})
+            end
 
-                {:error, changeset} ->
-                  {:error, changeset}
-              end
-          end
-        else
-          {:error, :no_inbound_profile}
+          {:error, changeset} ->
+            {:error, changeset}
         end
     end
   end
@@ -197,36 +175,33 @@ defmodule Hermit.Vpn.PairWorker do
         {:error, :not_found}
 
       pair ->
-        if pair.outbound_profile_id do
-          case Hermit.Repo.get(Hermit.Vpn.OutboundProfile, pair.outbound_profile_id) do
-            nil ->
-              {:error, :profile_not_found}
+        case pair
+             |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: new_config})
+             |> Hermit.Repo.update() do
+          {:ok, updated_pair} ->
+            # Extracted WireGuard config string from outbound_config
+            wg_cfg =
+              Map.get(updated_pair.outbound_config, "wg_config") ||
+                Map.get(updated_pair.outbound_config, :wg_config) || ""
 
-            profile ->
-              case profile
-                   |> Hermit.Vpn.OutboundProfile.changeset(%{config: new_config})
-                   |> Hermit.Repo.update() do
-                {:ok, updated_profile} ->
-                  case GenServer.whereis(via_tuple(id)) do
-                    nil ->
-                      case ensure_worker_running(id) do
-                        {:ok, pid} ->
-                          GenServer.call(pid, {:update_outbound_config, updated_profile.config})
+            case GenServer.whereis(via_tuple(id)) do
+              nil ->
+                case ensure_worker_running(id) do
+                  {:ok, pid} ->
+                    GenServer.call(pid, {:update_wg_config, wg_cfg})
+                    GenServer.call(pid, {:update_outbound_config, updated_pair.outbound_config})
 
-                        _ ->
-                          {:ok, :updated_offline}
-                      end
+                  _ ->
+                    {:ok, :updated_offline}
+                end
 
-                    pid ->
-                      GenServer.call(pid, {:update_outbound_config, updated_profile.config})
-                  end
+              pid ->
+                GenServer.call(pid, {:update_wg_config, wg_cfg})
+                GenServer.call(pid, {:update_outbound_config, updated_pair.outbound_config})
+            end
 
-                {:error, changeset} ->
-                  {:error, changeset}
-              end
-          end
-        else
-          {:error, :no_outbound_profile}
+          {:error, changeset} ->
+            {:error, changeset}
         end
     end
   end
@@ -279,17 +254,29 @@ defmodule Hermit.Vpn.PairWorker do
           pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
 
           {inbound_type, inbound_config} =
-            if pair && pair.inbound_profile do
-              {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
-            else
-              {"tailscale", %{}}
+            cond do
+              pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
+                sanitized = sanitize_inbound_config(id, pair.inbound_config)
+                {pair.inbound_type || "tailscale", sanitized}
+
+              pair && pair.inbound_profile ->
+                sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
+                {pair.inbound_profile.type, sanitized}
+
+              true ->
+                {"tailscale", %{}}
             end
 
           {outbound_type, outbound_config} =
-            if pair && pair.outbound_profile do
-              {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
-            else
-              {"wireguard", %{}}
+            cond do
+              pair && pair.outbound_config && map_size(pair.outbound_config) > 0 ->
+                {pair.outbound_type || "wireguard", pair.outbound_config}
+
+              pair && pair.outbound_profile ->
+                {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+
+              true ->
+                {"wireguard", %{}}
             end
 
           inbound_mod =
@@ -350,17 +337,27 @@ defmodule Hermit.Vpn.PairWorker do
               pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
 
               {inbound_type, inbound_config} =
-                if pair && pair.inbound_profile do
-                  {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
-                else
-                  {"tailscale", %{}}
+                cond do
+                  pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
+                    {pair.inbound_type || "tailscale", pair.inbound_config}
+
+                  pair && pair.inbound_profile ->
+                    {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
+
+                  true ->
+                    {"tailscale", %{}}
                 end
 
               {outbound_type, outbound_config} =
-                if pair && pair.outbound_profile do
-                  {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
-                else
-                  {"wireguard", %{}}
+                cond do
+                  pair && pair.outbound_config && map_size(pair.outbound_config) > 0 ->
+                    {pair.outbound_type || "wireguard", pair.outbound_config}
+
+                  pair && pair.outbound_profile ->
+                    {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+
+                  true ->
+                    {"wireguard", %{}}
                 end
 
               inbound_mod =
@@ -475,17 +472,32 @@ defmodule Hermit.Vpn.PairWorker do
             pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
 
             {inbound_type, inbound_config} =
-              if pair.inbound_profile do
-                {pair.inbound_profile.type, pair.inbound_profile.config || %{}}
-              else
-                {pair.inbound_type || "tailscale", pair.inbound_config || %{}}
+              cond do
+                pair.inbound_config && map_size(pair.inbound_config) > 0 ->
+                  sanitized = sanitize_inbound_config(id, pair.inbound_config)
+                  {pair.inbound_type || "tailscale", sanitized}
+
+                pair.inbound_profile ->
+                  sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
+                  save_inbound_config_db(pair, sanitized)
+                  {pair.inbound_profile.type, sanitized}
+
+                true ->
+                  {"tailscale", %{}}
               end
 
             {outbound_type, outbound_config} =
-              if pair.outbound_profile do
-                {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
-              else
-                {pair.outbound_type || "wireguard", pair.outbound_config || %{}}
+              cond do
+                pair.outbound_config && map_size(pair.outbound_config) > 0 ->
+                  {pair.outbound_type || "wireguard", pair.outbound_config}
+
+                pair.outbound_profile ->
+                  cfg = pair.outbound_profile.config || %{}
+                  save_outbound_config_db(pair, cfg)
+                  {pair.outbound_profile.type, cfg}
+
+                true ->
+                  {"wireguard", %{}}
               end
 
             {
@@ -850,10 +862,29 @@ defmodule Hermit.Vpn.PairWorker do
       updated_state = broadcast_update(updated_state)
 
       if updated_state.wg_status in [:running, :starting] do
+        if state.ts_port do
+          stop_inbound_process(state.ts_port)
+        end
+
+        state.inbound_module.cleanup(state.id, state.storage_dir)
         state.outbound_module.cleanup(state.id, state.storage_dir)
 
+        new_ts_status =
+          if updated_state.ts_status in [:running, :starting] do
+            :starting
+          else
+            updated_state.ts_status
+          end
+
         restarted_state =
-          %{updated_state | wg_status: :starting, wg_error_reason: nil}
+          %{
+            updated_state
+            | wg_status: :starting,
+              ts_status: new_ts_status,
+              ts_port: nil,
+              wg_error_reason: nil,
+              ts_error_reason: nil
+          }
           |> cancel_metrics_poll()
 
         restarted_state = broadcast_update(restarted_state)
@@ -899,10 +930,29 @@ defmodule Hermit.Vpn.PairWorker do
       updated_state = broadcast_update(updated_state)
 
       if updated_state.wg_status in [:running, :starting] do
+        if state.ts_port do
+          stop_inbound_process(state.ts_port)
+        end
+
+        state.inbound_module.cleanup(state.id, state.storage_dir)
         state.outbound_module.cleanup(state.id, state.storage_dir)
 
+        new_ts_status =
+          if updated_state.ts_status in [:running, :starting] do
+            :starting
+          else
+            updated_state.ts_status
+          end
+
         restarted_state =
-          %{updated_state | wg_status: :starting, wg_error_reason: nil}
+          %{
+            updated_state
+            | wg_status: :starting,
+              ts_status: new_ts_status,
+              ts_port: nil,
+              wg_error_reason: nil,
+              ts_error_reason: nil
+          }
           |> cancel_metrics_poll()
 
         restarted_state = broadcast_update(restarted_state)
@@ -923,6 +973,13 @@ defmodule Hermit.Vpn.PairWorker do
         error_state = broadcast_update(error_state)
         {:reply, {:error, Exception.message(e)}, error_state}
     end
+  end
+
+  @impl true
+  def handle_call({:set_inbound_config, new_config}, _from, state) do
+    updated_state = %{state | inbound_config: new_config}
+    updated_state = broadcast_update(updated_state)
+    {:reply, {:ok, updated_state}, updated_state}
   end
 
   @impl true
@@ -1550,4 +1607,137 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp has_inbound_info?(_metrics, _module), do: false
+
+  defp sanitize_inbound_config(pair_id, config) when is_map(config) do
+    string_config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
+    tag = Map.get(string_config, "advertise_connector_tag")
+    normalized_id = String.replace(pair_id, "_", "-")
+    default_tag = "tag:connector-#{normalized_id}"
+
+    resolved_tag =
+      if is_binary(tag) and String.trim(tag) != "" do
+        tag = String.trim(tag)
+
+        case Regex.run(~r/^tag:connector-(.+)$/, tag) do
+          [_, other_id] when other_id != normalized_id ->
+            default_tag
+
+          _ ->
+            tag
+        end
+      else
+        default_tag
+      end
+
+    put_config_value(config, "advertise_connector_tag", resolved_tag)
+  end
+
+  defp sanitize_inbound_config(_pair_id, config), do: config
+
+  defp put_config_value(config, key, value) do
+    cond do
+      Map.has_key?(config, key) -> Map.put(config, key, value)
+      Map.has_key?(config, String.to_atom(key)) -> Map.put(config, String.to_atom(key), value)
+      true -> Map.put(config, key, value)
+    end
+  end
+
+  defp save_inbound_config_db(pair, config) do
+    pair
+    |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: config})
+    |> Hermit.Repo.update()
+  rescue
+    _ -> :ok
+  end
+
+  defp save_outbound_config_db(pair, config) do
+    pair
+    |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: config})
+    |> Hermit.Repo.update()
+  rescue
+    _ -> :ok
+  end
+
+  defp deduplicate_domains(id, new_config, profile_id) do
+    advertise_connector =
+      case Map.get(new_config, "advertise_connector") || Map.get(new_config, :advertise_connector) do
+        true -> true
+        "true" -> true
+        _ -> false
+      end
+
+    new_domains = if advertise_connector, do: clean_connector_domains(new_config), else: []
+
+    if advertise_connector and new_domains != [] do
+      new_domains_down = Enum.map(new_domains, &String.downcase/1)
+
+      import Ecto.Query
+
+      other_pairs =
+        Hermit.Repo.all(
+          from(p in Hermit.Vpn.VpnPair,
+            where: p.pair_id != ^id and p.inbound_profile_id == ^profile_id
+          )
+        )
+
+      Enum.each(other_pairs, fn other_pair ->
+        other_config = other_pair.inbound_config || %{}
+
+        other_domains_str =
+          Map.get(other_config, "advertise_connector_domains") ||
+            Map.get(other_config, :advertise_connector_domains) || ""
+
+        other_advertise =
+          case Map.get(other_config, "advertise_connector") ||
+                 Map.get(other_config, :advertise_connector) do
+            true -> true
+            "true" -> true
+            _ -> false
+          end
+
+        if other_advertise and other_domains_str != "" do
+          other_domains_list =
+            other_domains_str
+            |> String.split([",", "\n"])
+            |> Enum.map(&String.trim/1)
+            |> Enum.reject(&(&1 == ""))
+
+          updated_domains_list =
+            Enum.reject(other_domains_list, fn d -> String.downcase(d) in new_domains_down end)
+
+          if length(other_domains_list) != length(updated_domains_list) do
+            updated_domains_str = Enum.join(updated_domains_list, "\n")
+
+            updated_other_config =
+              other_config
+              |> Map.put("advertise_connector_domains", updated_domains_str)
+
+            other_pair
+            |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: updated_other_config})
+            |> Hermit.Repo.update!()
+
+            case GenServer.whereis(via_tuple(other_pair.pair_id)) do
+              nil -> :ok
+              pid -> GenServer.call(pid, {:set_inbound_config, updated_other_config})
+            end
+          end
+        end
+      end)
+    end
+  end
+
+  defp clean_connector_domains(config) do
+    domains_str =
+      Map.get(config, "advertise_connector_domains") ||
+        Map.get(config, :advertise_connector_domains) || ""
+
+    if is_binary(domains_str) do
+      domains_str
+      |> String.split([",", "\n"])
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+    else
+      []
+    end
+  end
 end

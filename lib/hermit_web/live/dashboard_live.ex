@@ -211,6 +211,7 @@ defmodule HermitWeb.DashboardLive do
       # Stop DNS components if running
       if profile.type == "tailscale" do
         dns_config = Hermit.Vpn.DnsConfig.get_for_profile(profile.id)
+
         if dns_config.tailscale_override_dns do
           Task.start(fn -> Hermit.Vpn.DnsWorker.clear_tailscale_dns_config(dns_config) end)
         end

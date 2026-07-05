@@ -306,7 +306,8 @@ defmodule HermitWeb.InboundDetailLiveTest do
       })
 
     # Set override to true
-    {:ok, _config} = Hermit.Vpn.DnsConfig.update_for_profile(inbound_profile.id, %{tailscale_override_dns: true})
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_profile(inbound_profile.id, %{tailscale_override_dns: true})
 
     {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=config")
     assert html =~ "Delete Profile"
@@ -316,5 +317,55 @@ defmodule HermitWeb.InboundDetailLiveTest do
 
     # Verify profile is deleted
     assert Hermit.Repo.get(Hermit.Vpn.InboundProfile, inbound_profile.id) == nil
+  end
+
+  test "renders external connectors in routing overview and supports direct domain deletion", %{
+    conn: conn
+  } do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "external_routing_test",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-ext-123"}
+      })
+
+    mock_connectors = [
+      %{
+        "name" => "hermit-connector-external-node",
+        "connectors" => ["tag:connector-external-node"],
+        "domains" => ["external.com", "other-external.com"]
+      }
+    ]
+
+    docker_env = Application.get_env(:hermit, :docker, [])
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      Keyword.put(docker_env, :mock_app_connectors, mock_connectors)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, docker_env)
+    end)
+
+    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=routing")
+
+    assert html =~ "Tailscale Routing Overview"
+    assert html =~ "tag:connector-external-node"
+    assert html =~ "Tailscale External"
+    assert html =~ "external.com"
+    assert html =~ "other-external.com"
+
+    html =
+      view
+      |> element(
+        "button[phx-click=delete_domain][phx-value-pair-id=\"tag:connector-external-node\"][phx-value-domain=\"external.com\"]"
+      )
+      |> render_click()
+
+    assert html =~ "Domain external.com removed from external node tag:connector-external-node"
+    refute html =~ "phx-value-domain=\"external.com\""
+    assert html =~ "phx-value-domain=\"other-external.com\""
   end
 end

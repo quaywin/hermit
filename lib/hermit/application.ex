@@ -8,6 +8,7 @@ defmodule Hermit.Application do
   @impl true
   def start(_type, _args) do
     enable_host_ip_forwarding()
+
     children = [
       Hermit.Repo,
       {Phoenix.PubSub, name: Hermit.PubSub},
@@ -130,6 +131,7 @@ defmodule Hermit.Application do
   defp enable_host_ip_forwarding do
     if :os.type() == {:unix, :linux} and not mock?() do
       IO.puts("Ensuring IP forwarding is enabled on the host...")
+
       try do
         System.cmd("sysctl", ["-w", "net.ipv4.ip_forward=1"])
         System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"])
@@ -147,10 +149,23 @@ defmodule Hermit.Application do
         ensure_iptables_rule(["INPUT", "-i", "vh_+", "-j", "ACCEPT"])
 
         # Clamp TCP MSS to path MTU to prevent MTU issues in cloud environments like GCP/AWS
-        ensure_iptables_rule("mangle", ["FORWARD", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"])
+        ensure_iptables_rule("mangle", [
+          "FORWARD",
+          "-p",
+          "tcp",
+          "--tcp-flags",
+          "SYN,RST",
+          "SYN",
+          "-j",
+          "TCPMSS",
+          "--clamp-mss-to-pmtu"
+        ])
       rescue
         e ->
-          IO.inspect(e, label: "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)")
+          IO.inspect(e,
+            label:
+              "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)"
+          )
       end
     end
   end

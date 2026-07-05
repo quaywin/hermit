@@ -675,7 +675,10 @@
               <tbody class="divide-y divide-base-200 text-base-content/80">
                 <%= if Enum.empty?(@vpn_pairs) do %>
                   <tr>
-                    <td colspan="7" class="py-8 text-center text-base-content/50 font-medium italic">
+                    <td
+                      colspan="7"
+                      class="py-8 text-center text-base-content/50 font-medium italic"
+                    >
                       No active tunnels are using this inbound profile.
                     </td>
                   </tr>
@@ -683,27 +686,46 @@
                   <%= for pair <- @vpn_pairs do %>
                     <tr class="hover:bg-base-200/20 transition-colors">
                       <td class="py-3 px-4 font-mono font-semibold">
-                        <.link navigate={~p"/tunnels/#{pair.id}"} class="text-[#3ecf8e] hover:underline">
-                          {pair.id}
-                        </.link>
-                      </td>
-                      <td class="py-3 px-4 font-mono text-base-content/70">
-                        hermit-node-{String.replace(pair.id, "_", "-")}
-                      </td>
-                      <td class="py-3 px-4">
-                        <%= if pair.inbound_config["advertise_routes"] && String.trim(pair.inbound_config["advertise_routes"]) != "" do %>
-                          <span class="font-mono bg-base-200 px-1.5 py-0.5 rounded-[4px] border border-base-300 text-xs">
-                            {pair.inbound_config["advertise_routes"]}
+                        <%= if Map.get(pair, :is_external, false) do %>
+                          <span
+                            class="text-base-content/65 font-semibold text-[11px]"
+                            title="External node configured in Tailscale ACL"
+                          >
+                            {pair.id}
                           </span>
                         <% else %>
-                          <span class="text-base-content/40 italic">None</span>
+                          <.link
+                            navigate={~p"/tunnels/#{pair.id}"}
+                            class="text-[#3ecf8e] hover:underline"
+                          >
+                            {pair.id}
+                          </.link>
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4 font-mono text-base-content/70">
+                        <%= if Map.get(pair, :is_external, false) do %>
+                          <span class="text-base-content/40 italic">External</span>
+                        <% else %>
+                          hermit-node-{String.replace(pair.id, "_", "-")}
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4">
+                        <%= if Map.get(pair, :is_external, false) do %>
+                          <span class="text-base-content/30 italic">-</span>
+                        <% else %>
+                          <%= if pair.inbound_config["advertise_routes"] && String.trim(pair.inbound_config["advertise_routes"]) != "" do %>
+                            <span class="font-mono bg-base-200 px-1.5 py-0.5 rounded-[4px] border border-base-300 text-xs">
+                              {pair.inbound_config["advertise_routes"]}
+                            </span>
+                          <% else %>
+                            <span class="text-base-content/40 italic">None</span>
+                          <% end %>
                         <% end %>
                       </td>
                       <td class="py-3 px-4">
                         <%= if pair.inbound_config["advertise_connector"] == true or pair.inbound_config["advertise_connector"] == "true" do %>
                           <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                            Active
+                            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Active
                           </span>
                         <% else %>
                           <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-base-300/35 text-base-content/55">
@@ -714,37 +736,68 @@
                       </td>
                       <td class="py-3 px-4 font-mono text-[11px] text-base-content/70">
                         <%= if pair.inbound_config["advertise_connector"] == true or pair.inbound_config["advertise_connector"] == "true" do %>
-                          {pair.inbound_config["advertise_connector_tag"] || ("tag:connector-" <> String.replace(pair.id, "_", "-"))}
+                          {pair.inbound_config["advertise_connector_tag"] ||
+                            "tag:connector-" <> String.replace(pair.id, "_", "-")}
                         <% else %>
                           -
                         <% end %>
                       </td>
-                      <td class="py-3 px-4 max-w-xs truncate font-mono text-[11px] text-base-content/70" title={pair.inbound_config["advertise_connector_domains"]}>
+                      <td class="py-3 px-4 max-w-sm text-base-content/80">
                         <%= if (pair.inbound_config["advertise_connector"] == true or pair.inbound_config["advertise_connector"] == "true") && pair.inbound_config["advertise_connector_domains"] && String.trim(pair.inbound_config["advertise_connector_domains"]) != "" do %>
-                          {pair.inbound_config["advertise_connector_domains"]}
+                          <div class="flex flex-wrap gap-1">
+                            <%= for domain <- parse_domains(pair.inbound_config["advertise_connector_domains"]) do %>
+                              <span class="inline-flex items-center gap-1 bg-base-200 text-base-content/95 px-2 py-0.5 rounded-[4px] border border-base-300 font-mono text-[10px] shadow-sm hover:border-base-content/20 transition-all">
+                                {domain}
+                                <button
+                                  type="button"
+                                  phx-click="delete_domain"
+                                  phx-value-pair-id={pair.id}
+                                  phx-value-domain={domain}
+                                  class="text-base-content/30 hover:text-error transition-colors ml-0.5 font-bold"
+                                  title={"Delete #{domain}"}
+                                >
+                                  &times;
+                                </button>
+                              </span>
+                            <% end %>
+                          </div>
                         <% else %>
-                          -
+                          <span class="text-base-content/40 italic">-</span>
                         <% end %>
                       </td>
                       <td class="py-3 px-4">
-                        <div class="flex items-center justify-center gap-2 text-[10px] font-mono">
-                          <span class={[
-                            "px-1.5 py-0.5 rounded-[4px] font-semibold uppercase tracking-wider text-[9px]",
-                            pair.wg_status == :running && "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20",
-                            pair.wg_status == :starting && "bg-amber-500/10 text-amber-500 border border-amber-500/20",
-                            pair.wg_status == :stopped && "bg-base-300/40 text-base-content/60 border border-base-300"
-                          ]}>
-                            WG: {pair.wg_status}
-                          </span>
-                          <span class={[
-                            "px-1.5 py-0.5 rounded-[4px] font-semibold uppercase tracking-wider text-[9px]",
-                            pair.ts_status == :running && "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20",
-                            pair.ts_status == :starting && "bg-amber-500/10 text-amber-500 border border-amber-500/20",
-                            pair.ts_status == :stopped && "bg-base-300/40 text-base-content/60 border border-base-300"
-                          ]}>
-                            TS: {pair.ts_status}
-                          </span>
-                        </div>
+                        <%= if Map.get(pair, :is_external, false) do %>
+                          <div class="flex items-center justify-center">
+                            <span class="px-2 py-0.5 rounded-[4px] font-bold uppercase tracking-wider text-[9px] bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                              Tailscale External
+                            </span>
+                          </div>
+                        <% else %>
+                          <div class="flex items-center justify-center gap-2 text-[10px] font-mono">
+                            <span class={[
+                              "px-1.5 py-0.5 rounded-[4px] font-semibold uppercase tracking-wider text-[9px]",
+                              pair.wg_status == :running &&
+                                "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20",
+                              pair.wg_status == :starting &&
+                                "bg-amber-500/10 text-amber-500 border border-amber-500/20",
+                              pair.wg_status == :stopped &&
+                                "bg-base-300/40 text-base-content/60 border border-base-300"
+                            ]}>
+                              WG: {pair.wg_status}
+                            </span>
+                            <span class={[
+                              "px-1.5 py-0.5 rounded-[4px] font-semibold uppercase tracking-wider text-[9px]",
+                              pair.ts_status == :running &&
+                                "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20",
+                              pair.ts_status == :starting &&
+                                "bg-amber-500/10 text-amber-500 border border-amber-500/20",
+                              pair.ts_status == :stopped &&
+                                "bg-base-300/40 text-base-content/60 border border-base-300"
+                            ]}>
+                              TS: {pair.ts_status}
+                            </span>
+                          </div>
+                        <% end %>
                       </td>
                     </tr>
                   <% end %>

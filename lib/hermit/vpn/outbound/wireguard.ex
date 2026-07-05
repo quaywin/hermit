@@ -14,6 +14,12 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         Map.get(config, :wg_config) || Map.get(config, "wg_config") || ""
       end
 
+    endpoint_host =
+      case Regex.run(~r/^\s*Endpoint\s*=\s*(\[[^\]]+\]|[^:\s]+)\s*:\s*\d+/mi, config_content) do
+        [_, host] -> host
+        _ -> nil
+      end
+
     cond do
       err = get_mock_error() ->
         {:error, err}
@@ -21,6 +27,9 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
       mock?() ->
         Logger.info("Mock: Creating WireGuard tunnel #{wg_name} with storage #{storage_dir}")
         {:ok, "wg0"}
+
+      endpoint_host != nil and not ip_address?(endpoint_host) ->
+        {:error, "Temporary failure in name resolution: #{endpoint_host}"}
 
       true ->
         Logger.info("Creating local netns: #{wg_name}")
@@ -576,6 +585,19 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
       _ ->
         false
+    end
+  end
+
+  defp ip_address?(host) do
+    clean_host =
+      host
+      |> String.trim_leading("[")
+      |> String.trim_trailing("]")
+      |> String.to_charlist()
+
+    case :inet.parse_address(clean_host) do
+      {:ok, _} -> true
+      _ -> false
     end
   end
 

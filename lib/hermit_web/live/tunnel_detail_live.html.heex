@@ -331,7 +331,8 @@
                           type="text"
                           name="connector_tag"
                           value={
-                            @pair.inbound_config["advertise_connector_tag"] || ("tag:connector-" <> String.replace(@id, "_", "-"))
+                            @pair.inbound_config["advertise_connector_tag"] ||
+                              "tag:connector-" <> String.replace(@id, "_", "-")
                           }
                           class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1"
                           placeholder="e.g., tag:connector"

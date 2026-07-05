@@ -164,31 +164,31 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "-j",
                    "MASQUERADE"
                  ]),
-             {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
-             {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
-             {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
-             {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
-             {:ok, _} <-
-               run_cmd("iptables", [
-                 "-t",
-                 "nat",
-                  "-I",
-                  "POSTROUTING",
-                  "-s",
-                  subnet,
-                  "-j",
-                  "MASQUERADE"
-                ]),
-              {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
-              {:ok, _} <-
-                run_cmd("iptables", [
-                  "-I",
-                  "FORWARD",
-                  "-d",
-                  subnet,
-                  "-j",
-                  "ACCEPT"
-                ]) do
+               {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
+               {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
+               {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
+               {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
+               {:ok, _} <-
+                 run_cmd("iptables", [
+                   "-t",
+                   "nat",
+                   "-I",
+                   "POSTROUTING",
+                   "-s",
+                   subnet,
+                   "-j",
+                   "MASQUERADE"
+                 ]),
+               {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
+               {:ok, _} <-
+                 run_cmd("iptables", [
+                   "-I",
+                   "FORWARD",
+                   "-d",
+                   subnet,
+                   "-j",
+                   "ACCEPT"
+                 ]) do
             # Setup network namespace DNS
             dns_servers =
               (Map.get(config, "dns_servers") || Map.get(config, :dns_servers) || [])
@@ -202,11 +202,19 @@ defmodule Hermit.Vpn.Outbound.Local do
             else
               if File.exists?("/etc/resolv.conf") do
                 File.mkdir_p!(netns_dns_dir)
+
                 case File.read("/etc/resolv.conf") do
                   {:ok, resolv_content} ->
-                    File.write!(Path.join(netns_dns_dir, "resolv.conf"), build_resolv_conf(resolv_content))
+                    File.write!(
+                      Path.join(netns_dns_dir, "resolv.conf"),
+                      build_resolv_conf(resolv_content)
+                    )
+
                   _ ->
-                    File.write!(Path.join(netns_dns_dir, "resolv.conf"), "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+                    File.write!(
+                      Path.join(netns_dns_dir, "resolv.conf"),
+                      "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+                    )
                 end
               end
             end
@@ -473,6 +481,7 @@ defmodule Hermit.Vpn.Outbound.Local do
     host_nameservers =
       Enum.filter(lines, fn line ->
         trimmed = String.trim(line)
+
         if String.starts_with?(trimmed, "nameserver ") do
           ip = String.replace(trimmed, "nameserver ", "") |> String.trim()
           # Exclude loopback (127.*), link-local (169.254.*), and tailscale IP

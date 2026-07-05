@@ -1,0 +1,21 @@
+*** Begin Patch
+*** Update File: lib/hermit/dns/server.ex
+  @impl true
+  def init(opts) do
+    port = opts[:port]
+    profile_id = opts[:profile_id]
+
+-    Phoenix.PubSub.subscribe(Hermit.PubSub, "vpn_pairs")
+-
+-    connector_domains = fetch_connector_domains(profile_id)
+-
+     state = %{
+       socket: nil,
+       port: port,
+       profile_id: profile_id,
+       upstreams_map: %{},
+-      active_upstream: nil,
+-      connector_domains: connector_domains
++      active_upstream: nil
+     }
+*** End Patch

@@ -161,7 +161,9 @@ defmodule Hermit.Dns.ServerCacheTest do
 
       {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
       query_id = <<0x77, 0x77>>
-      query_packet = query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
+
+      query_packet =
+        query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
 
       :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, port, query_packet)
 

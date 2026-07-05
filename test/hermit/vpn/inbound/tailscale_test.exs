@@ -123,6 +123,45 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       [conn] = attr["app"]["tailscale.com/app-connectors"]
       assert conn["domains"] == domains
     end
+
+    test "removes duplicate domains from other connectors" do
+      acl_map = %{
+        "nodeAttrs" => [
+          %{
+            "target" => ["*"],
+            "app" => %{
+              "tailscale.com/app-connectors" => [
+                %{
+                  "name" => "hermit-connector-other",
+                  "connectors" => ["tag:connector-other"],
+                  "domains" => ["duplicate.com", "keep-this.com"]
+                },
+                %{
+                  "name" => "hermit-connector-current",
+                  "connectors" => ["tag:connector-current"],
+                  "domains" => ["old.com"]
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      tag = "tag:connector-current"
+      domains = ["duplicate.com", "new.com"]
+
+      updated = Tailscale.update_acl_for_app_connector(acl_map, tag, domains)
+      [attr] = updated["nodeAttrs"]
+      connectors = attr["app"]["tailscale.com/app-connectors"]
+
+      # Find current connector
+      current_conn = Enum.find(connectors, &("tag:connector-current" in &1["connectors"]))
+      assert current_conn["domains"] == ["duplicate.com", "new.com"]
+
+      # Find other connector
+      other_conn = Enum.find(connectors, &("tag:connector-other" in &1["connectors"]))
+      assert other_conn["domains"] == ["keep-this.com"]
+    end
   end
 
   describe "update_dns_settings_local/3" do

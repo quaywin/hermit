@@ -189,7 +189,7 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     {:ok, pid} = PairWorker.start_link(args)
     # Wait for bootstrap to complete and transition to running
-    Process.sleep(300)
+    wait_until_status(pid, :running)
 
     state = GenServer.call(pid, :get_state)
     assert state.status == :running
@@ -208,7 +208,7 @@ defmodule Hermit.Vpn.PairWorkerTest do
     assert state.ts_error_reason =~ "Tailscale daemon exited unexpectedly"
 
     # Wait for recovery (5 seconds cooldown + some buffer)
-    Process.sleep(5200)
+    wait_until_status(pid, :running, 300)
 
     # State should be running again!
     state = GenServer.call(pid, :get_state)
@@ -267,7 +267,7 @@ defmodule Hermit.Vpn.PairWorkerTest do
     _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
 
     {:ok, pid} = PairWorker.start_link(args)
-    Process.sleep(300)
+    wait_until_status(pid, :running)
 
     state = GenServer.call(pid, :get_state)
     assert state.status == :running
@@ -286,7 +286,7 @@ defmodule Hermit.Vpn.PairWorkerTest do
     assert state.wg_error_reason =~ "WireGuard namespace went down unexpectedly"
 
     # Wait for recovery (5 seconds cooldown + some buffer)
-    Process.sleep(5200)
+    wait_until_status(pid, :running, 300)
 
     # State should be running again!
     state = GenServer.call(pid, :get_state)
@@ -337,11 +337,7 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     # Check database was updated
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_pair")
-
-    updated_profile =
-      Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, updated_pair.outbound_profile_id)
-
-    assert updated_profile.config["wg_config"] == new_config
+    assert updated_pair.outbound_config["wg_config"] == new_config
 
     # Check memory state of running worker
     state = GenServer.call(pid, :get_state)
@@ -349,6 +345,84 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     # Check file on disk was updated
     assert File.read!(state.wg_config_path) =~ "PrivateKey = newpkey"
+
+    GenServer.stop(pid)
+  end
+
+  test "updates WireGuard configuration dynamically when running and restarts both components" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+    end)
+
+    args = %{
+      id: "test_pair_dynamic_run",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    # Wait for bootstrap to complete and transition to running
+    wait_until_status(pid, :running)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.status == :running
+    assert state.wg_status == :running
+    assert state.ts_status == :running
+    assert is_port(state.ts_port)
+
+    # Now update WG config
+    new_config = "[Interface]\nPrivateKey = newpkey\nAddress = 10.0.0.3/24\n"
+
+    assert {:ok, restarted_state} =
+             PairWorker.update_wg_config("test_pair_dynamic_run", new_config)
+
+    # Check status transitioned to starting during restart
+    assert restarted_state.wg_status == :starting
+    assert restarted_state.ts_status == :starting
+    assert is_nil(restarted_state.ts_port)
+
+    # Wait for both to bootstrap and run again
+    wait_until_status(pid, :running)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.status == :running
+    assert state.wg_status == :running
+    assert state.ts_status == :running
+    assert is_port(state.ts_port)
 
     GenServer.stop(pid)
   end
@@ -400,11 +474,10 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     # Check database was updated
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_pair")
-    updated_profile = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, updated_pair.inbound_profile_id)
-    assert updated_profile.config["ts_auth_key"] == "tskey-new"
-    assert updated_profile.config["advertise_exit_node"] == false
-    assert updated_profile.config["advertise_connector"] == true
-    assert updated_profile.config["advertise_routes"] == "192.168.1.0/24"
+    assert updated_pair.inbound_config["ts_auth_key"] == "tskey-new"
+    assert updated_pair.inbound_config["advertise_exit_node"] == false
+    assert updated_pair.inbound_config["advertise_connector"] == true
+    assert updated_pair.inbound_config["advertise_routes"] == "192.168.1.0/24"
 
     # Check memory state of running worker
     state = GenServer.call(pid, :get_state)
@@ -778,5 +851,88 @@ defmodule Hermit.Vpn.PairWorkerTest do
     assert is_pid(state.ts_port)
 
     assert GenServer.stop(pid) == :ok
+  end
+
+  test "automatically deduplicates connector domains across pairs sharing the same profile" do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "dedup_profile",
+        type: "tailscale",
+        config: %{}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "dedup_outbound",
+        type: "wireguard",
+        config: %{"wg_config" => "[Interface]\nPrivateKey = wgpkey\n"}
+      })
+
+    pair1 = %Hermit.Vpn.VpnPair{
+      pair_id: "pair_one",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      inbound_config: %{
+        "advertise_connector" => true,
+        "advertise_connector_domains" => "duplicate.com\nkeep-one.com"
+      }
+    }
+
+    Hermit.Repo.insert!(pair1, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    pair2 = %Hermit.Vpn.VpnPair{
+      pair_id: "pair_two",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "running",
+      inbound_config: %{
+        "advertise_connector" => true,
+        "advertise_connector_domains" => "original.com"
+      }
+    }
+
+    Hermit.Repo.insert!(pair2, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid1} =
+      PairWorker.start_link(%{
+        id: "pair_one",
+        wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+        ts_auth_key: "tskey-1"
+      })
+
+    Process.sleep(200)
+
+    new_inbound_config = %{
+      "advertise_connector" => true,
+      "advertise_connector_domains" => "duplicate.com\noriginal.com\nnew-domain.com"
+    }
+
+    assert {:ok, _} = PairWorker.update_inbound_config("pair_two", new_inbound_config)
+
+    updated_pair1 = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "pair_one")
+    assert updated_pair1.inbound_config["advertise_connector_domains"] == "keep-one.com"
+
+    state1 = GenServer.call(pid1, :get_state)
+    assert state1.inbound_config["advertise_connector_domains"] == "keep-one.com"
+
+    GenServer.stop(pid1)
+  end
+
+  defp wait_until_status(pid, target_status, attempts \\ 300)
+
+  defp wait_until_status(_pid, target_status, 0) do
+    flunk("Timed out waiting for status #{inspect(target_status)}")
+  end
+
+  defp wait_until_status(pid, target_status, attempts) do
+    state = GenServer.call(pid, :get_state)
+
+    if state.status == target_status do
+      :ok
+    else
+      Process.sleep(20)
+      wait_until_status(pid, target_status, attempts - 1)
+    end
   end
 end

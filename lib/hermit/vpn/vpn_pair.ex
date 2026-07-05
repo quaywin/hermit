@@ -9,6 +9,11 @@ defmodule Hermit.Vpn.VpnPair do
 
     field(:wg_config, :string, virtual: true)
 
+    field(:inbound_type, :string, default: "tailscale")
+    field(:inbound_config, :map, default: %{})
+    field(:outbound_type, :string, default: "wireguard")
+    field(:outbound_config, :map, default: %{})
+
     field(:status, :string, default: "running")
     field(:wg_status, :string, default: "stopped")
     field(:ts_status, :string, default: "stopped")
@@ -25,6 +30,10 @@ defmodule Hermit.Vpn.VpnPair do
       :pair_id,
       :inbound_profile_id,
       :outbound_profile_id,
+      :inbound_type,
+      :inbound_config,
+      :outbound_type,
+      :outbound_config,
       :wg_config,
       :status,
       :wg_status,

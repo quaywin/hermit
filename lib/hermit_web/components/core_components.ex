@@ -50,7 +50,11 @@ defmodule HermitWeb.CoreComponents do
   attr :flash, :map, default: %{}, doc: "the map of flash messages to display"
   attr :title, :string, default: nil
   attr :kind, :atom, values: [:info, :error], doc: "used for styling and flash lookup"
-  attr :close_after, :any, default: nil, doc: "time in milliseconds to automatically close the flash"
+
+  attr :close_after, :any,
+    default: nil,
+    doc: "time in milliseconds to automatically close the flash"
+
   attr :rest, :global, doc: "the arbitrary HTML attributes to add to the flash container"
 
   slot :inner_block, doc: "the optional inner block that renders the flash message"

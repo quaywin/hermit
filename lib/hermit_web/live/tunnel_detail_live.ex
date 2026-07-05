@@ -206,6 +206,15 @@ defmodule HermitWeb.TunnelDetailLive do
     new_val = not current_val
     new_config = Map.put(inbound_config, "advertise_connector", new_val)
 
+    new_config =
+      if new_val && (is_nil(Map.get(new_config, "advertise_connector_tag")) || String.trim(Map.get(new_config, "advertise_connector_tag")) == "") do
+        default_tag = "tag:connector-#{String.replace(id, "_", "-")}"
+        Map.put(new_config, "advertise_connector_tag", default_tag)
+      else
+        new_config
+      end
+
+
     case PairWorker.update_inbound_config(id, new_config) do
       {:ok, updated_pair} ->
         {:noreply,

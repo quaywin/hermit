@@ -42,7 +42,21 @@ const Hooks = {
     },
     startTimer() {
       this.clearTimer();
-      if (this.el.id && this.el.id.startsWith("flash-")) {
+      const closeAfterAttr = this.el.getAttribute("data-close-after");
+      let closeAfter = null;
+
+      if (closeAfterAttr !== null) {
+        if (closeAfterAttr !== "false" && closeAfterAttr !== "") {
+          const parsed = parseInt(closeAfterAttr, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            closeAfter = parsed;
+          }
+        }
+      } else if (this.el.id && this.el.id.startsWith("flash-")) {
+        closeAfter = 5000;
+      }
+
+      if (closeAfter !== null) {
         this.timer = setTimeout(() => {
           const phxClick = this.el.getAttribute("phx-click");
           if (phxClick) {
@@ -50,7 +64,7 @@ const Hooks = {
           } else {
             this.el.click();
           }
-        }, 5000);
+        }, closeAfter);
       }
     },
     clearTimer() {

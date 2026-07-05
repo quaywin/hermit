@@ -111,7 +111,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           ts_up_args =
             if advertise_connector do
-              ts_up_args ++ ["--advertise-connector"]
+              tag = get_connector_tag(pair_id, config)
+              ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
             else
               ts_up_args ++ ["--advertise-connector=false"]
             end
@@ -231,7 +232,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
         ts_up_args =
           if advertise_connector do
-            ts_up_args ++ ["--advertise-connector"]
+            tag = get_connector_tag(pair_id, config)
+            ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
           else
             ts_up_args ++ ["--advertise-connector=false"]
           end
@@ -276,9 +278,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             end
 
             if advertise_connector do
-              tag =
-                Map.get(config, "advertise_connector_tag") ||
-                  Map.get(config, :advertise_connector_tag) || "tag:connector"
+              tag = get_connector_tag(pair_id, config)
 
               domains_str =
                 Map.get(config, "advertise_connector_domains") ||
@@ -1027,6 +1027,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       _ ->
         false
     end
+  end
+
+  defp get_connector_tag(pair_id, config) do
+    tag =
+      Map.get(config, "advertise_connector_tag") ||
+        Map.get(config, :advertise_connector_tag) ||
+        "tag:connector-#{String.replace(pair_id, "_", "-")}"
+
+    if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
   end
 
   defp clean_routes(nil), do: ""

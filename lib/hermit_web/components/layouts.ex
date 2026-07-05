@@ -74,8 +74,8 @@ defmodule HermitWeb.Layouts do
   def flash_group(assigns) do
     ~H"""
     <div id={@id} aria-live="polite">
-      <.flash kind={:info} flash={@flash} />
-      <.flash kind={:error} flash={@flash} />
+      <.flash kind={:info} flash={@flash} close_after={5000} />
+      <.flash kind={:error} flash={@flash} close_after={5000} />
 
       <.flash
         id="client-error"

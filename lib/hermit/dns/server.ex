@@ -429,25 +429,69 @@ defmodule Hermit.Dns.Server do
           error -> error
         end
 
-      _multiple ->
-        tasks =
-          Enum.map(sorted, fn upstream ->
-            Task.async(fn ->
-              case query_upstream(upstream, packet) do
-                {:ok, resp_packet, duration} -> {:ok, resp_packet, upstream, duration}
-                error -> error
-              end
-            end)
+      [primary | fallbacks] ->
+        primary_task =
+          Task.async(fn ->
+            case query_upstream(primary, packet) do
+              {:ok, resp_packet, duration} -> {:ok, resp_packet, primary, duration}
+              error -> error
+            end
           end)
 
-        result = wait_for_first_success(tasks, length(tasks))
+        case Task.yield(primary_task, 200) do
+          {:ok, {:ok, resp_packet, ^primary, duration}} ->
+            Task.shutdown(primary_task, :brutal_kill)
+            {:ok, resp_packet, primary, duration}
 
-        Enum.each(tasks, fn task ->
-          Task.shutdown(task, :brutal_kill)
-        end)
+          {:ok, {:error, _reason}} ->
+            Task.shutdown(primary_task, :brutal_kill)
+            run_fallback_parallel(fallbacks, packet)
 
-        result
+          {:exit, _reason} ->
+            Task.shutdown(primary_task, :brutal_kill)
+            run_fallback_parallel(fallbacks, packet)
+
+          nil ->
+            fallback_tasks =
+              Enum.map(fallbacks, fn fallback ->
+                Task.async(fn ->
+                  case query_upstream(fallback, packet) do
+                    {:ok, resp_packet, duration} -> {:ok, resp_packet, fallback, duration}
+                    error -> error
+                  end
+                end)
+              end)
+
+            all_tasks = [primary_task | fallback_tasks]
+            result = wait_for_first_success(all_tasks, length(all_tasks))
+
+            Enum.each(all_tasks, fn task ->
+              Task.shutdown(task, :brutal_kill)
+            end)
+
+            result
+        end
     end
+  end
+
+  defp run_fallback_parallel(fallbacks, packet) do
+    tasks =
+      Enum.map(fallbacks, fn upstream ->
+        Task.async(fn ->
+          case query_upstream(upstream, packet) do
+            {:ok, resp_packet, duration} -> {:ok, resp_packet, upstream, duration}
+            error -> error
+          end
+        end)
+      end)
+
+    result = wait_for_first_success(tasks, length(tasks))
+
+    Enum.each(tasks, fn task ->
+      Task.shutdown(task, :brutal_kill)
+    end)
+
+    result
   end
 
   defp query_upstream({:udp, upstream}, packet) do
@@ -458,7 +502,7 @@ defmodule Hermit.Dns.Server do
         try do
           case :gen_udp.send(client_sock, upstream, 53, packet) do
             :ok ->
-              case :gen_udp.recv(client_sock, 0, 1500) do
+              case :gen_udp.recv(client_sock, 0, 3000) do
                 {:ok, {_ip, 53, resp_packet}} ->
                   duration =
                     System.convert_time_unit(
@@ -499,7 +543,7 @@ defmodule Hermit.Dns.Server do
            body: packet,
            connect_options: [protocols: [:http2, :http1]],
            retry: false,
-           receive_timeout: 1500
+           receive_timeout: 3000
          ) do
       {:ok, %{status: 200, body: resp_packet}} ->
         duration =
@@ -532,7 +576,7 @@ defmodule Hermit.Dns.Server do
       {:DOWN, ref, :process, _pid, _reason} when is_reference(ref) ->
         wait_for_first_success(tasks, remaining_count - 1)
     after
-      2000 ->
+      4000 ->
         {:error, :timeout}
     end
   end

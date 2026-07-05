@@ -135,10 +135,33 @@ defmodule Hermit.Application do
         System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"])
         System.cmd("sysctl", ["-w", "net.ipv4.conf.all.rp_filter=2"])
         System.cmd("sysctl", ["-w", "net.ipv4.conf.default.rp_filter=2"])
+
+        # Ensure NAT and forwarding rules for Tailscale range are present on host
+        ensure_nat_rule(["POSTROUTING", "-s", "100.64.0.0/10", "-j", "MASQUERADE"])
+        ensure_iptables_rule(["FORWARD", "-s", "100.64.0.0/10", "-j", "ACCEPT"])
+        ensure_iptables_rule(["FORWARD", "-d", "100.64.0.0/10", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+
+        # Ensure incoming traffic from virtual interfaces is allowed in host INPUT chain
+        ensure_iptables_rule(["INPUT", "-i", "dns_h_+", "-j", "ACCEPT"])
+        ensure_iptables_rule(["INPUT", "-i", "lh_+", "-j", "ACCEPT"])
       rescue
         e ->
           IO.inspect(e, label: "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)")
       end
+    end
+  end
+
+  defp ensure_iptables_rule(args) do
+    case System.cmd("iptables", ["-C" | args]) do
+      {_, 0} -> :ok
+      _ -> System.cmd("iptables", ["-I" | args])
+    end
+  end
+
+  defp ensure_nat_rule(args) do
+    case System.cmd("iptables", ["-t", "nat", "-C" | args]) do
+      {_, 0} -> :ok
+      _ -> System.cmd("iptables", ["-t", "nat", "-I" | args])
     end
   end
 

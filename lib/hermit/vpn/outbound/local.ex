@@ -137,12 +137,15 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "dev",
                    "eth0"
                  ]),
-              {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
-              {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
-              {:ok, _} <-
-                run_cmd("iptables", [
-                  "-t",
-                  "nat",
+             {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
+             {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
+             {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
+             # Add route for Tailscale range to satisfy rp_filter=2 (ignore if already exists)
+             _ = run_cmd("ip", ["route", "add", "100.64.0.0/10", "dev", host_if_name]),
+             {:ok, _} <-
+               run_cmd("iptables", [
+                 "-t",
+                 "nat",
                   "-I",
                   "POSTROUTING",
                   "-s",

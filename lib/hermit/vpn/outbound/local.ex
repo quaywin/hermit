@@ -474,8 +474,10 @@ defmodule Hermit.Vpn.Outbound.Local do
         trimmed = String.trim(line)
         if String.starts_with?(trimmed, "nameserver ") do
           ip = String.replace(trimmed, "nameserver ", "") |> String.trim()
-          # Exclude loopback IPs and tailscale IP
-          not String.starts_with?(ip, "127.") and not String.contains?(ip, "100.100.100.100")
+          # Exclude loopback (127.*), link-local (169.254.*), and tailscale IP
+          not String.starts_with?(ip, "127.") and
+            not String.starts_with?(ip, "169.254.") and
+            not String.contains?(ip, "100.100.100.100")
         else
           false
         end

@@ -326,8 +326,6 @@ defmodule Hermit.Vpn.DnsWorker do
              "-w",
              "net.ipv4.conf.#{host_if}.rp_filter=0"
            ]),
-         # Add route for Tailscale range to host main table to satisfy rp_filter=2 (ignore if already exists)
-         _ = run_cmd("ip", ["route", "add", "100.64.0.0/10", "dev", host_if]),
          {:ok, _} <-
            run_cmd("ip", [
              "netns",

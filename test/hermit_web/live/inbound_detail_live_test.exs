@@ -296,4 +296,25 @@ defmodule HermitWeb.InboundDetailLiveTest do
     config_final = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
     assert config_final.enable_query_logging == false
   end
+
+  test "delete_inbound clears tailscale dns override if enabled", %{conn: conn} do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "dns_delete_test",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-dns-delete"}
+      })
+
+    # Set override to true
+    {:ok, _config} = Hermit.Vpn.DnsConfig.update_for_profile(inbound_profile.id, %{tailscale_override_dns: true})
+
+    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=config")
+    assert html =~ "Delete Profile"
+
+    # Click delete profile
+    view |> element("button[phx-click=delete_inbound]") |> render_click()
+
+    # Verify profile is deleted
+    assert Hermit.Repo.get(Hermit.Vpn.InboundProfile, inbound_profile.id) == nil
+  end
 end

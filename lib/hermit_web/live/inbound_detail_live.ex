@@ -163,6 +163,13 @@ defmodule HermitWeb.InboundDetailLive do
        put_flash(socket, :error, "Cannot delete profile because it is in use by active tunnels.")}
     else
       # Stop DNS components if running
+      if profile.type == "tailscale" do
+        dns_config = Hermit.Vpn.DnsConfig.get_for_profile(profile.id)
+        if dns_config.tailscale_override_dns do
+          Task.start(fn -> Hermit.Vpn.DnsWorker.clear_tailscale_dns_config(dns_config) end)
+        end
+      end
+
       Hermit.Vpn.DnsSupervisor.stop_dns(profile.id)
 
       case Hermit.Repo.delete(profile) do
@@ -312,7 +319,11 @@ defmodule HermitWeb.InboundDetailLive do
       {:ok, updated} ->
         case DnsWorker.sync_state(profile_id) do
           {:ok, _} -> :ok
-          {:error, :not_found} -> :ok
+          {:error, :not_found} ->
+            if not override do
+              Task.start(fn -> Hermit.Vpn.DnsWorker.clear_tailscale_dns_config(updated) end)
+            end
+            :ok
         end
 
         {:noreply,

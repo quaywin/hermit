@@ -106,6 +106,16 @@ defmodule Hermit.Vpn.DnsWorker do
 
   @impl true
   def terminate(_reason, state) do
+    if state.tailscale_override_dns do
+      config =
+        Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
+        |> Hermit.Repo.preload(:inbound_profile)
+
+      if config && config.inbound_profile do
+        clear_tailscale_dns_config(config)
+      end
+    end
+
     stop_dns_node(state)
   end
 
@@ -595,44 +605,58 @@ defmodule Hermit.Vpn.DnsWorker do
 
   # --- Tailscale DNS Config API Update ---
 
-  defp update_tailscale_dns_config(dns_ip, dns_config) do
-    {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
+  def update_tailscale_dns_config(dns_ip, dns_config) do
+    cond do
+      mock?() ->
+        Logger.info("Mock: Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
+        {:ok, :updated}
 
-    if api_key != "" and tailnet != "" and dns_ip != "" do
-      Logger.info("Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
-      dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
-      payload = %{"resolvers" => [%{"addr" => dns_ip}], "proxied" => true}
+      true ->
+        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
 
-      case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
-        {:ok, %{status: 200}} ->
-          Logger.info("Successfully registered Dedicated DNS Node on Tailscale.")
+        if api_key != "" and tailnet != "" and dns_ip != "" do
+          Logger.info("Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
+          dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
+          payload = %{"resolvers" => [%{"addr" => dns_ip}], "proxied" => true}
 
-        {:ok, %{status: status, body: body}} ->
-          Logger.error(
-            "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
-          )
+          case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
+            {:ok, %{status: 200}} ->
+              Logger.info("Successfully registered Dedicated DNS Node on Tailscale.")
 
-        {:error, reason} ->
-          Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
-      end
+            {:ok, %{status: status, body: body}} ->
+              Logger.error(
+                "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
+              )
+
+            {:error, reason} ->
+              Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
+          end
+        end
     end
   end
 
-  defp clear_tailscale_dns_config(dns_config) do
-    {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
+  def clear_tailscale_dns_config(dns_config) do
+    cond do
+      mock?() ->
+        Logger.info("Mock: Clearing Tailscale global nameservers")
+        {:ok, :cleared}
 
-    if api_key != "" and tailnet != "" do
-      Logger.info("Clearing Tailscale global nameservers...")
-      dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
-      payload = %{"resolvers" => [], "proxied" => false}
+      true ->
+        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
 
-      case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
-        {:ok, %{status: 200}} ->
-          Logger.info("Successfully cleared Tailscale DNS configuration.")
+        if api_key != "" and tailnet != "" do
+          Logger.info("Clearing Tailscale global nameservers...")
+          dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
+          payload = %{"resolvers" => [], "proxied" => false}
 
-        _ ->
-          :ok
-      end
+          case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
+            {:ok, %{status: 200}} ->
+              Logger.info("Successfully cleared Tailscale DNS configuration.")
+
+            _ ->
+              :ok
+          end
+        end
     end
   end
 

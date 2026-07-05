@@ -173,10 +173,6 @@ defmodule Hermit.Vpn.Outbound.Local do
                   "FORWARD",
                   "-d",
                   subnet,
-                  "-m",
-                  "state",
-                  "--state",
-                  "ESTABLISHED,RELATED",
                   "-j",
                   "ACCEPT"
                 ]) do
@@ -236,10 +232,6 @@ defmodule Hermit.Vpn.Outbound.Local do
               "FORWARD",
               "-d",
               subnet,
-              "-m",
-              "state",
-              "--state",
-              "ESTABLISHED,RELATED",
               "-j",
               "ACCEPT"
             ])
@@ -306,10 +298,6 @@ defmodule Hermit.Vpn.Outbound.Local do
         "FORWARD",
         "-d",
         subnet,
-        "-m",
-        "state",
-        "--state",
-        "ESTABLISHED,RELATED",
         "-j",
         "ACCEPT"
       ])

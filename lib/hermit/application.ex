@@ -139,7 +139,7 @@ defmodule Hermit.Application do
         # Ensure NAT and forwarding rules for Tailscale range are present on host
         ensure_nat_rule(["POSTROUTING", "-s", "100.64.0.0/10", "-j", "MASQUERADE"])
         ensure_iptables_rule(["FORWARD", "-s", "100.64.0.0/10", "-j", "ACCEPT"])
-        ensure_iptables_rule(["FORWARD", "-d", "100.64.0.0/10", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+        ensure_iptables_rule(["FORWARD", "-d", "100.64.0.0/10", "-j", "ACCEPT"])
 
         # Ensure incoming traffic from virtual interfaces is allowed in host INPUT chain
         ensure_iptables_rule(["INPUT", "-i", "dns_h_+", "-j", "ACCEPT"])

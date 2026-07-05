@@ -361,10 +361,6 @@ defmodule Hermit.Vpn.DnsWorker do
               "FORWARD",
               "-d",
               subnet,
-              "-m",
-              "state",
-              "--state",
-              "ESTABLISHED,RELATED",
               "-j",
               "ACCEPT"
             ]),
@@ -592,10 +588,6 @@ defmodule Hermit.Vpn.DnsWorker do
       "FORWARD",
       "-d",
       subnet,
-      "-m",
-      "state",
-      "--state",
-      "ESTABLISHED,RELATED",
       "-j",
       "ACCEPT"
     ])

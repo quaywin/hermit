@@ -280,21 +280,39 @@ defmodule Hermit.Vpn.DnsWorker do
              ]),
            {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
            {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "ip",
-               "route",
-               "add",
-               "default",
-               "via",
-               host_ip,
-               "dev",
-               "eth0"
-             ]),
+          {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
+          {:ok, _} <-
+            run_cmd("ip", [
+              "netns",
+              "exec",
+              ns,
+              "sysctl",
+              "-w",
+              "net.ipv4.ip_forward=1"
+            ]),
+          {:ok, _} <-
+            run_cmd("ip", [
+              "netns",
+              "exec",
+              ns,
+              "sysctl",
+              "-w",
+              "net.ipv6.conf.all.forwarding=1"
+            ]),
+          {:ok, _} <-
+            run_cmd("ip", [
+              "netns",
+              "exec",
+              ns,
+              "ip",
+              "route",
+              "add",
+              "default",
+              "via",
+              host_ip,
+              "dev",
+              "eth0"
+            ]),
           # NAT routing on Host
           {:ok, _} <-
             run_cmd("iptables", [

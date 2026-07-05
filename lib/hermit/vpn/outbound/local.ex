@@ -104,6 +104,18 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "up"
                  ]),
                {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "ip",
+                   "link",
+                   "set",
+                   "eth0",
+                   "mtu",
+                   "1400"
+                 ]),
+               {:ok, _} <-
                  run_cmd("ip", ["netns", "exec", wg_name, "ip", "link", "set", "lo", "up"]),
                {:ok, _} <-
                  run_cmd("ip", [
@@ -139,6 +151,7 @@ defmodule Hermit.Vpn.Outbound.Local do
                  ]),
              {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
              {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
+             {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
              {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
              # Add route for Tailscale range to satisfy rp_filter=2 (ignore if already exists)
              _ = run_cmd("ip", ["route", "add", "100.64.0.0/10", "dev", host_if_name]),
@@ -180,7 +193,12 @@ defmodule Hermit.Vpn.Outbound.Local do
             else
               if File.exists?("/etc/resolv.conf") do
                 File.mkdir_p!(netns_dns_dir)
-                File.copy!("/etc/resolv.conf", Path.join(netns_dns_dir, "resolv.conf"))
+                case File.read("/etc/resolv.conf") do
+                  {:ok, resolv_content} ->
+                    File.write!(Path.join(netns_dns_dir, "resolv.conf"), build_resolv_conf(resolv_content))
+                  _ ->
+                    File.write!(Path.join(netns_dns_dir, "resolv.conf"), "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+                end
               end
             end
 
@@ -445,6 +463,38 @@ defmodule Hermit.Vpn.Outbound.Local do
   defp get_storage_base_path do
     config = Application.get_env(:hermit, :storage, [])
     Keyword.get(config, :base_path, "/app/storage")
+  end
+
+  defp build_resolv_conf(resolv_content) do
+    lines = String.split(resolv_content, "\n")
+
+    # Extract non-loopback nameservers from host resolv.conf
+    host_nameservers =
+      Enum.filter(lines, fn line ->
+        trimmed = String.trim(line)
+        if String.starts_with?(trimmed, "nameserver ") do
+          ip = String.replace(trimmed, "nameserver ", "") |> String.trim()
+          # Exclude loopback IPs and tailscale IP
+          not String.starts_with?(ip, "127.") and not String.contains?(ip, "100.100.100.100")
+        else
+          false
+        end
+      end)
+      # Format back to nameserver lines
+      |> Enum.map(&String.trim/1)
+
+    # Standard public fallbacks
+    fallbacks = ["nameserver 1.1.1.1", "nameserver 8.8.8.8"]
+
+    # Combine them (host upstreams first, then fallbacks, then search/options lines)
+    other_lines =
+      Enum.reject(lines, fn line ->
+        trimmed = String.trim(line)
+        String.starts_with?(trimmed, "nameserver ")
+      end)
+
+    (host_nameservers ++ fallbacks ++ other_lines)
+    |> Enum.join("\n")
   end
 
   defp run_cmd(cmd, args) do

@@ -145,6 +145,9 @@ defmodule Hermit.Application do
         ensure_iptables_rule(["INPUT", "-i", "dns_h_+", "-j", "ACCEPT"])
         ensure_iptables_rule(["INPUT", "-i", "loc_+", "-j", "ACCEPT"])
         ensure_iptables_rule(["INPUT", "-i", "vh_+", "-j", "ACCEPT"])
+
+        # Clamp TCP MSS to path MTU to prevent MTU issues in cloud environments like GCP/AWS
+        ensure_iptables_rule("mangle", ["FORWARD", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"])
       rescue
         e ->
           IO.inspect(e, label: "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)")
@@ -152,11 +155,15 @@ defmodule Hermit.Application do
     end
   end
 
-  defp ensure_iptables_rule(args) do
-    case System.cmd("iptables", ["-C" | args]) do
+  defp ensure_iptables_rule(table, args) do
+    case System.cmd("iptables", ["-t", table, "-C" | args]) do
       {_, 0} -> :ok
-      _ -> System.cmd("iptables", ["-I" | args])
+      _ -> System.cmd("iptables", ["-t", table, "-I" | args])
     end
+  end
+
+  defp ensure_iptables_rule(args) do
+    ensure_iptables_rule("filter", args)
   end
 
   defp ensure_nat_rule(args) do

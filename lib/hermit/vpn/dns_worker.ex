@@ -235,14 +235,7 @@ defmodule Hermit.Vpn.DnsWorker do
     if File.exists?("/etc/resolv.conf") do
       case File.read("/etc/resolv.conf") do
         {:ok, resolv_content} ->
-          clean_content =
-            resolv_content
-            |> String.split("\n")
-            |> Enum.reject(&String.contains?(&1, "100.100.100.100"))
-            |> Enum.join("\n")
-
-          # Always prepend reliable public DNS to prevent local DNS loop / resolution failures
-          final_content = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" <> clean_content
+          final_content = build_resolv_conf(resolv_content)
           File.write!(Path.join(netns_dns_dir, "resolv.conf"), final_content)
 
         _ ->
@@ -280,6 +273,8 @@ defmodule Hermit.Vpn.DnsWorker do
              ]),
            {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
            {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
+           {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "mtu", "1400"]),
+           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "mtu", "1400"]),
           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
           {:ok, _} <-
             run_cmd("ip", [
@@ -661,6 +656,38 @@ defmodule Hermit.Vpn.DnsWorker do
   defp get_storage_base_path do
     config = Application.get_env(:hermit, :storage, [])
     Keyword.get(config, :base_path, "/app/storage")
+  end
+
+  defp build_resolv_conf(resolv_content) do
+    lines = String.split(resolv_content, "\n")
+
+    # Extract non-loopback nameservers from host resolv.conf
+    host_nameservers =
+      Enum.filter(lines, fn line ->
+        trimmed = String.trim(line)
+        if String.starts_with?(trimmed, "nameserver ") do
+          ip = String.replace(trimmed, "nameserver ", "") |> String.trim()
+          # Exclude loopback IPs and tailscale IP
+          not String.starts_with?(ip, "127.") and not String.contains?(ip, "100.100.100.100")
+        else
+          false
+        end
+      end)
+      # Format back to nameserver lines
+      |> Enum.map(&String.trim/1)
+
+    # Standard public fallbacks
+    fallbacks = ["nameserver 1.1.1.1", "nameserver 8.8.8.8"]
+
+    # Combine them (host upstreams first, then fallbacks, then search/options lines)
+    other_lines =
+      Enum.reject(lines, fn line ->
+        trimmed = String.trim(line)
+        String.starts_with?(trimmed, "nameserver ")
+      end)
+
+    (host_nameservers ++ fallbacks ++ other_lines)
+    |> Enum.join("\n")
   end
 
   defp run_cmd(cmd, args) do

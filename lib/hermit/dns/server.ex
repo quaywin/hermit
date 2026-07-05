@@ -32,7 +32,14 @@ defmodule Hermit.Dns.Server do
     port = opts[:port]
     profile_id = opts[:profile_id]
 
-    case :gen_udp.open(port, [:binary, active: true, reuseaddr: true]) do
+    bind_opts =
+      if mock?() do
+        [:binary, active: true, reuseaddr: true]
+      else
+        [:binary, active: true, reuseaddr: true, ip: {10, 200, profile_id, 1}]
+      end
+
+    case :gen_udp.open(port, bind_opts) do
       {:ok, socket} ->
         Logger.info("Elixir DNS Server for profile #{profile_id} listening on UDP port #{port}")
         # Start periodic active probing timer
@@ -673,4 +680,9 @@ defmodule Hermit.Dns.Server do
   end
 
   defp ip_to_string(other), do: to_string(other)
+
+  defp mock? do
+    config = Application.get_env(:hermit, :docker, [])
+    Keyword.get(config, :mock, false)
+  end
 end

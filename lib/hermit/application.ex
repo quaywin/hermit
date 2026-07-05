@@ -143,7 +143,8 @@ defmodule Hermit.Application do
 
         # Ensure incoming traffic from virtual interfaces is allowed in host INPUT chain
         ensure_iptables_rule(["INPUT", "-i", "dns_h_+", "-j", "ACCEPT"])
-        ensure_iptables_rule(["INPUT", "-i", "lh_+", "-j", "ACCEPT"])
+        ensure_iptables_rule(["INPUT", "-i", "loc_+", "-j", "ACCEPT"])
+        ensure_iptables_rule(["INPUT", "-i", "vh_+", "-j", "ACCEPT"])
       rescue
         e ->
           IO.inspect(e, label: "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)")

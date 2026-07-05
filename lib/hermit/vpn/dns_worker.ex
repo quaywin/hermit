@@ -221,9 +221,9 @@ defmodule Hermit.Vpn.DnsWorker do
     host_if = "dns_h_#{profile_id}"
     ns_if = "dns_n_#{profile_id}"
     table_id = 1000 + profile_id
-    host_ip = "10.200.#{profile_id}.1"
-    ns_ip = "10.200.#{profile_id}.2"
-    subnet = "10.200.#{profile_id}.0/30"
+    host_ip = "10.251.#{profile_id}.1"
+    ns_ip = "10.251.#{profile_id}.2"
+    subnet = "10.251.#{profile_id}.0/30"
     port = 5400 + profile_id
 
     cleanup_namespace(profile_id)
@@ -574,8 +574,8 @@ defmodule Hermit.Vpn.DnsWorker do
     ns = "hermit_dns_#{profile_id}"
     host_if = "dns_h_#{profile_id}"
     table_id = 1000 + profile_id
-    host_ip = "10.200.#{profile_id}.1"
-    subnet = "10.200.#{profile_id}.0/30"
+    host_ip = "10.251.#{profile_id}.1"
+    subnet = "10.251.#{profile_id}.0/30"
 
     System.cmd("ip", ["link", "delete", host_if])
 
@@ -665,10 +665,18 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp run_cmd(cmd, args) do
     flat_args = List.flatten(args)
+    Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
     case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
-      {output, 0} -> {:ok, String.trim(output)}
-      {output, code} -> {:error, {code, String.trim(output)}}
+      {output, 0} ->
+        {:ok, String.trim(output)}
+
+      {output, code} ->
+        Logger.error(
+          "Command failed: #{cmd} #{Enum.join(flat_args, " ")} (exit code #{code}): #{output}"
+        )
+
+        {:error, {code, String.trim(output)}}
     end
   end
 

@@ -32,11 +32,30 @@ defmodule Hermit.Dns.Server do
     port = opts[:port]
     profile_id = opts[:profile_id]
 
+    state = %{
+      socket: nil,
+      port: port,
+      profile_id: profile_id,
+      upstreams_map: %{},
+      active_upstream: nil
+    }
+
+    case try_bind_socket(state) do
+      {:ok, new_state} ->
+        {:ok, new_state}
+
+      {:error, _reason, new_state} ->
+        :erlang.send_after(1000, self(), :retry_bind)
+        {:ok, new_state}
+    end
+  end
+
+  defp try_bind_socket(%{profile_id: profile_id, port: port} = state) do
     bind_opts =
       if mock?() do
         [:binary, active: true, reuseaddr: true]
       else
-        [:binary, active: true, reuseaddr: true, ip: {10, 200, profile_id, 1}]
+        [:binary, active: true, reuseaddr: true, ip: {10, 251, profile_id, 1}]
       end
 
     case :gen_udp.open(port, bind_opts) do
@@ -44,29 +63,13 @@ defmodule Hermit.Dns.Server do
         Logger.info("Elixir DNS Server for profile #{profile_id} listening on UDP port #{port}")
         # Start periodic active probing timer
         :erlang.send_after(30_000, self(), :active_probe)
-
-        {:ok,
-         %{
-           socket: socket,
-           port: port,
-           profile_id: profile_id,
-           upstreams_map: %{},
-           active_upstream: nil
-         }}
+        {:ok, %{state | socket: socket}}
 
       {:error, reason} ->
-        Logger.error(
-          "Failed to start Elixir DNS Server for profile #{profile_id} on port #{port}: #{inspect(reason)}"
+        Logger.warning(
+          "Failed to start Elixir DNS Server for profile #{profile_id} on port #{port}: #{inspect(reason)}. Will retry..."
         )
-
-        {:ok,
-         %{
-           socket: nil,
-           port: port,
-           profile_id: profile_id,
-           upstreams_map: %{},
-           active_upstream: nil
-         }}
+        {:error, reason, state}
     end
   end
 
@@ -115,6 +118,22 @@ defmodule Hermit.Dns.Server do
     end
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:retry_bind, state) do
+    if is_nil(state.socket) do
+      case try_bind_socket(state) do
+        {:ok, new_state} ->
+          {:noreply, new_state}
+
+        {:error, _reason, new_state} ->
+          :erlang.send_after(1000, self(), :retry_bind)
+          {:noreply, new_state}
+      end
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -451,10 +470,12 @@ defmodule Hermit.Dns.Server do
                   {:ok, resp_packet, duration}
 
                 other ->
+                  Logger.warning("DNS Server: UDP query response from upstream #{inspect(upstream)} failed: #{inspect(other)}")
                   {:error, {:recv_error, other}}
               end
 
             other ->
+              Logger.warning("DNS Server: UDP send to upstream #{inspect(upstream)} failed: #{inspect(other)}")
               {:error, {:send_error, other}}
           end
         after
@@ -462,6 +483,7 @@ defmodule Hermit.Dns.Server do
         end
 
       other ->
+        Logger.error("DNS Server: UDP socket creation to query upstream #{inspect(upstream)} failed: #{inspect(other)}")
         {:error, {:socket_error, other}}
     end
   end
@@ -490,6 +512,7 @@ defmodule Hermit.Dns.Server do
         {:ok, resp_packet, duration}
 
       other ->
+        Logger.warning("DNS Server: DoH query to upstream #{url} failed: #{inspect(other)}")
         {:error, {:doh_error, other}}
     end
   end

@@ -295,32 +295,32 @@ defmodule Hermit.Vpn.DnsWorker do
                "dev",
                "eth0"
              ]),
-           # NAT routing on Host
-           {:ok, _} <-
-             run_cmd("iptables", [
-               "-t",
-               "nat",
-               "-A",
-               "POSTROUTING",
-               "-s",
-               subnet,
-               "-j",
-               "MASQUERADE"
-             ]),
-           {:ok, _} <- run_cmd("iptables", ["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
-           {:ok, _} <-
-             run_cmd("iptables", [
-               "-A",
-               "FORWARD",
-               "-d",
-               subnet,
-               "-m",
-               "state",
-               "--state",
-               "ESTABLISHED,RELATED",
-               "-j",
-               "ACCEPT"
-             ]),
+          # NAT routing on Host
+          {:ok, _} <-
+            run_cmd("iptables", [
+              "-t",
+              "nat",
+              "-I",
+              "POSTROUTING",
+              "-s",
+              subnet,
+              "-j",
+              "MASQUERADE"
+            ]),
+          {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
+          {:ok, _} <-
+            run_cmd("iptables", [
+              "-I",
+              "FORWARD",
+              "-d",
+              subnet,
+              "-m",
+              "state",
+              "--state",
+              "ESTABLISHED,RELATED",
+              "-j",
+              "ACCEPT"
+            ]),
            # DNAT port redirection inside namespace
            {:ok, _} <-
              run_cmd("ip", [

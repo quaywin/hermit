@@ -7,6 +7,7 @@ defmodule Hermit.Application do
 
   @impl true
   def start(_type, _args) do
+    enable_host_ip_forwarding()
     children = [
       Hermit.Repo,
       {Phoenix.PubSub, name: Hermit.PubSub},
@@ -124,5 +125,23 @@ defmodule Hermit.Application do
   def config_change(changed, _new, removed) do
     HermitWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp enable_host_ip_forwarding do
+    if :os.type() == {:unix, :linux} and not mock?() do
+      IO.puts("Ensuring IP forwarding is enabled on the host...")
+      try do
+        System.cmd("sysctl", ["-w", "net.ipv4.ip_forward=1"])
+        System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"])
+      rescue
+        e ->
+          IO.inspect(e, label: "Warning: Failed to enable host IP forwarding (ensure container has privileged/host permissions)")
+      end
+    end
+  end
+
+  defp mock? do
+    config = Application.get_env(:hermit, :docker, [])
+    Keyword.get(config, :mock, false)
   end
 end

@@ -137,33 +137,33 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "dev",
                    "eth0"
                  ]),
-               {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
-               {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
-               {:ok, _} <-
-                 run_cmd("iptables", [
-                   "-t",
-                   "nat",
-                   "-A",
-                   "POSTROUTING",
-                   "-s",
-                   subnet,
-                   "-j",
-                   "MASQUERADE"
-                 ]),
-               {:ok, _} <- run_cmd("iptables", ["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
-               {:ok, _} <-
-                 run_cmd("iptables", [
-                   "-A",
-                   "FORWARD",
-                   "-d",
-                   subnet,
-                   "-m",
-                   "state",
-                   "--state",
-                   "ESTABLISHED,RELATED",
-                   "-j",
-                   "ACCEPT"
-                 ]) do
+              {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
+              {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
+              {:ok, _} <-
+                run_cmd("iptables", [
+                  "-t",
+                  "nat",
+                  "-I",
+                  "POSTROUTING",
+                  "-s",
+                  subnet,
+                  "-j",
+                  "MASQUERADE"
+                ]),
+              {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
+              {:ok, _} <-
+                run_cmd("iptables", [
+                  "-I",
+                  "FORWARD",
+                  "-d",
+                  subnet,
+                  "-m",
+                  "state",
+                  "--state",
+                  "ESTABLISHED,RELATED",
+                  "-j",
+                  "ACCEPT"
+                ]) do
             # Setup network namespace DNS
             dns_servers =
               (Map.get(config, "dns_servers") || Map.get(config, :dns_servers) || [])

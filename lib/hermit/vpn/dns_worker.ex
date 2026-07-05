@@ -29,7 +29,7 @@ defmodule Hermit.Vpn.DnsWorker do
     case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, profile_id}) do
       [{pid, _}] ->
         try do
-          GenServer.call(pid, :sync_state)
+          GenServer.call(pid, :sync_state, 45_000)
         catch
           :exit, _ -> {:error, :not_found}
         end
@@ -241,25 +241,20 @@ defmodule Hermit.Vpn.DnsWorker do
             |> Enum.reject(&String.contains?(&1, "100.100.100.100"))
             |> Enum.join("\n")
 
-          clean_content =
-            if String.contains?(clean_content, "nameserver") do
-              clean_content
-            else
-              clean_content <> "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n"
-            end
-
-          File.write!(Path.join(netns_dns_dir, "resolv.conf"), clean_content)
+          # Always prepend reliable public DNS to prevent local DNS loop / resolution failures
+          final_content = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" <> clean_content
+          File.write!(Path.join(netns_dns_dir, "resolv.conf"), final_content)
 
         _ ->
           File.write!(
             Path.join(netns_dns_dir, "resolv.conf"),
-            "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+            "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
           )
       end
     else
       File.write!(
         Path.join(netns_dns_dir, "resolv.conf"),
-        "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+        "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
       )
     end
 

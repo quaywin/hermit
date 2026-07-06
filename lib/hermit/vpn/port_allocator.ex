@@ -5,7 +5,7 @@ defmodule Hermit.Vpn.PortAllocator do
   require Logger
 
   @start_port 10000
-  @end_port 10199
+  @end_port 29999
 
   @doc """
   Finds two consecutive free TCP ports (P and P + 1) in the range #{@start_port}..#{@end_port}.

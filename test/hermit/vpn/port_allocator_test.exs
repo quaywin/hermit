@@ -6,8 +6,8 @@ defmodule Hermit.Vpn.PortAllocatorTest do
     assert {:ok, socks_port, http_port} = PortAllocator.allocate_free_ports()
     assert is_integer(socks_port)
     assert is_integer(http_port)
-    assert socks_port >= 10000 and socks_port <= 10199
-    assert http_port >= 10000 and http_port <= 10199
+    assert socks_port >= 10000 and socks_port <= 29999
+    assert http_port >= 10000 and http_port <= 29999
     assert http_port == socks_port + 1
   end
 

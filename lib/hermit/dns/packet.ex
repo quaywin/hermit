@@ -6,11 +6,23 @@ defmodule Hermit.Dns.Packet do
 
   require Record
 
-  Record.defrecord(:dns_message, Record.extract(:dns_message, from_lib: "dns_erlang/include/dns.hrl"))
+  Record.defrecord(
+    :dns_message,
+    Record.extract(:dns_message, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
   Record.defrecord(:dns_query, Record.extract(:dns_query, from_lib: "dns_erlang/include/dns.hrl"))
   Record.defrecord(:dns_rr, Record.extract(:dns_rr, from_lib: "dns_erlang/include/dns.hrl"))
-  Record.defrecord(:dns_rrdata_a, Record.extract(:dns_rrdata_a, from_lib: "dns_erlang/include/dns.hrl"))
-  Record.defrecord(:dns_rrdata_aaaa, Record.extract(:dns_rrdata_aaaa, from_lib: "dns_erlang/include/dns.hrl"))
+
+  Record.defrecord(
+    :dns_rrdata_a,
+    Record.extract(:dns_rrdata_a, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(
+    :dns_rrdata_aaaa,
+    Record.extract(:dns_rrdata_aaaa, from_lib: "dns_erlang/include/dns.hrl")
+  )
 
   @type qtype :: :A | :AAAA | :MX | :TXT | :CNAME | :NS | :PTR | :SOA | {:unknown, integer()}
 
@@ -22,6 +34,7 @@ defmodule Hermit.Dns.Packet do
     case :dns.decode_message(packet) do
       msg when Record.is_record(msg, :dns_message) ->
         qc = dns_message(msg, :qc)
+
         if qc > 0 do
           questions = dns_message(msg, :questions)
           [first_query | _] = questions
@@ -78,47 +91,55 @@ defmodule Hermit.Dns.Packet do
   def build_nxdomain(id_bin, query_record) when Record.is_record(query_record, :dns_query) do
     id_val = parse_id_bin(id_bin)
 
-    msg = dns_message(
-      id: id_val,
-      qr: true,
-      aa: false,
-      rd: true,
-      ra: true,
-      rc: 3, # NXDOMAIN
-      qc: 1,
-      questions: [query_record]
-    )
+    msg =
+      dns_message(
+        id: id_val,
+        qr: true,
+        aa: false,
+        rd: true,
+        ra: true,
+        # NXDOMAIN
+        rc: 3,
+        qc: 1,
+        questions: [query_record]
+      )
+
     :dns.encode_message(msg)
   end
 
   @doc """
   Builds an A/AAAA record response for redirect.
   """
-  def build_a_response(id_bin, query_record, ip_str) when Record.is_record(query_record, :dns_query) do
+  def build_a_response(id_bin, query_record, ip_str)
+      when Record.is_record(query_record, :dns_query) do
     case :inet.parse_address(String.to_charlist(ip_str)) do
       {:ok, ip_tuple} ->
         id_val = parse_id_bin(id_bin)
         domain = dns_query(query_record, :name)
 
-        {type, rrdata} = case ip_tuple do
-          {_, _, _, _} -> {1, dns_rrdata_a(ip: ip_tuple)}
-          {_, _, _, _, _, _, _, _} -> {28, dns_rrdata_aaaa(ip: ip_tuple)}
-        end
+        {type, rrdata} =
+          case ip_tuple do
+            {_, _, _, _} -> {1, dns_rrdata_a(ip: ip_tuple)}
+            {_, _, _, _, _, _, _, _} -> {28, dns_rrdata_aaaa(ip: ip_tuple)}
+          end
 
         answers = [dns_rr(name: domain, type: type, class: 1, ttl: 60, data: rrdata)]
 
-        msg = dns_message(
-          id: id_val,
-          qr: true,
-          aa: false,
-          rd: true,
-          ra: true,
-          rc: 0, # NOERROR
-          qc: 1,
-          anc: 1,
-          questions: [query_record],
-          answers: answers
-        )
+        msg =
+          dns_message(
+            id: id_val,
+            qr: true,
+            aa: false,
+            rd: true,
+            ra: true,
+            # NOERROR
+            rc: 0,
+            qc: 1,
+            anc: 1,
+            questions: [query_record],
+            answers: answers
+          )
+
         :dns.encode_message(msg)
 
       _ ->
@@ -127,8 +148,94 @@ defmodule Hermit.Dns.Packet do
     end
   end
 
+  @doc """
+  Safely updates the response code (RCODE) of a raw DNS packet.
+  """
+  def patch_rcode(packet, rcode) do
+    case :dns.decode_message(packet) do
+      msg when Record.is_record(msg, :dns_message) ->
+        patched_msg = dns_message(msg, rc: rcode)
+        :dns.encode_message(patched_msg)
+
+      _ ->
+        # Fallback to simple bitwise manipulation if decoding fails
+        <<id::binary-size(2), _flags::binary-size(2), rest::binary>> = packet
+        flags2 = 0x80 + rcode
+        <<id::binary, 0x81, flags2, rest::binary>>
+    end
+  end
+
   defp parse_id_bin(<<val::16>>), do: val
   defp parse_id_bin(_), do: 0
+
+  @doc """
+  Parses metadata (minimum TTL and resolved IPs) from a DNS response packet in one pass.
+  """
+  def parse_response_metadata(packet) do
+    case :dns.decode_message(packet) do
+      msg when Record.is_record(msg, :dns_message) ->
+        rcode = dns_message(msg, :rc)
+        answers = dns_message(msg, :answers)
+
+        ttl =
+          cond do
+            rcode == 3 ->
+              5
+
+            rcode == 0 and length(answers) > 0 ->
+              ttls =
+                Enum.flat_map(answers, fn rr ->
+                  if Record.is_record(rr, :dns_rr) do
+                    [dns_rr(rr, :ttl)]
+                  else
+                    []
+                  end
+                end)
+
+              if ttls == [] do
+                10
+              else
+                min_ttl = Enum.min(ttls)
+                max(5, min(min_ttl, 3600))
+              end
+
+            true ->
+              5
+          end
+
+        ips =
+          if rcode == 0 do
+            Enum.flat_map(answers, fn rr ->
+              if Record.is_record(rr, :dns_rr) do
+                type = dns_rr(rr, :type)
+                data = dns_rr(rr, :data)
+
+                case {type, data} do
+                  {1, rrdata} when Record.is_record(rrdata, :dns_rrdata_a) ->
+                    ip = dns_rrdata_a(rrdata, :ip)
+                    [ip_to_string(ip)]
+
+                  {28, rrdata} when Record.is_record(rrdata, :dns_rrdata_aaaa) ->
+                    ip = dns_rrdata_aaaa(rrdata, :ip)
+                    [ip_to_string(ip)]
+
+                  _ ->
+                    []
+                end
+              else
+                []
+              end
+            end)
+          else
+            []
+          end
+
+        {:ok, ttl, ips}
+
+      _ ->
+        {:error, :invalid_packet}
+    end
+  end
 
   @doc """
   Extracts the minimum TTL from a DNS response packet.
@@ -141,9 +248,12 @@ defmodule Hermit.Dns.Packet do
       msg when Record.is_record(msg, :dns_message) ->
         rcode = dns_message(msg, :rc)
         answers = dns_message(msg, :answers)
+
         cond do
-          rcode == 3 -> # NXDOMAIN
+          # NXDOMAIN
+          rcode == 3 ->
             5
+
           rcode == 0 and length(answers) > 0 ->
             ttls =
               Enum.flat_map(answers, fn rr ->
@@ -153,12 +263,14 @@ defmodule Hermit.Dns.Packet do
                   []
                 end
               end)
+
             if ttls == [] do
               10
             else
               min_ttl = Enum.min(ttls)
               max(5, min(min_ttl, 3600))
             end
+
           true ->
             5
         end
@@ -177,19 +289,23 @@ defmodule Hermit.Dns.Packet do
       msg when Record.is_record(msg, :dns_message) ->
         rcode = dns_message(msg, :rc)
         answers = dns_message(msg, :answers)
+
         if rcode == 0 do
           answers
           |> Enum.flat_map(fn rr ->
             if Record.is_record(rr, :dns_rr) do
               type = dns_rr(rr, :type)
               data = dns_rr(rr, :data)
+
               case {type, data} do
                 {1, rrdata} when Record.is_record(rrdata, :dns_rrdata_a) ->
                   ip = dns_rrdata_a(rrdata, :ip)
                   [ip_to_string(ip)]
+
                 {28, rrdata} when Record.is_record(rrdata, :dns_rrdata_aaaa) ->
                   ip = dns_rrdata_aaaa(rrdata, :ip)
                   [ip_to_string(ip)]
+
                 _ ->
                   []
               end

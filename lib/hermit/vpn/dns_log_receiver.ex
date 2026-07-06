@@ -33,6 +33,9 @@ defmodule Hermit.Vpn.DnsLogReceiver do
 
     :ets.new(@table, [:ordered_set, :public, :named_table, read_concurrency: true])
 
+    # Schedule periodic log pruning every 10 seconds to save CPU
+    :erlang.send_after(10_000, self(), :periodic_prune)
+
     case :gen_udp.open(port, [:binary, active: true, reuseaddr: true]) do
       {:ok, socket} ->
         Logger.info("DNS Log Receiver listening on UDP port #{port}")
@@ -68,13 +71,28 @@ defmodule Hermit.Vpn.DnsLogReceiver do
 
         Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_log, log})
 
-        prune_logs(pair_id)
-
         {:noreply, state}
 
       _ ->
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info(:periodic_prune, state) do
+    # Find all unique pair_ids in the table
+    # Standard query to select all keys: {{pair_id, counter}, _}
+    # We retrieve the pair_ids to prune them individually
+    pair_ids =
+      :ets.select(@table, [{{{:"$1", :_}, :_}, [], [:"$1"]}])
+      |> Enum.uniq()
+
+    Enum.each(pair_ids, fn pair_id ->
+      prune_logs(pair_id)
+    end)
+
+    :erlang.send_after(10_000, self(), :periodic_prune)
+    {:noreply, state}
   end
 
   @impl true

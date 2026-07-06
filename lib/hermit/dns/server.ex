@@ -320,7 +320,7 @@ defmodule Hermit.Dns.Server do
             GenServer.cast(self(), {:update_latency, failed_upstream, 2000})
 
             # Send query to the next fallback upstream asynchronously
-            packet = build_query_packet(tx_id, original_query)
+            packet = Packet.build_query_packet(tx_id, original_query.query_record)
             async_send_to_upstream(state.upstream_socket, state.doh_client, next_upstream, packet)
 
             # Update pending query record with next index and new sent timestamp
@@ -713,14 +713,6 @@ defmodule Hermit.Dns.Server do
           Logger.warning("DNS Server: DoH query to upstream #{url} failed: #{inspect(other)}")
       end
     end)
-  end
-
-  # Helper for mapping tx_id back onto a rebuilt DNS packet if timeout retry is needed
-  defp build_query_packet(tx_id, original_query) do
-    # Replace query transaction ID in binary query packet
-    # Or build fresh nxdomain to get record header format
-    <<_::16, rest::binary>> = :dns.encode_message(original_query.query_record)
-    <<tx_id::16, rest::binary>>
   end
 
   # Simplified query_upstream for active latency probing task

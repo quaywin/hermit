@@ -86,6 +86,22 @@ defmodule Hermit.Dns.Packet do
   def qtype_to_string({:unknown, val}), do: "TYPE_#{val}"
 
   @doc """
+  Builds a raw DNS query packet from a transaction ID and a query record.
+  """
+  def build_query_packet(tx_id, query_record) when Record.is_record(query_record, :dns_query) do
+    msg =
+      dns_message(
+        id: tx_id,
+        qr: false,
+        rd: true,
+        qc: 1,
+        questions: [query_record]
+      )
+
+    :dns.encode_message(msg)
+  end
+
+  @doc """
   Builds a standard NXDOMAIN response.
   """
   def build_nxdomain(id_bin, query_record) when Record.is_record(query_record, :dns_query) do

@@ -13,6 +13,7 @@ defmodule Hermit.Application do
       Hermit.Repo,
       {Phoenix.PubSub, name: Hermit.PubSub},
       {Registry, keys: :unique, name: Hermit.Vpn.Registry},
+      {Task.Supervisor, name: Hermit.Dns.TaskSupervisor},
       {Hermit.Vpn.DynamicSupervisor, []},
       {Hermit.Dns.BlocklistLoader, []},
       {Hermit.Vpn.DnsLogReceiver, []},

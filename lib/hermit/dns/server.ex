@@ -73,9 +73,9 @@ defmodule Hermit.Dns.Server do
   defp try_bind_socket(%{profile_id: profile_id, port: port} = state) do
     bind_opts =
       if mock?() do
-        [:binary, active: true, reuseaddr: true]
+        [:binary, active: :once, reuseaddr: true]
       else
-        [:binary, active: true, reuseaddr: true, ip: {10, 251, profile_id, 1}]
+        [:binary, active: :once, reuseaddr: true, ip: {10, 251, profile_id, 1}]
       end
 
     case :gen_udp.open(port, bind_opts) do
@@ -99,14 +99,24 @@ defmodule Hermit.Dns.Server do
     upstreams = parse_upstreams(updated_config.upstream_dns)
     new_state = sync_upstreams_config(state, upstreams)
     custom_rules = precompile_custom_rules(updated_config.custom_rules)
+
+    # Flush cache for this profile on configuration changes
+    profile_id = state.profile_id
+    :ets.select_delete(:dns_cache, [
+      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]},
+      {{{profile_id, :_, :_}, :_, :_}, [], [true]}
+    ])
+
     {:noreply, %{new_state | config: updated_config, custom_rules: custom_rules}}
   end
 
   @impl true
   def handle_info({:udp, socket, ip, port, packet}, %{socket: socket} = state) do
+    # Reactivate socket for backpressure / flow control
+    :inet.setopts(socket, [active: :once])
+
     case Packet.parse(packet) do
       {:ok, query} ->
-        # process_query_fast_path returns the updated state containing synced upstreams
         new_state = process_query_fast_path(socket, ip, port, packet, query, state)
         {:noreply, new_state}
 
@@ -216,73 +226,79 @@ defmodule Hermit.Dns.Server do
     upstreams = state.upstreams
     enable_query_logging = config.enable_query_logging
 
-    # 1. Match custom rules
-    {action, redirect_val} = match_custom_rules(query.domain, state.custom_rules)
+    # 1. Lookup cache first (max optimization)
+    case lookup_cache(profile_id, query.domain, query.qtype) do
+      {:ok, cached_packet, status, answer_log_info} ->
+        <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
+        resp_packet = query.id <> rest_packet
+        :gen_udp.send(socket, ip, port, resp_packet)
 
-    # 2. Match built-in blocklists if not matched by custom rules
-    {action, redirect_val} =
-      if is_nil(action) and config.enabled do
-        cond do
-          config.block_ads and match_ets_blocklist?(query.domain, :adguard_blocklist) ->
-            {"block", nil}
-
-          config.block_goodbyeads and match_ets_blocklist?(query.domain, :goodbyeads_blocklist) ->
-            {"block", nil}
-
-          config.block_adult and match_domain_set?(query.domain, @adult_domains) ->
-            {"block", nil}
-
-          true ->
-            {nil, nil}
-        end
-      else
-        {action, redirect_val}
-      end
-
-    case action do
-      "block" ->
-        resp = Packet.build_nxdomain(query.id, query.question_section)
-        :gen_udp.send(socket, ip, port, resp)
-
-        log_and_broadcast(profile_id, ip, query.domain, query.qtype, "blocked", "NXDOMAIN", enable_query_logging)
+        log_and_broadcast(profile_id, ip, query.domain, query.qtype, status, answer_log_info, enable_query_logging)
 
         state
 
-      "redirect" when not is_nil(redirect_val) ->
-        if query.qtype == :A do
-          resp = Packet.build_a_response(query.id, query.question_section, redirect_val)
-          :gen_udp.send(socket, ip, port, resp)
+      :error ->
+        # 2. Match custom rules
+        {action, redirect_val} = match_custom_rules(query.domain, state.custom_rules)
 
-            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "redirected", redirect_val, enable_query_logging)
-        else
-          resp = Packet.build_nxdomain(query.id, query.question_section)
-          :gen_udp.send(socket, ip, port, resp)
+        # 3. Match built-in blocklists if not matched by custom rules
+        {action, redirect_val} =
+          if is_nil(action) and config.enabled do
+            cond do
+              config.block_ads and match_ets_blocklist?(query.domain, :adguard_blocklist) ->
+                {"block", nil}
 
-            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "redirected", "NXDOMAIN", enable_query_logging)
-        end
+              config.block_goodbyeads and match_ets_blocklist?(query.domain, :goodbyeads_blocklist) ->
+                {"block", nil}
 
-        state
+              config.block_adult and match_domain_set?(query.domain, @adult_domains) ->
+                {"block", nil}
 
-      _ ->
-        case lookup_cache(profile_id, query.domain, query.qtype) do
-          {:ok, cached_packet} ->
-            <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
-            resp_packet = query.id <> rest_packet
-            :gen_udp.send(socket, ip, port, resp_packet)
+              true ->
+                {nil, nil}
+            end
+          else
+            {action, redirect_val}
+          end
 
-            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", {:cache, cached_packet}, enable_query_logging)
+        case action do
+          "block" ->
+            resp = Packet.build_nxdomain(query.id, query.query_record)
+            # Store blocks in cache with 5s TTL
+            store_cache(profile_id, query.domain, query.qtype, resp, "blocked", "NXDOMAIN", 5)
+            :gen_udp.send(socket, ip, port, resp)
+
+            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "blocked", "NXDOMAIN", enable_query_logging)
 
             state
 
-          :error ->
-            # Split routing based on domain
-            target_upstreams =
-              select_upstreams_for_domain(query.domain, upstreams)
+          "redirect" when not is_nil(redirect_val) ->
+            if query.qtype == :A do
+              resp = Packet.build_a_response(query.id, query.query_record, redirect_val)
+              # Store redirects in cache with 5s TTL
+              store_cache(profile_id, query.domain, query.qtype, resp, "redirected", redirect_val, 5)
+              :gen_udp.send(socket, ip, port, resp)
 
+              log_and_broadcast(profile_id, ip, query.domain, query.qtype, "redirected", redirect_val, enable_query_logging)
+            else
+              resp = Packet.build_nxdomain(query.id, query.query_record)
+              # Store redirect failures in cache with 5s TTL
+              store_cache(profile_id, query.domain, query.qtype, resp, "redirected", "NXDOMAIN", 5)
+              :gen_udp.send(socket, ip, port, resp)
+
+              log_and_broadcast(profile_id, ip, query.domain, query.qtype, "redirected", "NXDOMAIN", enable_query_logging)
+            end
+
+            state
+
+          _ ->
+            # Split routing based on domain
+            target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
             active_upstream = state.active_upstream
             server_pid = self()
 
-            spawn(fn ->
+            # Spawn upstream resolution using Task.Supervisor for backpressure and monitoring
+            Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
               forward_to_upstream(
                 socket,
                 ip,
@@ -356,21 +372,21 @@ defmodule Hermit.Dns.Server do
     case try_upstreams_parallel(target_upstreams, active_upstream, packet) do
       {:ok, resp_packet, successful_upstream, duration} ->
         GenServer.cast(server_pid, {:update_latency, successful_upstream, duration})
-        store_cache(profile_id, query.domain, query.qtype, resp_packet)
+        store_cache(profile_id, query.domain, query.qtype, resp_packet, "resolved", resp_packet)
         :gen_udp.send(socket, ip, port, resp_packet)
 
-          log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", resp_packet, enable_query_logging)
+        log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", resp_packet, enable_query_logging)
 
       {:error, _} ->
         if active_upstream do
           GenServer.cast(server_pid, {:update_latency, active_upstream, 2000})
         end
 
-        servfail = Packet.build_nxdomain(query.id, query.question_section)
+        servfail = Packet.build_nxdomain(query.id, query.query_record)
         servfail = patch_rcode(servfail, 2)
         :gen_udp.send(socket, ip, port, servfail)
 
-          log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", "SERVFAIL", enable_query_logging)
+        log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", "SERVFAIL", enable_query_logging)
     end
   end
 
@@ -564,9 +580,17 @@ defmodule Hermit.Dns.Server do
     now = System.monotonic_time(:second)
 
     case :ets.lookup(:dns_cache, {profile_id, domain, qtype}) do
+      [{{^profile_id, ^domain, ^qtype}, resp_packet, status, answer_log_info, expires_at}] ->
+        if now < expires_at do
+          {:ok, resp_packet, status, answer_log_info}
+        else
+          :ets.delete(:dns_cache, {profile_id, domain, qtype})
+          :error
+        end
+
       [{{^profile_id, ^domain, ^qtype}, resp_packet, expires_at}] ->
         if now < expires_at do
-          {:ok, resp_packet}
+          {:ok, resp_packet, "resolved", {:cache, resp_packet}}
         else
           :ets.delete(:dns_cache, {profile_id, domain, qtype})
           :error
@@ -577,10 +601,10 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp store_cache(profile_id, domain, qtype, resp_packet) do
-    ttl = Packet.extract_min_ttl(resp_packet)
+  defp store_cache(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl \\ nil) do
+    ttl = ttl || Packet.extract_min_ttl(resp_packet)
     expires_at = System.monotonic_time(:second) + ttl
-    :ets.insert(:dns_cache, {{profile_id, domain, qtype}, resp_packet, expires_at})
+    :ets.insert(:dns_cache, {{profile_id, domain, qtype}, resp_packet, status, answer_log_info, expires_at})
   end
 
   # --- Rules & Filtering Matching Helpers ---

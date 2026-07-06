@@ -38,7 +38,10 @@ defmodule Hermit.Dns.BlocklistLoader do
     now = System.monotonic_time(:second)
     # Delete all expired entries from :dns_cache
     # Structure: {{profile_id, domain, qtype}, resp_packet, expires_at}
-    :ets.select_delete(:dns_cache, [{{{:_, :_, :_}, :_, :"$1"}, [{:<, :"$1", now}], [true]}])
+    :ets.select_delete(:dns_cache, [
+      {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]},
+      {{{:_, :_, :_}, :_, :"$1"}, [{:<, :"$1", now}], [true]}
+    ])
 
     :erlang.send_after(60_000, self(), :prune_cache)
     {:noreply, state}

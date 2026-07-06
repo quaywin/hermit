@@ -11,6 +11,7 @@ services:
     volumes:
       # Mount the whole project directory so code updates are hot-reloaded
       - .:/app
+      - /app/_build
     environment:
       - MIX_ENV=dev
       - PHX_SERVER=true

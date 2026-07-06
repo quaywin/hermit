@@ -1,6 +1,9 @@
 defmodule Hermit.Dns.PacketTest do
   use ExUnit.Case, async: true
   alias Hermit.Dns.Packet
+  require Record
+
+  Record.defrecord(:dns_query, Record.extract(:dns_query, from_lib: "dns_erlang/include/dns.hrl"))
 
   test "parses a standard DNS query binary successfully" do
     # Transaction ID: 0x1234, Flags: 0x0100 (RD=1), Questions=1, Answer/Authority/Additional=0
@@ -25,25 +28,21 @@ defmodule Hermit.Dns.PacketTest do
 
   test "builds a valid NXDOMAIN response packet" do
     id = <<0x55, 0xAA>>
-    # Question section for test.com
-    qname = <<4>> <> "test" <> <<3>> <> "com" <> <<0>>
-    question = qname <> <<0x00, 0x01, 0x00, 0x01>>
+    query_rec = dns_query(name: "test.com", class: 1, type: 1)
 
-    resp = Packet.build_nxdomain(id, question)
-    assert byte_size(resp) == 12 + byte_size(question)
+    resp = Packet.build_nxdomain(id, query_rec)
 
     # Check flags in the response header (offset 2-4)
-    # response should have QR=1, Opcode=0, AA=1, TC=0, RD=1, RA=1, Z=0, RCODE=3 (NXDOMAIN)
+    # response should have QR=1, Opcode=0, AA=false, TC=0, RD=1, RA=1, Z=0, RCODE=3 (NXDOMAIN)
     # flags binary is <<0x81, 0x83>>
     assert binary_part(resp, 2, 2) == <<0x81, 0x83>>
   end
 
   test "builds a valid A redirect response packet" do
     id = <<0x99, 0x99>>
-    qname = <<4>> <> "test" <> <<3>> <> "com" <> <<0>>
-    question = qname <> <<0x00, 0x01, 0x00, 0x01>>
+    query_rec = dns_query(name: "test.com", class: 1, type: 1)
 
-    resp = Packet.build_a_response(id, question, "10.0.0.99")
+    resp = Packet.build_a_response(id, query_rec, "10.0.0.99")
 
     # Check header details: ID (0x9999), Flags (0x8180 - Response, No Error), QDCount=1, ANCount=1
     assert binary_part(resp, 0, 2) == id
@@ -51,7 +50,7 @@ defmodule Hermit.Dns.PacketTest do
     assert binary_part(resp, 4, 4) == <<0x00, 0x01, 0x00, 0x01>>
 
     # Ensure the IP address "10.0.0.99" is embedded at the end of response (RDATA)
-    # Resp has Header(12) + Question + AnswerRR(16) -> RDATA is last 4 bytes
+    # Resp has Header(12) + Question + AnswerRR -> RDATA is last 4 bytes
     assert binary_part(resp, byte_size(resp) - 4, 4) == <<10, 0, 0, 99>>
   end
 
@@ -79,10 +78,9 @@ defmodule Hermit.Dns.PacketTest do
 
   test "extracts TTL from a response with NXDOMAIN" do
     id = <<0x55, 0xAA>>
-    qname = <<4>> <> "test" <> <<3>> <> "com" <> <<0>>
-    question = qname <> <<0x00, 0x01, 0x00, 0x01>>
+    query_rec = dns_query(name: "test.com", class: 1, type: 1)
 
-    packet_bin = Packet.build_nxdomain(id, question)
+    packet_bin = Packet.build_nxdomain(id, query_rec)
 
     assert Packet.extract_min_ttl(packet_bin) == 5
   end

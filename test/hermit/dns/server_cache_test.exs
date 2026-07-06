@@ -41,7 +41,8 @@ defmodule Hermit.Dns.ServerCacheTest do
       question = qname <> <<0, 1, 0, 1>>
 
       # Build a response packet with transaction ID 0x0000
-      mock_response = Packet.build_a_response(<<0, 0>>, question, "1.2.3.4")
+      query_rec = {:dns_query, domain, 1, 1}
+      mock_response = Packet.build_a_response(<<0, 0>>, query_rec, "1.2.3.4")
 
       # Insert into global :dns_cache table
       # Key: {profile_id, domain, qtype}

@@ -1,8 +1,6 @@
 services:
   hermit:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/quaywin/hermit:latest
     container_name: hermit_orchestrator
     # network_mode: host # Sửa thành ports mapping để chạy chế độ cô lập (Bridge Mode)
     ports:

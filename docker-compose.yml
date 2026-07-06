@@ -4,7 +4,7 @@ services:
     container_name: hermit_orchestrator
     # network_mode: host # Sửa thành ports mapping để chạy chế độ cô lập (Bridge Mode)
     ports:
-      - "3000:3000"                     # Web dashboard
+      - "${HERMIT_PORT:-3000}:3000"                     # Web dashboard
     privileged: true
     volumes:
       # Mount storage directory for Sandboxed configurations

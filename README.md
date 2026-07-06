@@ -128,10 +128,10 @@ docker compose -f docker-compose.dev.yml up -d
 By default, the dashboard runs on port `3000`. If you need to run it on a different port on your host machine, you can set the `HERMIT_PORT` environment variable before running Docker Compose:
 
 ```bash
-HERMIT_PORT=8080 docker compose up --build
+HERMIT_PORT=8080 docker compose up -d
 ```
 
-This will map port `8080` on your host machine to port `3000` inside the container, making the dashboard accessible at `http://localhost:8080`.
+This works both when building from source or pulling the image from the registry. It maps port `8080` on your host machine to port `3000` inside the container, making the dashboard accessible at `http://localhost:8080`.
 
 ### Running in Bridge Mode (Recommended for Host Isolation)
 

@@ -135,14 +135,9 @@ This works both when building from source or pulling the image from the registry
 
 ### Running in Bridge Mode (Recommended for Host Isolation)
 
-By default, the docker-compose configuration uses `network_mode: host` to simplify routing. However, if you want to run Hermit in an isolated Docker network (Bridge Mode) to protect the host's iptables and network interfaces, you can configure ports mapping instead:
+By default, the docker-compose configuration runs in Bridge Mode with mapped ports to ensure network isolation and protect the host's iptables and network interfaces.
 
-```yaml
-    ports:
-      - "3000:3000"                     # Web dashboard
-```
-
-Note: If you need to access the dynamic SOCKS5/HTTP proxies (allocated inside the range `10000 - 10199`) or the dynamic DNS servers (allocated inside the range `5400 - 5500`) directly from your host machine or external network while in Bridge Mode, you will also need to map those port ranges (e.g. `"10000-10199:10000-10199"` and `"5400-5500:5400-5500/udp"`) in your docker-compose file.
+Note: If you need to access the dynamic SOCKS5/HTTP proxies (allocated inside the range `10000 - 10199`) or the dynamic DNS servers (allocated inside the range `5400 - 5500`) directly from your host machine or external network while in Bridge Mode, you will need to map those port ranges (e.g. `"10000-10199:10000-10199"` and `"5400-5500:5400-5500/udp"`) in your `docker-compose.yml` file.
 
 ---
 

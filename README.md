@@ -97,18 +97,28 @@ When you run a VPN Pair, its network namespace is configured as follows:
 
 Hermit can be run in two different modes:
 
-### 1. Production Mode (Compiled Release)
-Runs a pre-compiled production release inside Docker.
-```bash
-docker compose up --build
-```
-Once the container has successfully started, access the web interface at:
+### 1. Production Mode (Quickest - No Clone Required)
+If you only want to run Hermit without downloading the entire source code repository:
+
+1. Download the `docker-compose.yml` configuration file:
+   ```bash
+   curl -L https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o docker-compose.yml
+   ```
+
+2. Pull the latest image and start the container:
+   ```bash
+   docker compose pull && docker compose up -d
+   ```
+
+*(Note: If you have already cloned the repository and want to manually build the production image from the local source, run: `docker compose up -d --build` instead).*
+
+Once the container has started, access the dashboard at:
 👉 **[http://localhost:3000](http://localhost:3000)**
 
 ### 2. Development Mode (Fast & Low CPU)
 Mounts the source code directory directly, enabling incremental compilation and hot-code reloading. You do not need to rebuild the Docker image when editing files.
 ```bash
-docker compose -f docker-compose.dev.yml up
+docker compose -f docker-compose.dev.yml up -d
 ```
 * Modifying source code on the host machine instantly triggers incremental compilation in less than 0.5 seconds.
 * Subsequent starts are nearly instantaneous because dependency compilation and build artifacts are cached.

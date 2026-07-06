@@ -17,11 +17,11 @@ This plane manages the encapsulation and transport of regular network traffic (H
 
 ```mermaid
 flowchart TD
-    Client[Client / Host Application] -->|1. Request In| Inbound[Inbound Profile <br> SOCKS5/HTTP or Tailscale]
+    Client["Client / Host Application"] -->|"1. Request In"| Inbound["Inbound Profile <br/> SOCKS5/HTTP or Tailscale"]
     subgraph NetNS["VPN Pair Namespace (hermit_wg_pair_id)"]
-        Inbound -->|2. Internal Forwarding| Outbound[Outbound Profile <br> WireGuard wg0]
+        Inbound -->|"2. Internal Forwarding"| Outbound["Outbound Profile <br/> WireGuard wg0"]
     end
-    Outbound -->|3. Encrypted Tunnel Out| Internet[VPN / External Internet]
+    Outbound -->|"3. Encrypted Tunnel Out"| Internet["VPN / External Internet"]
 ```
 
 * **Inbound Profiles**: Define how traffic enters the isolated namespace.
@@ -40,30 +40,27 @@ When DNS Filtering is enabled for an Inbound Profile, Hermit provisions a dedica
 
 ```mermaid
 flowchart TD
-    Client[Any Tailnet Device] -->|1. DNS Query over Tailnet| tailscaled
-    
+    Client["Tailnet Device"] -->|"1. DNS Query"| TS
+
     subgraph DNS_NS["DNS Namespace (hermit_dns_profile_id)"]
-        tailscaled["tailscaled<br>(Tailscale Node + MagicDNS)"]
-        tailscaled -->|2. Kernel routes port 53| DNAT["iptables PREROUTING DNAT<br>UDP/TCP :53 -> 10.251.{id}.1:{5400+id}"]
-    end
-    
-    subgraph Host["Host Plane (Container)"]
-        DNAT -->|3. Forwarded via veth<br>dns_h_{id} / eth0| Elixir_DNS["Elixir DNS Server<br>(bind 10.251.{id}.1, port 5400 + id)"]
-        
-        %% Fast Path
-        Elixir_DNS -->|"Fast Path: Custom Rules /<br>Blocked / Cached"| Fast_Return["Instant Response (0-1 ms)"]
-        
-        %% Slow Path
-        Elixir_DNS -->|Slow Path: Cache Miss| Upstream["Upstream DNS / DoH"]
-        Elixir_DNS -->|"Slow Path: *.ts.net query<br>to 100.100.100.100"| Policy_Route["Host Policy Routing<br>(ip rule table {1000+id})"]
+        TS["tailscaled Node"]
     end
 
-    Policy_Route -->|"4. Route back via veth<br>into namespace"| tailscaled
-    tailscaled -->|5. Resolve via MagicDNS| MagicDNS["Tailscale MagicDNS Network"]
-    
-    Fast_Return -->|Resolve immediately| Client
-    Upstream -->|6. Cache & Return| Elixir_DNS
-    MagicDNS -->|6. Cache & Return| Elixir_DNS
+    subgraph Host["Host Plane (Container)"]
+        Server["Elixir DNS Server"]
+        Fast["Fast Path<br/>(Cache / Blocklist)"]
+        Upstream["Upstream DNS / DoH"]
+        Magic["Tailscale MagicDNS"]
+    end
+
+    TS -->|"2. Redirect (iptables)"| Server
+    Server --> Fast
+    Server --> Upstream
+    Server --> Magic
+
+    Fast -->|"Instant Return"| Client
+    Upstream -->|"Cache & Return"| Server
+    Magic -->|"Cache & Return"| Server
 ```
 
 * **Tailscale Entry Point**: `tailscaled` inside the DNS namespace acts as the Tailscale network endpoint. DNS queries from any tailnet device arrive at `tailscaled`, which delivers them into the namespace's network stack. The kernel then hits `iptables PREROUTING DNAT` rules that redirect all UDP/TCP port 53 traffic to the Elixir DNS Server on the host via the virtual `veth` pair (`dns_h_{id}` on host side, `eth0` inside namespace).
@@ -98,16 +95,23 @@ When you run a VPN Pair, its network namespace is configured as follows:
 
 ## Installation & Quick Start with Docker
 
-To set up the database, fetch dependencies, compile assets, and launch the application, run a single command:
+Hermit can be run in two different modes:
 
+### 1. Production Mode (Compiled Release)
+Runs a pre-compiled production release inside Docker.
 ```bash
 docker compose up --build
 ```
-
-Once the container has successfully started, you can access the web interface at:
+Once the container has successfully started, access the web interface at:
 👉 **[http://localhost:3000](http://localhost:3000)**
 
-Config files and data for your VPN tunnels will persist in the `./storage` directory on your host machine via volume mounts.
+### 2. Development Mode (Fast & Low CPU)
+Mounts the source code directory directly, enabling incremental compilation and hot-code reloading. You do not need to rebuild the Docker image when editing files.
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+* Modifying source code on the host machine instantly triggers incremental compilation in less than 0.5 seconds.
+* Subsequent starts are nearly instantaneous because dependency compilation and build artifacts are cached.
 
 ### Customizing the Web Port
 
@@ -121,19 +125,31 @@ This will map port `8080` on your host machine to port `3000` inside the contain
 
 ### Running in Bridge Mode (Recommended for Host Isolation)
 
-By default, the docker-compose configuration uses `network_mode: host` to simplify routing. However, if you want to run Hermit in an isolated Docker network (Bridge Mode) to protect the host's iptables and network interfaces:
-
-1. Remove `network_mode: host` from your `docker-compose.yml`.
-2. Add the following `ports` mapping to allow incoming web, proxy, and DNS traffic:
+By default, the docker-compose configuration uses `network_mode: host` to simplify routing. However, if you want to run Hermit in an isolated Docker network (Bridge Mode) to protect the host's iptables and network interfaces, you can configure ports mapping instead:
 
 ```yaml
     ports:
-      - "3000:3000"
-      - "10000-10199:10000-10199"       # Mapped range for dynamic SOCKS5/HTTP proxies
-      - "5400-5500:5400-5500/udp"       # Mapped range for dynamic DNS servers
+      - "3000:3000"                     # Web dashboard
 ```
 
-Hermit will automatically allocate dynamic SOCKS5/HTTP proxies inside the range `10000 - 10199` and dynamic DNS nodes inside the range `5400 - 5500`, ensuring they map correctly to the host without any risk of host network configuration contamination.
+Note: If you need to access the dynamic SOCKS5/HTTP proxies (allocated inside the range `10000 - 10199`) or the dynamic DNS servers (allocated inside the range `5400 - 5500`) directly from your host machine or external network while in Bridge Mode, you will also need to map those port ranges (e.g. `"10000-10199:10000-10199"` and `"5400-5500:5400-5500/udp"`) in your docker-compose file.
+
+---
+
+## Production Deployment (CI/CD)
+
+To avoid high CPU and RAM consumption on your VPS during compilation, it is recommended to build the Docker image in advance and pull it.
+
+### 1. Automated Build via GitHub Actions
+A GitHub Actions workflow is pre-configured in [.github/workflows/publish.yml](/Users/quaywin/Projects_1/hermit/.github/workflows/publish.yml). When you push code to the `main` branch:
+* GitHub will automatically compile the production release.
+* The image is pushed to GitHub Container Registry (GHCR) as a Public package.
+
+### 2. Deploying on VPS
+On your VPS, you only need to run the production image using a minimal `docker-compose.yml` configuration without the source code or Dockerfile. Run the following command to deploy:
+```bash
+docker compose pull && docker compose up -d
+```
 
 ---
 

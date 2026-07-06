@@ -31,13 +31,33 @@ defmodule Hermit.Dns.Server do
   def init(opts) do
     port = opts[:port]
     profile_id = opts[:profile_id]
+    config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
+    if :erlang.whereis(Hermit.PubSub) != :undefined do
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config:#{profile_id}")
+    end
+
+    upstreams = parse_upstreams(config.upstream_dns)
+    upstreams_map = Enum.into(upstreams, %{}, fn ip -> {ip, 20} end)
+    active_upstream =
+      if map_size(upstreams_map) > 0 do
+        {best_ip, _best_latency} = Enum.min_by(upstreams_map, fn {_ip, lat} -> lat end)
+        best_ip
+      else
+        nil
+      end
+
+    custom_rules = precompile_custom_rules(config.custom_rules)
 
     state = %{
       socket: nil,
       port: port,
       profile_id: profile_id,
-      upstreams_map: %{},
-      active_upstream: nil
+      upstreams: upstreams,
+      upstreams_map: upstreams_map,
+      active_upstream: active_upstream,
+      config: config,
+      custom_rules: custom_rules
     }
 
     case try_bind_socket(state) do
@@ -72,6 +92,14 @@ defmodule Hermit.Dns.Server do
 
         {:error, reason, state}
     end
+  end
+
+  @impl true
+  def handle_info({:dns_config_updated, updated_config}, state) do
+    upstreams = parse_upstreams(updated_config.upstream_dns)
+    new_state = sync_upstreams_config(state, upstreams)
+    custom_rules = precompile_custom_rules(updated_config.custom_rules)
+    {:noreply, %{new_state | config: updated_config, custom_rules: custom_rules}}
   end
 
   @impl true
@@ -178,24 +206,18 @@ defmodule Hermit.Dns.Server do
           nil
         end
 
-      %{state | upstreams_map: upstreams_map, active_upstream: active_upstream}
+      %{state | upstreams: upstreams, upstreams_map: upstreams_map, active_upstream: active_upstream}
     end
   end
 
   defp process_query_fast_path(socket, ip, port, packet, query, state) do
-    start_time = System.monotonic_time()
-    client_ip_str = ip_to_string(ip)
     profile_id = state.profile_id
-    config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
-    upstreams = parse_upstreams(config.upstream_dns)
+    config = state.config
+    upstreams = state.upstreams
     enable_query_logging = config.enable_query_logging
 
-    # Sync state with config upstreams if changed
-    state = sync_upstreams_config(state, upstreams)
-
     # 1. Match custom rules
-    custom_rules = get_custom_rules(config.custom_rules)
-    {action, redirect_val} = match_custom_rules(query.domain, custom_rules)
+    {action, redirect_val} = match_custom_rules(query.domain, state.custom_rules)
 
     # 2. Match built-in blocklists if not matched by custom rules
     {action, redirect_val} =
@@ -217,24 +239,12 @@ defmodule Hermit.Dns.Server do
         {action, redirect_val}
       end
 
-    duration_ms =
-      System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
     case action do
       "block" ->
         resp = Packet.build_nxdomain(query.id, query.question_section)
         :gen_udp.send(socket, ip, port, resp)
 
-        log_and_broadcast(
-          profile_id,
-          client_ip_str,
-          query.domain,
-          query.qtype,
-          "blocked",
-          "NXDOMAIN",
-          duration_ms,
-          enable_query_logging
-        )
+        log_and_broadcast(profile_id, ip, query.domain, query.qtype, "blocked", "NXDOMAIN", enable_query_logging)
 
         state
 
@@ -243,30 +253,12 @@ defmodule Hermit.Dns.Server do
           resp = Packet.build_a_response(query.id, query.question_section, redirect_val)
           :gen_udp.send(socket, ip, port, resp)
 
-          log_and_broadcast(
-            profile_id,
-            client_ip_str,
-            query.domain,
-            query.qtype,
-            "redirected",
-            redirect_val,
-            duration_ms,
-            enable_query_logging
-          )
+            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "redirected", redirect_val, enable_query_logging)
         else
           resp = Packet.build_nxdomain(query.id, query.question_section)
           :gen_udp.send(socket, ip, port, resp)
 
-          log_and_broadcast(
-            profile_id,
-            client_ip_str,
-            query.domain,
-            query.qtype,
-            "redirected",
-            "NXDOMAIN",
-            duration_ms,
-            enable_query_logging
-          )
+            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "redirected", "NXDOMAIN", enable_query_logging)
         end
 
         state
@@ -278,16 +270,7 @@ defmodule Hermit.Dns.Server do
             resp_packet = query.id <> rest_packet
             :gen_udp.send(socket, ip, port, resp_packet)
 
-            log_and_broadcast(
-              profile_id,
-              client_ip_str,
-              query.domain,
-              query.qtype,
-              "resolved",
-              "Resolved (cached)",
-              duration_ms,
-              enable_query_logging
-            )
+            log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", {:cache, cached_packet}, enable_query_logging)
 
             state
 
@@ -306,10 +289,8 @@ defmodule Hermit.Dns.Server do
                 port,
                 packet,
                 query,
-                client_ip_str,
                 target_upstreams,
                 active_upstream,
-                start_time,
                 profile_id,
                 server_pid,
                 enable_query_logging
@@ -366,10 +347,8 @@ defmodule Hermit.Dns.Server do
          port,
          packet,
          query,
-         client_ip_str,
          target_upstreams,
          active_upstream,
-         start_time,
          profile_id,
          server_pid,
          enable_query_logging
@@ -380,44 +359,18 @@ defmodule Hermit.Dns.Server do
         store_cache(profile_id, query.domain, query.qtype, resp_packet)
         :gen_udp.send(socket, ip, port, resp_packet)
 
-        duration_ms =
-          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
-        answer_ip = parse_resolved_ip(resp_packet)
-
-        log_and_broadcast(
-          profile_id,
-          client_ip_str,
-          query.domain,
-          query.qtype,
-          "resolved",
-          answer_ip,
-          duration_ms,
-          enable_query_logging
-        )
+          log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", resp_packet, enable_query_logging)
 
       {:error, _} ->
         if active_upstream do
           GenServer.cast(server_pid, {:update_latency, active_upstream, 2000})
         end
 
-        duration_ms =
-          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
         servfail = Packet.build_nxdomain(query.id, query.question_section)
         servfail = patch_rcode(servfail, 2)
         :gen_udp.send(socket, ip, port, servfail)
 
-        log_and_broadcast(
-          profile_id,
-          client_ip_str,
-          query.domain,
-          query.qtype,
-          "resolved",
-          "SERVFAIL",
-          duration_ms,
-          enable_query_logging
-        )
+          log_and_broadcast(profile_id, ip, query.domain, query.qtype, "resolved", "SERVFAIL", enable_query_logging)
     end
   end
 
@@ -632,23 +585,43 @@ defmodule Hermit.Dns.Server do
 
   # --- Rules & Filtering Matching Helpers ---
 
-  defp get_custom_rules(rules) when is_list(rules), do: rules
-  defp get_custom_rules(rules) when is_map(rules), do: Map.get(rules, "custom_rules", []) || []
-  defp get_custom_rules(_), do: []
 
-  defp match_custom_rules(domain, custom_rules) do
-    Enum.find_value(custom_rules, {nil, nil}, fn rule ->
-      r_domain = Map.get(rule, "domain") || Map.get(rule, :domain)
+  defp match_custom_rules(_domain, rules_map) when map_size(rules_map) == 0, do: {nil, nil}
 
-      if r_domain && (domain == r_domain or String.ends_with?(domain, "." <> r_domain)) do
-        action = Map.get(rule, "action") || Map.get(rule, :action)
-        value = Map.get(rule, "value") || Map.get(rule, :value)
-        {action, value}
-      else
-        nil
-      end
-    end)
+  defp match_custom_rules(domain, rules_map) do
+    case Map.get(rules_map, domain) do
+      {_action, _value} = result ->
+        result
+
+      nil ->
+        case :binary.match(domain, ".") do
+          {idx, _} ->
+            parent = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
+            match_custom_rules(parent, rules_map)
+
+          :nomatch ->
+            {nil, nil}
+        end
+    end
   end
+
+  defp precompile_custom_rules(rules) when is_list(rules) do
+    rules
+    |> Enum.map(fn rule ->
+      domain = Map.get(rule, "domain") || Map.get(rule, :domain)
+      action = Map.get(rule, "action") || Map.get(rule, :action)
+      value = Map.get(rule, "value") || Map.get(rule, :value)
+      {domain, {action, value}}
+    end)
+    |> Enum.reject(fn {domain, _} -> is_nil(domain) end)
+    |> Map.new()
+  end
+
+  defp precompile_custom_rules(rules) when is_map(rules) do
+    precompile_custom_rules(Map.get(rules, "custom_rules", []) || [])
+  end
+
+  defp precompile_custom_rules(_), do: %{}
 
   defp match_domain_set?(domain, set) do
     domain == domain &&
@@ -668,38 +641,46 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp log_and_broadcast(
-         profile_id,
-         client_ip,
-         domain,
-         qtype,
-         status,
-         answer,
-         duration_ms,
-         enable_query_logging
-       ) do
-    if enable_query_logging do
-      pair_id = to_string(profile_id)
-      client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip)
+  defp log_and_broadcast(profile_id, client_ip, domain, qtype, status, answer_or_packet, true) do
+    pair_id = to_string(profile_id)
+    client_ip_str = ip_to_string(client_ip)
+    client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
 
-      log_data = %{
-        "pair_id" => pair_id,
-        "client_ip" => client_ip,
-        "client_name" => client_name || client_ip,
-        "domain" => domain,
-        "type" => Packet.qtype_to_string(qtype),
-        "status" => status,
-        "answer" => answer,
-        "duration" => duration_ms,
-        "timestamp" => System.system_time(:second)
-      }
+    answer =
+      case answer_or_packet do
+        {:cache, cached_packet} ->
+          case parse_resolved_ip(cached_packet) do
+            "Resolved" -> "Resolved (cached)"
+            ips -> "#{ips} (cached)"
+          end
 
-      counter = System.unique_integer([:monotonic])
-      :ets.insert(@table, {{pair_id, counter}, log_data})
-      prune_logs(pair_id)
+        packet when is_binary(packet) ->
+          parse_resolved_ip(packet)
 
-      Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{profile_id}", {:dns_log, log_data})
-    end
+        other ->
+          other
+      end
+
+    log_data = %{
+      "pair_id" => pair_id,
+      "client_ip" => client_ip_str,
+      "client_name" => client_name || client_ip_str,
+      "domain" => domain,
+      "type" => Packet.qtype_to_string(qtype),
+      "status" => status,
+      "answer" => answer,
+      "timestamp" => System.system_time(:second)
+    }
+
+    counter = System.unique_integer([:monotonic])
+    :ets.insert(@table, {{pair_id, counter}, log_data})
+    prune_logs(pair_id)
+
+    Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{profile_id}", {:dns_log, log_data})
+  end
+
+  defp log_and_broadcast(_profile_id, _client_ip, _domain, _qtype, _status, _answer_or_packet, false) do
+    :ok
   end
 
   defp prune_logs(pair_id) do
@@ -753,7 +734,7 @@ defmodule Hermit.Dns.Server do
         false
 
       {idx, _len} ->
-        suffix = String.slice(domain, idx + 1, byte_size(domain))
+        suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
 
         if :ets.member(table, suffix) do
           true

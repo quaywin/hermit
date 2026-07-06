@@ -109,6 +109,6 @@ defmodule Hermit.Dns.PacketTest do
       <<id::binary, 0x81, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00>> <>
         question <> answer_a <> answer_aaaa
 
-    assert Packet.extract_resolved_ips(packet_bin) == ["142.250.190.46", "2001:db8:0:0:0:0:0:1"]
+    assert Packet.extract_resolved_ips(packet_bin) == ["142.250.190.46", "2001:db8::1"]
   end
 end

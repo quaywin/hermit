@@ -11,7 +11,7 @@ defmodule Hermit.Dns.Packet do
           _ar_count::16, rest::binary>>
       ) do
     if qd_count > 0 do
-      case parse_name(rest, <<>>) do
+      case parse_name(rest, []) do
         {:ok, domain, <<qtype_val::16, qclass_val::16, question_end::binary>>} ->
           # Compute how long the question section was in total
           question_len = byte_size(rest) - byte_size(question_end)
@@ -39,21 +39,15 @@ defmodule Hermit.Dns.Packet do
   def parse(_), do: {:error, :truncated}
 
   defp parse_name(<<0, rest::binary>>, acc) do
-    {:ok, strip_trailing_dot(acc), rest}
+    domain = acc |> Enum.reverse() |> Enum.join(".")
+    {:ok, domain, rest}
   end
 
   defp parse_name(<<len, label::binary-size(len), rest::binary>>, acc) do
-    parse_name(rest, <<acc::binary, label::binary, ".">>)
+    parse_name(rest, [label | acc])
   end
 
   defp parse_name(_, _acc), do: :error
-
-  defp strip_trailing_dot(<<>>), do: ""
-
-  defp strip_trailing_dot(binary) do
-    size = byte_size(binary) - 1
-    binary_part(binary, 0, size)
-  end
 
   defp parse_qtype(1), do: :A
   defp parse_qtype(28), do: :AAAA
@@ -172,23 +166,8 @@ defmodule Hermit.Dns.Packet do
   end
 
   defp skip_name(<<0, rest::binary>>), do: {:ok, rest}
-
-  defp skip_name(<<len, rest::binary>>) when len >= 192 do
-    case rest do
-      <<_offset, next::binary>> -> {:ok, next}
-      _ -> :error
-    end
-  end
-
-  defp skip_name(<<len, rest::binary>>) do
-    if byte_size(rest) >= len do
-      <<_label::binary-size(len), next::binary>> = rest
-      skip_name(next)
-    else
-      :error
-    end
-  end
-
+  defp skip_name(<<3::2, _::14, rest::binary>>), do: {:ok, rest}
+  defp skip_name(<<len, _label::binary-size(len), rest::binary>>), do: skip_name(rest)
   defp skip_name(_), do: :error
 
   @doc """
@@ -232,10 +211,9 @@ defmodule Hermit.Dns.Packet do
 
             {28, <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>>} ->
               ip_str =
-                [a, b, c, d, e, f, g, h]
-                |> Enum.map(&Integer.to_string(&1, 16))
-                |> Enum.join(":")
-                |> String.downcase()
+                {a, b, c, d, e, f, g, h}
+                |> :inet.ntoa()
+                |> List.to_string()
 
               [ip_str | acc]
 

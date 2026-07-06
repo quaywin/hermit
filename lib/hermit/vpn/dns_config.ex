@@ -116,7 +116,12 @@ defmodule Hermit.Vpn.DnsConfig do
 
   def update_for_profile(profile_id, attrs) do
     case get_for_profile(profile_id) |> changeset(attrs) |> Hermit.Repo.update() do
-      {:ok, updated} -> {:ok, Hermit.Repo.preload(updated, :inbound_profile)}
+      {:ok, updated} ->
+        updated = Hermit.Repo.preload(updated, :inbound_profile)
+        if :erlang.whereis(Hermit.PubSub) != :undefined do
+          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config:#{profile_id}", {:dns_config_updated, updated})
+        end
+        {:ok, updated}
       {:error, changeset} -> {:error, changeset}
     end
   end

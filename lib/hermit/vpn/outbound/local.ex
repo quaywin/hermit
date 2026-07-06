@@ -219,6 +219,25 @@ defmodule Hermit.Vpn.Outbound.Local do
               end
             end
 
+            # Apply UDP GRO forwarding optimizations (gracefully)
+            case run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "ethtool",
+                   "-K",
+                   "eth0",
+                   "rx-udp-gro-forwarding",
+                   "on",
+                   "rx-gro-list",
+                   "off"
+                 ]) do
+              {:ok, _} ->
+                Logger.info("Successfully enabled UDP GRO forwarding on eth0 in namespace #{wg_name}")
+              {:error, reason} ->
+                Logger.warning("Could not enable UDP GRO forwarding on eth0 in namespace #{wg_name}: #{inspect(reason)}. Continuing without GRO optimization.")
+            end
+
             {:ok, "eth0"}
           else
             {:error, reason} ->
@@ -299,29 +318,34 @@ defmodule Hermit.Vpn.Outbound.Local do
             "10.200.#{hash}.0/30"
         end
 
-      # Delete host interface if any
-      System.cmd("ip", ["link", "delete", host_if_name])
+      try do
+        # Delete host interface if any
+        System.cmd("ip", ["link", "delete", host_if_name])
 
-      # Delete the namespace
-      if netns_exists?(wg_name) do
-        System.cmd("ip", ["netns", "del", wg_name])
+        # Delete the namespace
+        if netns_exists?(wg_name) do
+          System.cmd("ip", ["netns", "del", wg_name])
+        end
+
+        # Clean up netns DNS config
+        File.rm_rf("/etc/netns/#{wg_name}")
+
+        # Clean up iptables rules
+        System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
+        System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
+
+        System.cmd("iptables", [
+          "-D",
+          "FORWARD",
+          "-d",
+          subnet,
+          "-j",
+          "ACCEPT"
+        ])
+      rescue
+        e ->
+          Logger.warning("Error encountered during Local outbound cleanup for pair #{pair_id}: #{inspect(e)}")
       end
-
-      # Clean up netns DNS config
-      File.rm_rf("/etc/netns/#{wg_name}")
-
-      # Clean up iptables rules
-      System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
-      System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
-
-      System.cmd("iptables", [
-        "-D",
-        "FORWARD",
-        "-d",
-        subnet,
-        "-j",
-        "ACCEPT"
-      ])
 
       :ok
     end

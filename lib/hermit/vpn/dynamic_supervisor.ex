@@ -31,27 +31,38 @@ defmodule Hermit.Vpn.DynamicSupervisor do
 
     vpn_pair =
       if existing_pair do
+        inbound_changed? = existing_pair.inbound_profile_id != inbound_profile_id or existing_pair.inbound_type != inbound_type
+        outbound_changed? = existing_pair.outbound_profile_id != outbound_profile_id or existing_pair.outbound_type != outbound_type
+
         pair_inbound_config =
-          if existing_pair.inbound_config && map_size(existing_pair.inbound_config) > 0 do
-            existing_pair.inbound_config
-          else
+          if inbound_changed? do
             inbound_config
+          else
+            if existing_pair.inbound_config && map_size(existing_pair.inbound_config) > 0 do
+              existing_pair.inbound_config
+            else
+              inbound_config
+            end
           end
 
         pair_outbound_config =
-          if existing_pair.outbound_config && map_size(existing_pair.outbound_config) > 0 do
-            existing_pair.outbound_config
-          else
+          if outbound_changed? do
             outbound_config
+          else
+            if existing_pair.outbound_config && map_size(existing_pair.outbound_config) > 0 do
+              existing_pair.outbound_config
+            else
+              outbound_config
+            end
           end
 
         %{
           existing_pair
           | inbound_profile_id: inbound_profile_id,
             outbound_profile_id: outbound_profile_id,
-            inbound_type: existing_pair.inbound_type || inbound_type,
+            inbound_type: if(inbound_changed?, do: inbound_type, else: existing_pair.inbound_type || inbound_type),
             inbound_config: pair_inbound_config,
-            outbound_type: existing_pair.outbound_type || outbound_type,
+            outbound_type: if(outbound_changed?, do: outbound_type, else: existing_pair.outbound_type || outbound_type),
             outbound_config: pair_outbound_config,
             status: "running",
             wg_status: "starting",

@@ -48,6 +48,8 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
       Task.start(fn ->
         try do
           perform_update(profile_id)
+        rescue
+          e -> Logger.warning("DnsDeviceResolver: perform_update failed: #{inspect(e)}")
         after
           GenServer.cast(parent, {:update_complete, profile_id})
         end

@@ -299,16 +299,21 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
       Logger.info("Stopping WireGuard netns: #{wg_name}")
 
-      # Delete host interface if any
-      System.cmd("ip", ["link", "delete", host_if_name])
+      try do
+        # Delete host interface if any
+        System.cmd("ip", ["link", "delete", host_if_name])
 
-      # Delete the namespace
-      if netns_exists?(wg_name) do
-        System.cmd("ip", ["netns", "del", wg_name])
+        # Delete the namespace
+        if netns_exists?(wg_name) do
+          System.cmd("ip", ["netns", "del", wg_name])
+        end
+
+        # Clean up netns DNS config
+        File.rm_rf("/etc/netns/#{wg_name}")
+      rescue
+        e ->
+          Logger.warning("Error encountered during WireGuard outbound cleanup for pair #{pair_id}: #{inspect(e)}")
       end
-
-      # Clean up netns DNS config
-      File.rm_rf("/etc/netns/#{wg_name}")
 
       :ok
     end

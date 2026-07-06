@@ -79,6 +79,18 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           # Wait up to 2 seconds for socket creation
           wait_for_socket(socket_path)
 
+          # Wait for DNS/Network resolution inside the namespace to be ready
+          hosts =
+            if login_server && login_server != "" do
+              case URI.parse(login_server) do
+                %URI{host: host} when is_binary(host) -> [host, "controlplane.tailscale.com"]
+                _ -> ["controlplane.tailscale.com"]
+              end
+            else
+              ["controlplane.tailscale.com"]
+            end
+          wait_for_dns_resolve(wg_name, hosts)
+
           # Authenticate Tailscale and set exit node options
           ts_up_args = [
             "netns",
@@ -87,6 +99,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "tailscale",
             "--socket=#{socket_path}",
             "up",
+            "--reset",
             "--authkey=#{ts_auth_key}",
             "--accept-dns=true",
             "--accept-routes=false",
@@ -249,6 +262,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "tailscale",
           "--socket=#{socket_path}",
           "up",
+          "--reset",
           "--accept-dns=true",
           "--accept-routes=false",
           "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
@@ -1227,10 +1241,14 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         {:ok, pid_str} ->
           pid = String.trim(pid_str)
           Logger.info("Killing tailscaled process: #{pid}")
-          System.cmd("kill", [pid])
-          Process.sleep(200)
-          # Force kill if still running
-          System.cmd("kill", ["-9", pid])
+          try do
+            System.cmd("kill", [pid])
+            Process.sleep(200)
+            System.cmd("kill", ["-9", pid])
+          rescue
+            e ->
+              Logger.warning("Failed to kill tailscaled process with PID #{pid}: #{inspect(e)}")
+          end
 
         _ ->
           :ok
@@ -1309,5 +1327,24 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   defp get_mock_error do
     config = Application.get_env(:hermit, :docker, [])
     Keyword.get(config, :mock_error)
+  end
+  defp wait_for_dns_resolve(wg_name, hosts, retries \\ 10)
+  defp wait_for_dns_resolve(_wg_name, _hosts, 0), do: :ok
+  defp wait_for_dns_resolve(wg_name, hosts, retries) do
+    resolved? =
+      Enum.any?(hosts, fn host ->
+        case System.cmd("ip", ["netns", "exec", wg_name, "getent", "hosts", host]) do
+          {_, 0} -> true
+          _ -> false
+        end
+      end)
+
+    if resolved? do
+      Logger.info("DNS resolution is ready inside namespace #{wg_name}")
+      :ok
+    else
+      Process.sleep(500)
+      wait_for_dns_resolve(wg_name, hosts, retries - 1)
+    end
   end
 end

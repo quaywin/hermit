@@ -299,7 +299,7 @@ defmodule Hermit.Dns.Server do
             active_upstream = state.active_upstream
             server_pid = self()
 
-            Task.start(fn ->
+            spawn(fn ->
               forward_to_upstream(
                 socket,
                 ip,

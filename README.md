@@ -33,35 +33,48 @@ flowchart TD
 
 ---
 
-### 2. DNS Control Plane (Resolution & Filtering Flow)
-This plane intercepts all DNS queries originating from the Traffic Plane namespaces, applies real-time blocklists, and resolves upstream addresses efficiently.
+### 2. DNS Control Plane (Resolution & Filtering)
+This plane is completely decoupled from the VPN Pairs. It manages name resolution, caching, and blocklist filtering through dedicated DNS Nodes tied to each **Inbound Profile** (specifically Tailscale profiles), avoiding the overhead of running a local resolver inside every single tunnel.
 
-To save CPU and memory, multiple VPN Pairs using the same Inbound Profile **share a single, dedicated DNS Node**, eliminating the need to run heavy `tailscaled` processes or DNS filters inside every single tunnel.
+When DNS Filtering is enabled for an Inbound Profile, Hermit provisions a dedicated DNS namespace (`hermit_dns_{profile_id}`) running `tailscaled` as an active Tailscale node. When Tailscale DNS Override is enabled, the node's Tailscale IP is registered tailnet-wide via the Tailscale API, causing all DNS queries from any device on the tailnet to route automatically to it.
 
 ```mermaid
 flowchart TD
-    VPN_Pair["VPN Pairs (Tunnels)"] -->|1. DNS Query| Elixir_DNS["Elixir DNS Server (Host)"]
+    Client[Any Tailnet Device] -->|1. DNS Query over Tailnet| tailscaled
     
-    %% Fast Path
-    Elixir_DNS -->|Fast Path: Cached / Blocked| Fast_Return["Instant Response (0-1 ms)"]
-    Fast_Return -->|Resolve immediately| VPN_Pair
+    subgraph DNS_NS["DNS Namespace (hermit_dns_profile_id)"]
+        tailscaled["tailscaled<br>(Tailscale Node + MagicDNS)"]
+        tailscaled -->|2. Kernel routes port 53| DNAT["iptables PREROUTING DNAT<br>UDP/TCP :53 -> 10.251.{id}.1:{5400+id}"]
+    end
     
-    %% Slow Path
-    Elixir_DNS -->|Slow Path: Cache Miss| TS_Node["Shared Tailscale DNS Node"]
-    TS_Node -->|2. Resolve Upstream| Internet["Tailscale DNS / MagicDNS"]
-    Internet -->|3. Return IP| TS_Node
-    TS_Node -->|4. Update Cache| Elixir_DNS
+    subgraph Host["Host Plane (Container)"]
+        DNAT -->|3. Forwarded via veth<br>dns_h_{id} / eth0| Elixir_DNS["Elixir DNS Server<br>(bind 10.251.{id}.1, port 5400 + id)"]
+        
+        %% Fast Path
+        Elixir_DNS -->|"Fast Path: Custom Rules /<br>Blocked / Cached"| Fast_Return["Instant Response (0-1 ms)"]
+        
+        %% Slow Path
+        Elixir_DNS -->|Slow Path: Cache Miss| Upstream["Upstream DNS / DoH"]
+        Elixir_DNS -->|"Slow Path: *.ts.net query<br>to 100.100.100.100"| Policy_Route["Host Policy Routing<br>(ip rule table {1000+id})"]
+    end
+
+    Policy_Route -->|"4. Route back via veth<br>into namespace"| tailscaled
+    tailscaled -->|5. Resolve via MagicDNS| MagicDNS["Tailscale MagicDNS Network"]
+    
+    Fast_Return -->|Resolve immediately| Client
+    Upstream -->|6. Cache & Return| Elixir_DNS
+    MagicDNS -->|6. Cache & Return| Elixir_DNS
 ```
 
-* **Interception**: When a VPN Pair namespace has DNS filtering enabled, its local `resolv.conf` is pointed to `127.0.0.1`. Custom `iptables` rules intercept all port 53 traffic and forward it over a virtual `veth` link to the host.
-* **Centralized Filtering (Fast Path vs. Slow Path)**: The Elixir DNS Server on the host evaluates the query to decide the routing:
-  * **Fast Path (Blocked or Cached)**: If the query matches any blocklists (AdGuard, GoodbyeAds, Adult content), matches custom redirection rules, or is already present in the shared ETS Cache, the server immediately returns the response to the VPN Pair namespace. This takes 0-1 ms and bypasses the external network entirely.
-  * **Slow Path (Upstream Forwarding)**: If the query is a cache miss and is not blocked, it proceeds to upstream resolution.
-
-* **Upstream Forwarding & MagicDNS**: If a query must go upstream:
-  * The host DNS server forwards it to the dedicated DNS namespace (`hermit_dns_profile_id`) created for that Inbound Profile.
-  * This namespace runs its own `tailscaled` daemon, ensuring private nodes (`MagicDNS`) and tailnet-wide DNS configurations are resolved securely.
-  * The shared architecture isolates profiles from each other while keeping resource footprints tiny.
+* **Tailscale Entry Point**: `tailscaled` inside the DNS namespace acts as the Tailscale network endpoint. DNS queries from any tailnet device arrive at `tailscaled`, which delivers them into the namespace's network stack. The kernel then hits `iptables PREROUTING DNAT` rules that redirect all UDP/TCP port 53 traffic to the Elixir DNS Server on the host via the virtual `veth` pair (`dns_h_{id}` on host side, `eth0` inside namespace).
+* **Profile-Specific Filtering (Fast Path vs. Slow Path)**: The Elixir DNS Server on the host (bound to `10.251.{profile_id}.1` on port `5400 + profile_id`) evaluates each query in order:
+  1. **Custom Rules**: Matched first. Domains matching a custom `block` rule get an immediate NXDOMAIN; domains matching a `redirect` rule get the configured IP.
+  2. **Blocklists**: If no custom rule matched, the query is checked against AdGuard, GoodbyeAds, and adult content blocklists loaded into ETS. Matched domains get NXDOMAIN.
+  3. **Cache**: If the query is not blocked, the shared ETS cache is checked. A cache hit returns the stored response immediately.
+  4. Steps 1-3 are the **Fast Path** (0-1 ms, no external network access). A cache miss proceeds to the **Slow Path** (upstream forwarding).
+* **Upstream Forwarding & MagicDNS**: On a cache miss, the server selects upstreams based on the domain:
+  * Standard queries are forwarded to configured upstream DNS servers (UDP) or DNS-over-HTTPS (DoH) endpoints. The server probes all upstreams periodically and prefers the lowest-latency one.
+  * Queries for Tailscale internal domains (`*.ts.net`, `*.tailscale.net`) are forwarded to the Tailscale nameserver `100.100.100.100`. Source-based policy routing on the host (`ip rule from 10.251.{id}.1 to 100.64.0.0/10 table {1000+id}`) routes these packets back through the veth into the DNS namespace, where `tailscaled` resolves them via MagicDNS. The response follows the same path in reverse.
 
 ---
 
@@ -72,8 +85,7 @@ When you run a VPN Pair, its network namespace is configured as follows:
 | Connection Feature | Plane / Mechanism | Network Route |
 | :--- | :--- | :--- |
 | **Web & API Traffic** | Traffic Plane | Routed directly through the outbound WireGuard (`wg0`) interface. |
-| **DNS Queries (Filtered)** | DNS Control Plane | Redirected locally, sent to Host Elixir, checked against blocklists, then resolved through the profile-shared Tailscale DNS node. |
-| **DNS Queries (Disabled)** | Traffic Plane | Handled as standard IP packets, resolved directly through external IP resolvers (e.g. Google, Cloudflare) via the active VPN tunnel. |
+| **DNS Queries** | DNS Control Plane | Resolved according to the VPN Pair's configuration: either routed over the Tailnet to the profile's dedicated DNS Node (when using Tailscale DNS integration) or resolved via custom DNS resolvers. |
 
 ---
 
@@ -106,6 +118,22 @@ HERMIT_PORT=8080 docker compose up --build
 ```
 
 This will map port `8080` on your host machine to port `3000` inside the container, making the dashboard accessible at `http://localhost:8080`.
+
+### Running in Bridge Mode (Recommended for Host Isolation)
+
+By default, the docker-compose configuration uses `network_mode: host` to simplify routing. However, if you want to run Hermit in an isolated Docker network (Bridge Mode) to protect the host's iptables and network interfaces:
+
+1. Remove `network_mode: host` from your `docker-compose.yml`.
+2. Add the following `ports` mapping to allow incoming web, proxy, and DNS traffic:
+
+```yaml
+    ports:
+      - "3000:3000"
+      - "10000-10199:10000-10199"       # Mapped range for dynamic SOCKS5/HTTP proxies
+      - "5400-5500:5400-5500/udp"       # Mapped range for dynamic DNS servers
+```
+
+Hermit will automatically allocate dynamic SOCKS5/HTTP proxies inside the range `10000 - 10199` and dynamic DNS nodes inside the range `5400 - 5500`, ensuring they map correctly to the host without any risk of host network configuration contamination.
 
 ---
 

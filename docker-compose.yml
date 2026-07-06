@@ -4,7 +4,11 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: hermit_orchestrator
-    network_mode: host
+    # network_mode: host # Sửa thành ports mapping để chạy chế độ cô lập (Bridge Mode)
+    ports:
+      - "3000:3000"                     # Web dashboard
+      - "10000-10199:10000-10199"       # Dải cổng cấp phát SOCKS5/HTTP Proxy
+      - "5400-5500:5400-5500/udp"       # Dải cổng cấp phát dynamic DNS server
     privileged: true
     volumes:
       # Mount storage directory for Sandboxed configurations

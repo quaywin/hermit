@@ -49,27 +49,32 @@ defmodule Hermit.Dns.BlocklistLoader do
     Logger.info("Starting loading AdGuard DNS Filter from #{path}...")
     start_time = System.monotonic_time()
 
-    if File.exists?(path) do
-      count =
-        path
-        |> File.stream!([:read_ahead])
-        |> Stream.map(&String.trim/1)
-        |> Stream.map(&parse_adguard_line/1)
-        |> Stream.reject(&is_nil/1)
-        |> Stream.chunk_every(5000)
-        |> Stream.map(fn chunk ->
-          entries = Enum.map(chunk, &{&1, true})
-          :ets.insert(@adguard_table, entries)
-          length(entries)
-        end)
-        |> Enum.sum()
+    try do
+      if File.exists?(path) do
+        count =
+          path
+          |> File.stream!([:read_ahead])
+          |> Stream.map(&String.trim/1)
+          |> Stream.map(&parse_adguard_line/1)
+          |> Stream.reject(&is_nil/1)
+          |> Stream.chunk_every(5000)
+          |> Stream.map(fn chunk ->
+            entries = Enum.map(chunk, &{&1, true})
+            :ets.insert(@adguard_table, entries)
+            length(entries)
+          end)
+          |> Enum.sum()
 
-      duration =
-        System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+        duration =
+          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
 
-      Logger.info("Loaded #{count} domains into AdGuard DNS Filter in #{duration}ms")
-    else
-      Logger.warning("AdGuard DNS Filter file not found at #{path}")
+        Logger.info("Loaded #{count} domains into AdGuard DNS Filter in #{duration}ms")
+      else
+        Logger.warning("AdGuard DNS Filter file not found at #{path}")
+      end
+    rescue
+      e ->
+        Logger.error("Failed to load AdGuard DNS Filter: #{inspect(e)}")
     end
   end
 
@@ -78,27 +83,32 @@ defmodule Hermit.Dns.BlocklistLoader do
     Logger.info("Starting loading GoodbyeAds Filter from #{path}...")
     start_time = System.monotonic_time()
 
-    if File.exists?(path) do
-      count =
-        path
-        |> File.stream!([:read_ahead])
-        |> Stream.map(&String.trim/1)
-        |> Stream.map(&parse_hosts_line/1)
-        |> Stream.reject(&is_nil/1)
-        |> Stream.chunk_every(5000)
-        |> Stream.map(fn chunk ->
-          entries = Enum.map(chunk, &{&1, true})
-          :ets.insert(@goodbyeads_table, entries)
-          length(entries)
-        end)
-        |> Enum.sum()
+    try do
+      if File.exists?(path) do
+        count =
+          path
+          |> File.stream!([:read_ahead])
+          |> Stream.map(&String.trim/1)
+          |> Stream.map(&parse_hosts_line/1)
+          |> Stream.reject(&is_nil/1)
+          |> Stream.chunk_every(5000)
+          |> Stream.map(fn chunk ->
+            entries = Enum.map(chunk, &{&1, true})
+            :ets.insert(@goodbyeads_table, entries)
+            length(entries)
+          end)
+          |> Enum.sum()
 
-      duration =
-        System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+        duration =
+          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
 
-      Logger.info("Loaded #{count} domains into GoodbyeAds Filter in #{duration}ms")
-    else
-      Logger.warning("GoodbyeAds Filter file not found at #{path}")
+        Logger.info("Loaded #{count} domains into GoodbyeAds Filter in #{duration}ms")
+      else
+        Logger.warning("GoodbyeAds Filter file not found at #{path}")
+      end
+    rescue
+      e ->
+        Logger.error("Failed to load GoodbyeAds Filter: #{inspect(e)}")
     end
   end
 

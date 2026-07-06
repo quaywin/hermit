@@ -57,6 +57,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     profile_id = opts[:profile_id]
     # Perform initial sync on startup
     send(self(), :initial_sync)
@@ -135,7 +136,7 @@ defmodule Hermit.Vpn.DnsWorker do
         case start_dns_node(state, config) do
           {:ok, new_state} ->
             if config.tailscale_override_dns do
-              Task.start(fn -> update_tailscale_dns_config(new_state.ts_ip, config) end)
+              spawn(fn -> update_tailscale_dns_config(new_state.ts_ip, config) end)
             end
 
             {{:ok, :started},
@@ -153,7 +154,7 @@ defmodule Hermit.Vpn.DnsWorker do
         new_state = stop_dns_node(state)
 
         if config.tailscale_override_dns or state.tailscale_override_dns == true do
-          Task.start(fn -> clear_tailscale_dns_config(config) end)
+          spawn(fn -> clear_tailscale_dns_config(config) end)
         end
 
         {{:ok, :stopped}, %{new_state | tailscale_override_dns: false}}
@@ -161,9 +162,9 @@ defmodule Hermit.Vpn.DnsWorker do
       config.enabled and state.status == :running ->
         if state.tailscale_override_dns != config.tailscale_override_dns do
           if config.tailscale_override_dns do
-            Task.start(fn -> update_tailscale_dns_config(state.ts_ip, config) end)
+            spawn(fn -> update_tailscale_dns_config(state.ts_ip, config) end)
           else
-            Task.start(fn -> clear_tailscale_dns_config(config) end)
+            spawn(fn -> clear_tailscale_dns_config(config) end)
           end
 
           {{:ok, :updated_dns_integration},
@@ -450,6 +451,30 @@ defmodule Hermit.Vpn.DnsWorker do
                "table",
                to_string(table_id)
              ]) do
+        # Apply UDP GRO forwarding optimizations (gracefully)
+        case run_cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "ethtool",
+               "-K",
+               "eth0",
+               "rx-udp-gro-forwarding",
+               "on",
+               "rx-gro-list",
+               "off"
+             ]) do
+          {:ok, _} ->
+            Logger.info(
+              "Successfully enabled UDP GRO forwarding on eth0 in namespace #{ns}"
+            )
+
+          {:error, reason} ->
+            Logger.warning(
+              "Could not enable UDP GRO forwarding on eth0 in namespace #{ns}: #{inspect(reason)}. Continuing without GRO optimization."
+            )
+        end
+
         :ok
       else
         {:error, reason} -> {:error, reason}
@@ -483,6 +508,18 @@ defmodule Hermit.Vpn.DnsWorker do
           end
 
           wait_for_socket(socket_path)
+
+          # Wait for DNS/Network resolution inside the namespace to be ready
+          hosts =
+            if login_server && login_server != "" do
+              case URI.parse(login_server) do
+                %URI{host: host} when is_binary(host) -> [host, "controlplane.tailscale.com"]
+                _ -> ["controlplane.tailscale.com"]
+              end
+            else
+              ["controlplane.tailscale.com"]
+            end
+          wait_for_dns_resolve(ns, hosts)
 
           ts_up_args = [
             "netns",
@@ -586,39 +623,44 @@ defmodule Hermit.Vpn.DnsWorker do
     host_ip = "10.251.#{profile_id}.1"
     subnet = "10.251.#{profile_id}.0/30"
 
-    System.cmd("ip", ["link", "delete", host_if])
+    try do
+      System.cmd("ip", ["link", "delete", host_if])
 
-    if netns_exists?(ns) do
-      System.cmd("ip", ["netns", "del", ns])
+      if netns_exists?(ns) do
+        System.cmd("ip", ["netns", "del", ns])
+      end
+
+      # Clean up netns DNS config directory
+      File.rm_rf("/etc/netns/#{ns}")
+
+      System.cmd("ip", [
+        "rule",
+        "delete",
+        "from",
+        host_ip,
+        "to",
+        "100.64.0.0/10",
+        "table",
+        to_string(table_id)
+      ])
+
+      System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
+
+      System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
+      System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
+
+      System.cmd("iptables", [
+        "-D",
+        "FORWARD",
+        "-d",
+        subnet,
+        "-j",
+        "ACCEPT"
+      ])
+    rescue
+      e ->
+        Logger.warning("Error encountered during DNS namespace cleanup for profile #{profile_id}: #{inspect(e)}")
     end
-
-    # Clean up netns DNS config directory
-    File.rm_rf("/etc/netns/#{ns}")
-
-    System.cmd("ip", [
-      "rule",
-      "delete",
-      "from",
-      host_ip,
-      "to",
-      "100.64.0.0/10",
-      "table",
-      to_string(table_id)
-    ])
-
-    System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
-
-    System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
-    System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
-
-    System.cmd("iptables", [
-      "-D",
-      "FORWARD",
-      "-d",
-      subnet,
-      "-j",
-      "ACCEPT"
-    ])
 
     :ok
   end
@@ -769,9 +811,14 @@ defmodule Hermit.Vpn.DnsWorker do
       case File.read(pid_path) do
         {:ok, pid_str} ->
           pid = String.trim(pid_str)
-          System.cmd("kill", [pid])
-          Process.sleep(200)
-          System.cmd("kill", ["-9", pid])
+          try do
+            System.cmd("kill", [pid])
+            Process.sleep(200)
+            System.cmd("kill", ["-9", pid])
+          rescue
+            e ->
+              Logger.warning("Failed to kill tailscaled process with PID #{pid}: #{inspect(e)}")
+          end
 
         _ ->
           :ok
@@ -827,6 +874,25 @@ defmodule Hermit.Vpn.DnsWorker do
 
       _ ->
         :ok
+    end
+  end
+  defp wait_for_dns_resolve(ns, hosts, retries \\ 10)
+  defp wait_for_dns_resolve(_ns, _hosts, 0), do: :ok
+  defp wait_for_dns_resolve(ns, hosts, retries) do
+    resolved? =
+      Enum.any?(hosts, fn host ->
+        case System.cmd("ip", ["netns", "exec", ns, "getent", "hosts", host]) do
+          {_, 0} -> true
+          _ -> false
+        end
+      end)
+
+    if resolved? do
+      Logger.info("DNS resolution is ready inside namespace #{ns}")
+      :ok
+    else
+      Process.sleep(500)
+      wait_for_dns_resolve(ns, hosts, retries - 1)
     end
   end
 end

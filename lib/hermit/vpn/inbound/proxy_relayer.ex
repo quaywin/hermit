@@ -50,96 +50,106 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     case result do
       {:ok, procs} ->
         # Determine host ports to listen on
-        {socks_listen_port, http_listen_port} =
+        parsed_port =
           case proxy_port do
-            nil ->
-              {0, 0}
-
-            "" ->
-              {0, 0}
-
-            p when is_binary(p) ->
-              port_int = String.to_integer(p)
-              if port_int == 0, do: {0, 0}, else: {port_int, port_int + 1}
-
-            p when is_integer(p) ->
-              if p == 0, do: {0, 0}, else: {p, p + 1}
+            nil -> 0
+            "" -> 0
+            p when is_binary(p) -> String.to_integer(p)
+            p when is_integer(p) -> p
           end
 
-        listen_opts = [
-          :binary,
-          packet: :raw,
-          active: false,
-          reuseaddr: true,
-          nodelay: true,
-          recbuf: 262_144,
-          sndbuf: 262_144,
-          buffer: 262_144,
-          backlog: 1024
-        ]
+        ports_result =
+          if parsed_port == 0 do
+            Hermit.Vpn.PortAllocator.allocate_free_ports()
+          else
+            {:ok, parsed_port, parsed_port + 1}
+          end
 
-        listeners_result =
-          case :gen_tcp.listen(socks_listen_port, listen_opts) do
-            {:ok, socks_socket} ->
-              case :gen_tcp.listen(http_listen_port, listen_opts) do
-                {:ok, http_socket} ->
-                  {:ok, socks_socket, http_socket}
+        case ports_result do
+          {:ok, socks_listen_port, http_listen_port} ->
+            listen_opts = [
+              :binary,
+              packet: :raw,
+              active: false,
+              reuseaddr: true,
+              nodelay: true,
+              recbuf: 262_144,
+              sndbuf: 262_144,
+              buffer: 262_144,
+              backlog: 1024
+            ]
+
+            listeners_result =
+              case :gen_tcp.listen(socks_listen_port, listen_opts) do
+                {:ok, socks_socket} ->
+                  case :gen_tcp.listen(http_listen_port, listen_opts) do
+                    {:ok, http_socket} ->
+                      {:ok, socks_socket, http_socket}
+
+                    {:error, reason} ->
+                      :gen_tcp.close(socks_socket)
+                      {:error, {:http_listen_failed, reason}}
+                  end
 
                 {:error, reason} ->
-                  :gen_tcp.close(socks_socket)
-                  {:error, {:http_listen_failed, reason}}
+                  {:error, {:socks_listen_failed, reason}}
               end
 
-            {:error, reason} ->
-              {:error, {:socks_listen_failed, reason}}
-          end
+            case listeners_result do
+              {:ok, socks_listen_socket, http_listen_socket} ->
+                {:ok, actual_socks_port} = :inet.port(socks_listen_socket)
+                {:ok, actual_http_port} = :inet.port(http_listen_socket)
 
-        case listeners_result do
-          {:ok, socks_listen_socket, http_listen_socket} ->
-            {:ok, actual_socks_port} = :inet.port(socks_listen_socket)
-            {:ok, actual_http_port} = :inet.port(http_listen_socket)
+                Logger.info("Host SOCKS5 Proxy listening on port #{actual_socks_port}")
+                Logger.info("Host HTTP Proxy listening on port #{actual_http_port}")
 
-            Logger.info("Host SOCKS5 Proxy listening on port #{actual_socks_port}")
-            Logger.info("Host HTTP Proxy listening on port #{actual_http_port}")
+                # Write proxy connection info to JSON file
+                info = %{
+                  "socks5_port" => actual_socks_port,
+                  "http_port" => actual_http_port,
+                  "socks5_url" => "socks5://127.0.0.1:#{actual_socks_port}",
+                  "http_url" => "http://127.0.0.1:#{actual_http_port}",
+                  "status" => "Running"
+                }
 
-            # Write proxy connection info to JSON file
-            info = %{
-              "socks5_port" => actual_socks_port,
-              "http_port" => actual_http_port,
-              "socks5_url" => "socks5://127.0.0.1:#{actual_socks_port}",
-              "http_url" => "http://127.0.0.1:#{actual_http_port}",
-              "status" => "Running"
-            }
+                File.write!(Path.join(storage_dir, "proxy_info.json"), Jason.encode!(info))
+                # Also write main pid file for get_status
+                File.write!(Path.join(storage_dir, "proxy.pid"), "#{System.pid()}")
 
-            File.write!(Path.join(storage_dir, "proxy_info.json"), Jason.encode!(info))
-            # Also write main pid file for get_status
-            File.write!(Path.join(storage_dir, "proxy.pid"), "#{System.pid()}")
+                state = %{
+                  pair_id: pair_id,
+                  storage_dir: storage_dir,
+                  vh_name: vh_name,
+                  socks_listen_socket: socks_listen_socket,
+                  http_listen_socket: http_listen_socket,
+                  socks_port_proc: if(procs == :mocked, do: nil, else: elem(procs, 0)),
+                  http_port_proc: if(procs == :mocked, do: nil, else: elem(procs, 1)),
+                  ns_ip: ns_ip,
+                  socks_port: socks_port,
+                  http_port: http_port,
+                  actual_socks_port: actual_socks_port,
+                  actual_http_port: actual_http_port,
+                  mock?: mock?
+                }
 
-            state = %{
-              pair_id: pair_id,
-              storage_dir: storage_dir,
-              vh_name: vh_name,
-              socks_listen_socket: socks_listen_socket,
-              http_listen_socket: http_listen_socket,
-              socks_port_proc: if(procs == :mocked, do: nil, else: elem(procs, 0)),
-              http_port_proc: if(procs == :mocked, do: nil, else: elem(procs, 1)),
-              ns_ip: ns_ip,
-              socks_port: socks_port,
-              http_port: http_port,
-              actual_socks_port: actual_socks_port,
-              actual_http_port: actual_http_port,
-              mock?: mock?
-            }
+                # Spawn acceptor loops
+                spawn_link(fn -> accept_loop(socks_listen_socket, :socks, state) end)
+                spawn_link(fn -> accept_loop(http_listen_socket, :http, state) end)
 
-            # Spawn acceptor loops
-            spawn_link(fn -> accept_loop(socks_listen_socket, :socks, state) end)
-            spawn_link(fn -> accept_loop(http_listen_socket, :http, state) end)
+                {:ok, state}
 
-            {:ok, state}
+              {:error, reason} ->
+                unless mock?, do: cleanup_veth(vh_name)
+                {:stop, {:listen_failed, reason}}
+            end
 
           {:error, reason} ->
+            if procs != :mocked do
+              kill_port_process(elem(procs, 0))
+              kill_port_process(elem(procs, 1))
+            end
             unless mock?, do: cleanup_veth(vh_name)
-            {:stop, {:listen_failed, reason}}
+            {:stop, reason}
         end
 
       {:error, reason} ->

@@ -40,7 +40,8 @@ defmodule Hermit.Vpn.PairWorker do
     outbound_config: nil,
     inbound_type: "tailscale",
     metrics_timer: nil,
-    outbound_if: "wg0"
+    outbound_if: "wg0",
+    bootstrap_task: nil
   ]
 
   # --- Client API ---
@@ -647,7 +648,7 @@ defmodule Hermit.Vpn.PairWorker do
             {:ok, iface} ->
               updated_state = %{
                 state
-                | wg_status: :running,
+                | wg_status: :starting,
                   wg_error_reason: nil,
                   wg_retry_count: 0,
                   outbound_if: iface
@@ -656,9 +657,7 @@ defmodule Hermit.Vpn.PairWorker do
               updated_state = broadcast_update(updated_state)
               updated_state = schedule_metrics_poll(updated_state)
 
-              if state.ts_status == :starting do
-                send(self(), {:check_wg_health, 10})
-              end
+              send(self(), {:check_wg_health, 10})
 
               {:noreply, updated_state}
 
@@ -705,6 +704,8 @@ defmodule Hermit.Vpn.PairWorker do
   @impl true
   def handle_call(:pause, _from, state) do
     Logger.info("Pausing VPN pair (both components): #{state.id}")
+
+    state = maybe_shutdown_bootstrap_task(state)
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
@@ -753,6 +754,8 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call(:restart, _from, state) do
     Logger.info("Restarting VPN pair (both components): #{state.id}")
 
+    state = maybe_shutdown_bootstrap_task(state)
+
     if state.ts_port do
       stop_inbound_process(state.ts_port)
     end
@@ -791,6 +794,8 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:stop_wg}, _from, state) do
     Logger.info("Stopping WireGuard for pair: #{state.id}")
 
+    state = maybe_shutdown_bootstrap_task(state)
+
     if state.ts_port do
       stop_inbound_process(state.ts_port)
     end
@@ -819,6 +824,8 @@ defmodule Hermit.Vpn.PairWorker do
   @impl true
   def handle_call({:restart_wg}, _from, state) do
     Logger.info("Restarting WireGuard for pair: #{state.id}")
+
+    state = maybe_shutdown_bootstrap_task(state)
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
@@ -852,6 +859,7 @@ defmodule Hermit.Vpn.PairWorker do
     Logger.info("Updating WireGuard config for pair: #{state.id}")
 
     updated_state = %{state | wg_config_content: new_wg_config}
+    updated_state = maybe_shutdown_bootstrap_task(updated_state)
 
     try do
       File.mkdir_p!(updated_state.storage_dir)
@@ -920,6 +928,7 @@ defmodule Hermit.Vpn.PairWorker do
       | outbound_config: new_config,
         wg_config_content: new_wg_config
     }
+    updated_state = maybe_shutdown_bootstrap_task(updated_state)
 
     try do
       File.mkdir_p!(updated_state.storage_dir)
@@ -1014,19 +1023,25 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_call({:start_ts}, _from, state) do
-    if not netns_exists?(state.wg_container_name) do
-      {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."},
-       state}
-    else
-      updated_state = %{state | ts_status: :starting, ts_error_reason: nil}
-      updated_state = broadcast_update(updated_state)
-      {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
+    cond do
+      state.wg_status != :running ->
+        {:reply, {:error, "WireGuard is not running. Outbound connection must be established first."}, state}
+
+      not netns_exists?(state.wg_container_name) ->
+        {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."}, state}
+
+      true ->
+        updated_state = %{state | ts_status: :starting, ts_error_reason: nil}
+        updated_state = broadcast_update(updated_state)
+        {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
     end
   end
 
   @impl true
   def handle_call({:stop_ts}, _from, state) do
     Logger.info("Stopping Tailscale for pair: #{state.id}")
+
+    state = maybe_shutdown_bootstrap_task(state)
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
@@ -1048,17 +1063,28 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_call({:restart_ts}, _from, state) do
-    Logger.info("Restarting Tailscale for pair: #{state.id}")
+    cond do
+      state.wg_status != :running ->
+        {:reply, {:error, "WireGuard is not running. Outbound connection must be established first."}, state}
 
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
+      not netns_exists?(state.wg_container_name) ->
+        {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."}, state}
+
+      true ->
+        Logger.info("Restarting Tailscale for pair: #{state.id}")
+
+        state = maybe_shutdown_bootstrap_task(state)
+
+        if state.ts_port do
+          stop_inbound_process(state.ts_port)
+        end
+
+        state.inbound_module.cleanup(state.id, state.storage_dir)
+
+        updated_state = %{state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
+        updated_state = broadcast_update(updated_state)
+        {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
     end
-
-    state.inbound_module.cleanup(state.id, state.storage_dir)
-
-    updated_state = %{state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
-    updated_state = broadcast_update(updated_state)
-    {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
   end
 
   @impl true
@@ -1087,58 +1113,89 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:check_wg_health, retries}, state) do
-    if state.ts_status == :starting do
-      case state.outbound_module.get_status(state.id, state.storage_dir) do
-        :running ->
-          trigger_handshake("hermit_wg_#{state.id}")
+    case state.outbound_module.get_status(state.id, state.storage_dir) do
+      :running ->
+        trigger_handshake("hermit_wg_#{state.id}")
 
-          case state.outbound_module.get_metrics(state.id, state.storage_dir) do
-            {:ok, %{bytes_received: bytes_received}}
-            when bytes_received > 0 or state.outbound_module == Hermit.Vpn.Outbound.Local ->
-              case state.inbound_module.bootstrap(
-                     state.id,
-                     state.outbound_if || "wg0",
-                     state.storage_dir,
-                     state.inbound_config
-                   ) do
-                {:ok, port} ->
-                  Task.start(fn ->
-                    state.inbound_module.approve_exit_node(state.id)
-                  end)
-
-                  running_state = %{
-                    state
-                    | ts_status: :running,
-                      ts_error_reason: nil,
-                      started_at: System.system_time(:second),
-                      ts_port: port,
-                      ts_retry_count: 0
-                  }
-
-                  updated_state = broadcast_update(running_state)
-                  updated_state = schedule_metrics_poll(updated_state)
-                  {:noreply, updated_state}
-
-                {:error, reason} ->
-                  error_state = %{
-                    state
-                    | ts_status: :error,
-                      ts_error_reason: "Tailscale failed: #{inspect(reason)}"
-                  }
-
-                  updated_state = broadcast_update(error_state)
-                  maybe_schedule_ts_recovery(updated_state)
-                  updated_state = schedule_metrics_poll(updated_state)
-                  {:noreply, updated_state}
+        case state.outbound_module.get_metrics(state.id, state.storage_dir) do
+          {:ok, %{bytes_received: bytes_received}}
+          when bytes_received > 0 or state.outbound_module == Hermit.Vpn.Outbound.Local ->
+            state =
+              if state.wg_status != :running do
+                %{state | wg_status: :running, wg_error_reason: nil}
+                |> broadcast_update()
+              else
+                state
               end
 
-            _ ->
-              retry_health_check(retries, state)
-          end
+            if state.ts_status == :starting do
+              if state.bootstrap_task do
+                {:noreply, state}
+              else
+                parent = self()
+                id = state.id
+                outbound_if = state.outbound_if || "wg0"
+                storage_dir = state.storage_dir
+                inbound_config = state.inbound_config
+                inbound_module = state.inbound_module
 
-        _ ->
-          retry_health_check(retries, state)
-      end
+                {:ok, task_pid} =
+                  Task.start(fn ->
+                    res = inbound_module.bootstrap(id, outbound_if, storage_dir, inbound_config)
+
+                    case res do
+                      {:ok, port_or_pid} ->
+                        if is_port(port_or_pid) do
+                          Port.connect(port_or_pid, parent)
+                        else
+                          Process.unlink(port_or_pid)
+                        end
+
+                        send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
+
+                      other ->
+                        send(parent, {:bootstrap_result, self(), other})
+                    end
+                  end)
+
+                ref = Process.monitor(task_pid)
+                new_state = %{state | bootstrap_task: %{pid: task_pid, ref: ref}}
+                {:noreply, new_state}
+              end
+            else
+              {:noreply, state}
+            end
+
+          _ ->
+            retry_health_check(retries, state)
+        end
+
+      _ ->
+        retry_health_check(retries, state)
+    end
+  end
+
+  @impl true
+  def handle_info({:bootstrap_result, task_pid, result}, state) do
+    if state.bootstrap_task && state.bootstrap_task.pid == task_pid do
+      Process.demonitor(state.bootstrap_task.ref, [:flush])
+      handle_bootstrap_result(result, %{state | bootstrap_task: nil})
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _task_pid, reason}, state) do
+    if state.bootstrap_task && state.bootstrap_task.ref == ref do
+      Logger.error(
+        "Bootstrap task for pair #{state.id} crashed or exited prematurely: #{inspect(reason)}"
+      )
+
+      handle_bootstrap_result(
+        {:error, {:bootstrap_crashed, reason}},
+        %{state | bootstrap_task: nil}
+      )
     else
       {:noreply, state}
     end
@@ -1248,6 +1305,8 @@ defmodule Hermit.Vpn.PairWorker do
           "Recovering WireGuard for pair: #{state.id} (attempt #{state.wg_retry_count + 1})"
         )
 
+        state = maybe_shutdown_bootstrap_task(state)
+
         state.inbound_module.cleanup(state.id, state.storage_dir)
 
         state.outbound_module.cleanup(state.id, state.storage_dir)
@@ -1289,6 +1348,8 @@ defmodule Hermit.Vpn.PairWorker do
         Logger.info(
           "Recovering Tailscale for pair: #{state.id} (attempt #{state.ts_retry_count + 1})"
         )
+
+        state = maybe_shutdown_bootstrap_task(state)
 
         if state.ts_port do
           stop_inbound_process(state.ts_port)
@@ -1342,11 +1403,11 @@ defmodule Hermit.Vpn.PairWorker do
         {:noreply, updated_state}
 
       true ->
-        Logger.info(
-          "Received EXIT signal from #{inspect(pid)}, shutting down PairWorker #{state.id}. Reason: #{inspect(reason)}"
+        Logger.warning(
+          "Received EXIT signal from auxiliary process #{inspect(pid)} for pair #{state.id} (not main inbound port). Reason: #{inspect(reason)}"
         )
 
-        {:stop, reason, state}
+        {:noreply, state}
     end
   end
 
@@ -1357,6 +1418,8 @@ defmodule Hermit.Vpn.PairWorker do
     )
 
     Phoenix.PubSub.broadcast(Hermit.PubSub, @topic, {:vpn_pair_deleted, state.id})
+
+    state = maybe_shutdown_bootstrap_task(state)
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
@@ -1463,9 +1526,15 @@ defmodule Hermit.Vpn.PairWorker do
 
   defp retry_health_check(0, state) do
     Logger.error("WireGuard tunnel handshake timeout for pair: #{state.id}")
-    error_state = %{state | ts_status: :error, ts_error_reason: "WireGuard handshake timeout"}
+    error_state = %{
+      state
+      | wg_status: :error,
+        wg_error_reason: "WireGuard handshake timeout",
+        ts_status: if(state.ts_status == :starting, do: :stopped, else: state.ts_status),
+        ts_error_reason: nil
+    }
     updated_state = broadcast_update(error_state)
-    maybe_schedule_ts_recovery(updated_state)
+    maybe_schedule_wg_recovery(updated_state)
     updated_state = schedule_metrics_poll(updated_state)
     {:noreply, updated_state}
   end
@@ -1738,6 +1807,56 @@ defmodule Hermit.Vpn.PairWorker do
       |> Enum.reject(&(&1 == ""))
     else
       []
+    end
+  end
+
+
+  defp maybe_shutdown_bootstrap_task(state) do
+    if state.bootstrap_task do
+      Logger.info("Shutting down active bootstrap task for pair #{state.id}")
+      Process.demonitor(state.bootstrap_task.ref, [:flush])
+      Process.exit(state.bootstrap_task.pid, :kill)
+      %{state | bootstrap_task: nil}
+    else
+      state
+    end
+  end
+
+  defp handle_bootstrap_result(result, state) do
+    case result do
+      {:ok, port} ->
+        unless is_port(port) do
+          Process.link(port)
+        end
+
+        Task.start(fn ->
+          state.inbound_module.approve_exit_node(state.id)
+        end)
+
+        running_state = %{
+          state
+          | ts_status: :running,
+            ts_error_reason: nil,
+            started_at: System.system_time(:second),
+            ts_port: port,
+            ts_retry_count: 0
+        }
+
+        updated_state = broadcast_update(running_state)
+        updated_state = schedule_metrics_poll(updated_state)
+        {:noreply, updated_state}
+
+      {:error, reason} ->
+        error_state = %{
+          state
+          | ts_status: :error,
+            ts_error_reason: "Tailscale failed: #{inspect(reason)}"
+        }
+
+        updated_state = broadcast_update(error_state)
+        maybe_schedule_ts_recovery(updated_state)
+        updated_state = schedule_metrics_poll(updated_state)
+        {:noreply, updated_state}
     end
   end
 end

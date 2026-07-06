@@ -58,9 +58,21 @@ defmodule Hermit.Dns.Server do
         receive_timeout: 2000
       )
 
+    # Bind the client socket for sending/receiving upstream queries asynchronously immediately.
+    # Since it uses port 0, this always succeeds.
+    upstream_socket =
+      case :gen_udp.open(0, [:binary, active: true]) do
+        {:ok, sock} ->
+          sock
+
+        {:error, reason} ->
+          Logger.error("DNS Server: Failed to bind upstream client socket: #{inspect(reason)}")
+          nil
+      end
+
     state = %{
       socket: nil,
-      upstream_socket: nil,
+      upstream_socket: upstream_socket,
       doh_client: doh_client,
       pending_queries: %{},
       port: port,
@@ -77,15 +89,7 @@ defmodule Hermit.Dns.Server do
 
     case try_bind_socket(state) do
       {:ok, new_state} ->
-        # Bind the client socket for sending/receiving upstream queries asynchronously
-        case :gen_udp.open(0, [:binary, active: true]) do
-          {:ok, upstream_socket} ->
-            {:ok, %{new_state | upstream_socket: upstream_socket}}
-
-          {:error, reason} ->
-            Logger.error("DNS Server: Failed to bind upstream client socket: #{inspect(reason)}")
-            {:ok, new_state}
-        end
+        {:ok, new_state}
 
       {:error, _reason, new_state} ->
         :erlang.send_after(1000, self(), :retry_bind)

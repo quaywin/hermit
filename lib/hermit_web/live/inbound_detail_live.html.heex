@@ -211,20 +211,59 @@
 
                 <!-- Dedicated IP Status -->
                 <%= if dns_enabled do %>
-                  <div class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-[8px] p-4 text-xs space-y-2">
-                    <div class="flex items-start gap-2">
-                      <span class="text-base">🟢</span>
-                      <div>
-                        <span class="font-semibold block text-emerald-600">Centralized DNS Node Running</span>
-                        DNS Node IP:
-                        <code class="bg-emerald-500/20 px-1 py-0.5 rounded font-mono text-emerald-800">{@dns_ip ||
-                          "100.64.0.100"}</code>
-                        <p class="text-[10px] text-emerald-600/80 mt-1">
-                          Queries from this profile are redirected through this IP inside the Tailnet network namespace.
-                        </p>
+                  <%= case @dns_status do %>
+                    <% :running -> %>
+                      <div class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-[8px] p-4 text-xs space-y-2">
+                        <div class="flex items-start gap-2">
+                          <span class="text-base">🟢</span>
+                          <div>
+                            <span class="font-semibold block text-emerald-600">Centralized DNS Node Running</span>
+                            DNS Node IP:
+                            <code class="bg-emerald-500/20 px-1 py-0.5 rounded font-mono text-emerald-800">{@dns_ip ||
+                              "Retrieving IP..."}</code>
+                            <p class="text-[10px] text-emerald-600/80 mt-1">
+                              Queries from this profile are redirected through this IP inside the Tailnet network namespace.
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
+                    <% :starting -> %>
+                      <div class="bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-[8px] p-4 text-xs space-y-2">
+                        <div class="flex items-start gap-2">
+                          <span class="text-base animate-pulse">🟡</span>
+                          <div>
+                            <span class="font-semibold block text-amber-600">Centralized DNS Node Starting...</span>
+                            <p class="text-[10px] text-amber-600/80 mt-1">
+                              Booting isolated namespace and launching Tailscale daemon. Please wait...
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    <% :error -> %>
+                      <div class="bg-red-500/10 border border-red-500/20 text-red-600 rounded-[8px] p-4 text-xs space-y-2">
+                        <div class="flex items-start gap-2">
+                          <span class="text-base">🔴</span>
+                          <div>
+                            <span class="font-semibold block text-red-600">Centralized DNS Node Error</span>
+                            <p class="text-[10px] text-red-600/80 mt-1">
+                              Failed to run DNS node. Check error details below or Tailscale configuration.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    <% _ -> %>
+                      <div class="bg-base-200 border border-base-300 text-base-content/60 rounded-[8px] p-4 text-xs">
+                        <div class="flex items-start gap-2">
+                          <span class="text-base">⚪</span>
+                          <div>
+                            <span class="font-semibold block text-base-content/85">DNS Control Inactive</span>
+                            <p class="text-[10px] text-base-content/50 mt-0.5">
+                              Centralized DNS Node is offline. Toggle the switch above to spin up the isolated DNS node for this profile.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                  <% end %>
                 <% else %>
                   <div class="bg-base-200 border border-base-300 text-base-content/60 rounded-[8px] p-4 text-xs">
                     <div class="flex items-start gap-2">

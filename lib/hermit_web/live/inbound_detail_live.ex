@@ -18,9 +18,10 @@ defmodule HermitWeb.InboundDetailLive do
          |> push_navigate(to: ~p"/")}
 
       profile ->
-        # Subscription for DNS logs
+        # Subscription for DNS logs and status polling
         if connected?(socket) and profile.type == "tailscale" do
           Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_logs:#{profile.id}")
+          :timer.send_interval(1000, self(), :tick)
         end
 
         dns_config =
@@ -498,6 +499,18 @@ defmodule HermitWeb.InboundDetailLive do
       )
 
     {:noreply, stream_insert(socket, :dns_logs, log_with_id, at: 0, limit: 150)}
+  end
+
+  @impl true
+  def handle_info(:tick, socket) do
+    profile = socket.assigns.profile
+
+    if profile && profile.type == "tailscale" do
+      {status, ip, err} = DnsWorker.get_status(profile.id)
+      {:noreply, assign(socket, dns_status: status, dns_ip: ip, dns_error: err)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # --- Helpers ---

@@ -173,21 +173,15 @@ defmodule Hermit.Dns.Server do
           upstream = Enum.at(target_upstreams, current_index)
           # Only accept response if it matches the source IP of the current active upstream
           # (Checking upstream_ip tuple matches target_upstreams tuple)
-          expected_ip =
+          # Tối ưu hóa so khớp IP và Port trực tiếp từ cấu trúc upstream
+          is_valid_source? =
             case upstream do
-              {:udp, {ip, _port}} -> ip
-              {:udp, ip} when is_tuple(ip) -> ip
-              _ -> nil
+              {:udp, {^upstream_ip, ^upstream_port}} -> true
+              {:udp, ^upstream_ip} when upstream_port == 53 -> true
+              _ -> false
             end
 
-          expected_port =
-            case upstream do
-              {:udp, {_ip, port}} -> port
-              {:udp, ip} when is_tuple(ip) -> 53
-              _ -> nil
-            end
-
-          if expected_ip == upstream_ip and expected_port == upstream_port do
+          if is_valid_source? do
             # Send response packet back to client
             :gen_udp.send(state.socket, client_ip, client_port, packet)
 
@@ -195,12 +189,16 @@ defmodule Hermit.Dns.Server do
             duration = System.monotonic_time(:millisecond) - sent_at
             GenServer.cast(self(), {:update_latency, upstream, duration})
 
-            # Process metadata, store cache and log
+            # Chỉ phân tích metadata chi tiết (ghép chuỗi danh sách IPs) khi bật logging
             {ttl, answer_log_info} =
               case Packet.parse_response_metadata(packet) do
                 {:ok, extracted_ttl, ips} ->
-                  answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
-                  {extracted_ttl, answer}
+                  if state.config.enable_query_logging do
+                    answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
+                    {extracted_ttl, answer}
+                  else
+                    {extracted_ttl, "Resolved"}
+                  end
 
                 _ ->
                   {10, "Resolved"}
@@ -211,8 +209,6 @@ defmodule Hermit.Dns.Server do
               original_query.domain,
               original_query.qtype,
               packet,
-              "resolved",
-              answer_log_info,
               ttl
             )
 
@@ -262,12 +258,16 @@ defmodule Hermit.Dns.Server do
           # Log latency update
           GenServer.cast(self(), {:update_latency, upstream, duration})
 
-          # Process metadata, store cache and log
+          # Chỉ phân tích metadata chi tiết (ghép chuỗi danh sách IPs) khi bật logging
           {ttl, answer_log_info} =
             case Packet.parse_response_metadata(packet) do
               {:ok, extracted_ttl, ips} ->
-                answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
-                {extracted_ttl, answer}
+                if state.config.enable_query_logging do
+                  answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
+                  {extracted_ttl, answer}
+                else
+                  {extracted_ttl, "Resolved"}
+                end
 
               _ ->
                 {10, "Resolved"}
@@ -278,8 +278,6 @@ defmodule Hermit.Dns.Server do
             original_query.domain,
             original_query.qtype,
             packet,
-            "resolved",
-            answer_log_info,
             ttl
           )
 
@@ -818,8 +816,15 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp store_cache(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl \\ nil) do
+  # For resolved packets (optimized, saves memory by storing only 3-tuple in ETS)
+  defp store_cache(profile_id, domain, qtype, resp_packet, ttl) do
     ttl = ttl || Packet.extract_min_ttl(resp_packet)
+    expires_at = System.monotonic_time(:second) + ttl
+    :ets.insert(:dns_cache, {{profile_id, domain, qtype}, resp_packet, expires_at})
+  end
+
+  # For blocked/redirected results (keeps full context)
+  defp store_cache(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl) do
     expires_at = System.monotonic_time(:second) + ttl
 
     :ets.insert(

@@ -162,7 +162,7 @@ defmodule Hermit.Dns.Server do
   # Handle asynchronous responses from upstream DNS servers
   @impl true
   def handle_info(
-        {:udp, upstream_socket, upstream_ip, 53, packet},
+        {:udp, upstream_socket, upstream_ip, upstream_port, packet},
         %{upstream_socket: upstream_socket} = state
       ) do
     if byte_size(packet) >= 12 do
@@ -180,7 +180,14 @@ defmodule Hermit.Dns.Server do
               _ -> nil
             end
 
-          if expected_ip == upstream_ip do
+          expected_port =
+            case upstream do
+              {:udp, {_ip, port}} -> port
+              {:udp, ip} when is_tuple(ip) -> 53
+              _ -> nil
+            end
+
+          if expected_ip == upstream_ip and expected_port == upstream_port do
             # Send response packet back to client
             :gen_udp.send(state.socket, client_ip, client_port, packet)
 
@@ -719,13 +726,19 @@ defmodule Hermit.Dns.Server do
   defp query_upstream({:udp, upstream}, packet) do
     start = System.monotonic_time()
 
+    {ip, port} =
+      case upstream do
+        {ip_addr, p} -> {ip_addr, p}
+        ip_addr when is_tuple(ip_addr) -> {ip_addr, 53}
+      end
+
     case :gen_udp.open(0, [:binary, active: false]) do
       {:ok, socket} ->
         try do
-          case :gen_udp.send(socket, upstream, 53, packet) do
+          case :gen_udp.send(socket, ip, port, packet) do
             :ok ->
               case :gen_udp.recv(socket, 0, 1500) do
-                {:ok, {_ip, 53, resp_packet}} ->
+                {:ok, {_ip, _port, resp_packet}} ->
                   duration =
                     System.convert_time_unit(
                       System.monotonic_time() - start,

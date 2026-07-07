@@ -191,7 +191,7 @@ defmodule Hermit.Dns.Server do
 
             # Chỉ phân tích metadata chi tiết (ghép chuỗi danh sách IPs) khi bật logging
             {ttl, answer_log_info} =
-              case Packet.parse_response_metadata(packet) do
+              case Packet.parse_response_metadata(packet, state.config.enable_query_logging) do
                 {:ok, extracted_ttl, ips} ->
                   if state.config.enable_query_logging do
                     answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
@@ -260,7 +260,7 @@ defmodule Hermit.Dns.Server do
 
           # Chỉ phân tích metadata chi tiết (ghép chuỗi danh sách IPs) khi bật logging
           {ttl, answer_log_info} =
-            case Packet.parse_response_metadata(packet) do
+            case Packet.parse_response_metadata(packet, state.config.enable_query_logging) do
               {:ok, extracted_ttl, ips} ->
                 if state.config.enable_query_logging do
                   answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")

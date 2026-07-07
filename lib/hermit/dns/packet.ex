@@ -187,7 +187,7 @@ defmodule Hermit.Dns.Packet do
   @doc """
   Parses metadata (minimum TTL and resolved IPs) from a DNS response packet in one pass.
   """
-  def parse_response_metadata(packet) do
+  def parse_response_metadata(packet, extract_ips? \\ true) do
     case :dns.decode_message(packet) do
       msg when Record.is_record(msg, :dns_message) ->
         rcode = dns_message(msg, :rc)
@@ -220,7 +220,7 @@ defmodule Hermit.Dns.Packet do
           end
 
         ips =
-          if rcode == 0 do
+          if rcode == 0 and extract_ips? do
             Enum.flat_map(answers, fn rr ->
               if Record.is_record(rr, :dns_rr) do
                 type = dns_rr(rr, :type)

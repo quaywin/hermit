@@ -130,7 +130,7 @@ defmodule Hermit.Vpn.DnsWorker do
     cond do
       config.enabled and state.status in [:stopped, :error] ->
         Logger.info(
-          "DNS Server is enabled for profile #{state.profile_id}. Bootstrapping Dedicated DNS Node..."
+          "DNS Server is enabled for profile #{state.profile_id}. Ensuring Dedicated DNS Node is running..."
         )
 
         case start_dns_node(state, config) do
@@ -148,7 +148,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
       not config.enabled and state.status in [:running, :starting, :error] ->
         Logger.info(
-          "DNS Server is disabled for profile #{state.profile_id}. Stopping Dedicated DNS Node..."
+          "DNS Server is disabled for profile #{state.profile_id}. Putting DNS Node offline..."
         )
 
         new_state = stop_dns_node(state)
@@ -219,9 +219,26 @@ defmodule Hermit.Vpn.DnsWorker do
     if mock?() do
       %{state | status: :stopped, ts_ip: nil, mock_timer: nil}
     else
-      cleanup_namespace(state.profile_id)
-      if state.ts_port, do: stop_port_process(state.ts_port)
-      %{state | status: :stopped, ts_ip: nil, ts_port: nil, error_reason: nil}
+      # Thay vì cleanup_namespace(profile_id) và dừng hẳn tailscaled daemon,
+      # ta chỉ mang node tailscale down. Namespace và daemon vẫn giữ nguyên.
+      # Điều này tối ưu tốc độ kết nối/ngắt kết nối mà không cần tạo/xóa network interface liên tục.
+      ns = "hermit_dns_#{state.profile_id}"
+      socket_path = "/run/tailscaled.dns_#{state.profile_id}.socket"
+
+      if netns_exists?(ns) do
+        _ =
+          run_cmd("ip", [
+            "netns",
+            "exec",
+            ns,
+            "tailscale",
+            "--socket=#{socket_path}",
+            "down"
+          ])
+      end
+
+      # Trạng thái DNS worker chuyển sang :stopped nhưng ta giữ nguyên ts_port và các tài nguyên
+      %{state | status: :stopped, ts_ip: nil, mock_timer: nil, error_reason: nil}
     end
   end
 
@@ -237,278 +254,296 @@ defmodule Hermit.Vpn.DnsWorker do
     subnet = "10.251.#{profile_id}.0/30"
     port = 5400 + profile_id
 
-    cleanup_namespace(profile_id)
+    socket_path = "/run/tailscaled.dns_#{profile_id}.socket"
 
-    # Setup isolated resolv.conf for the namespace to prevent tailscaled from overwriting host resolv.conf
-    netns_dns_dir = "/etc/netns/#{ns}"
-    File.mkdir_p!(netns_dns_dir)
+    # Nếu namespace và tailscaled daemon socket đã tồn tại/đang chạy và namespace có thể sử dụng được, ta không cần bootstrap lại từ đầu
+    has_existing_env = netns_exists?(ns) and netns_usable?(ns) and File.exists?(socket_path)
 
-    if File.exists?("/etc/resolv.conf") do
-      case File.read("/etc/resolv.conf") do
-        {:ok, resolv_content} ->
-          final_content = build_resolv_conf(resolv_content)
-          File.write!(Path.join(netns_dns_dir, "resolv.conf"), final_content)
+    setup_result =
+      if has_existing_env do
+        :ok
+      else
+        cleanup_namespace(profile_id)
 
-        _ ->
+        # Setup isolated resolv.conf for the namespace to prevent tailscaled from overwriting host resolv.conf
+        netns_dns_dir = "/etc/netns/#{ns}"
+        File.mkdir_p!(netns_dns_dir)
+
+        if File.exists?("/etc/resolv.conf") do
+          case File.read("/etc/resolv.conf") do
+            {:ok, resolv_content} ->
+              final_content = build_resolv_conf(resolv_content)
+              File.write!(Path.join(netns_dns_dir, "resolv.conf"), final_content)
+
+            _ ->
+              File.write!(
+                Path.join(netns_dns_dir, "resolv.conf"),
+                "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+              )
+          end
+        else
           File.write!(
             Path.join(netns_dns_dir, "resolv.conf"),
             "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
           )
-      end
-    else
-      File.write!(
-        Path.join(netns_dns_dir, "resolv.conf"),
-        "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
-      )
-    end
-
-    result =
-      with {:ok, _} <- run_cmd("ip", ["netns", "add", ns]),
-           {:ok, _} <-
-             run_cmd("ip", ["link", "add", host_if, "type", "veth", "peer", "name", ns_if]),
-           {:ok, _} <- run_cmd("ip", ["link", "set", ns_if, "netns", ns]),
-           {:ok, _} <-
-             run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", ns_if, "name", "eth0"]),
-           {:ok, _} <- run_cmd("ip", ["addr", "add", "#{host_ip}/30", "dev", host_if]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "ip",
-               "addr",
-               "add",
-               "#{ns_ip}/30",
-               "dev",
-               "eth0"
-             ]),
-           {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
-           {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "mtu", "1400"]),
-           {:ok, _} <-
-             run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "mtu", "1400"]),
-           {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "sysctl",
-               "-w",
-               "net.ipv4.ip_forward=1"
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "sysctl",
-               "-w",
-               "net.ipv6.conf.all.forwarding=1"
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "sysctl",
-               "-w",
-               "net.ipv4.conf.all.rp_filter=0"
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "sysctl",
-               "-w",
-               "net.ipv4.conf.default.rp_filter=0"
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "sysctl",
-               "-w",
-               "net.ipv4.conf.eth0.rp_filter=0"
-             ]),
-           {:ok, _} <-
-             run_cmd("sysctl", [
-               "-w",
-               "net.ipv4.conf.#{host_if}.rp_filter=0"
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "ip",
-               "route",
-               "add",
-               "default",
-               "via",
-               host_ip,
-               "dev",
-               "eth0"
-             ]),
-           # NAT routing on Host
-           {:ok, _} <-
-             run_cmd("iptables", [
-               "-t",
-               "nat",
-               "-I",
-               "POSTROUTING",
-               "-s",
-               subnet,
-               "-j",
-               "MASQUERADE"
-             ]),
-           {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
-           {:ok, _} <-
-             run_cmd("iptables", [
-               "-I",
-               "FORWARD",
-               "-d",
-               subnet,
-               "-j",
-               "ACCEPT"
-             ]),
-           # DNAT port redirection inside namespace
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "iptables",
-               "-t",
-               "nat",
-               "-A",
-               "PREROUTING",
-               "-p",
-               "udp",
-               "--dport",
-               "53",
-               "-j",
-               "DNAT",
-               "--to-destination",
-               "#{host_ip}:#{port}"
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "iptables",
-               "-t",
-               "nat",
-               "-A",
-               "PREROUTING",
-               "-p",
-               "tcp",
-               "--dport",
-               "53",
-               "-j",
-               "DNAT",
-               "--to-destination",
-               "#{host_ip}:#{port}"
-             ]),
-           # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
-           {:ok, _} <-
-             run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "iptables",
-               "-I",
-               "FORWARD",
-               "1",
-               "-j",
-               "ACCEPT"
-             ]),
-
-           # Source policy routing on host (replacing global route)
-           {:ok, _} <-
-             run_cmd("ip", [
-               "rule",
-               "add",
-               "from",
-               host_ip,
-               "to",
-               "100.64.0.0/10",
-               "table",
-               to_string(table_id)
-             ]),
-           {:ok, _} <-
-             run_cmd("ip", [
-               "route",
-               "add",
-               "default",
-               "via",
-               ns_ip,
-               "dev",
-               host_if,
-               "table",
-               to_string(table_id)
-             ]) do
-        # Apply UDP GRO forwarding optimizations (gracefully)
-        case run_cmd("ip", [
-               "netns",
-               "exec",
-               ns,
-               "ethtool",
-               "-K",
-               "eth0",
-               "rx-udp-gro-forwarding",
-               "on",
-               "rx-gro-list",
-               "off"
-             ]) do
-          {:ok, _} ->
-            Logger.info(
-              "Successfully enabled UDP GRO forwarding on eth0 in namespace #{ns}"
-            )
-
-          {:error, reason} ->
-            Logger.warning(
-              "Could not enable UDP GRO forwarding on eth0 in namespace #{ns}: #{inspect(reason)}. Continuing without GRO optimization."
-            )
         end
 
-        :ok
-      else
-        {:error, reason} -> {:error, reason}
+        with {:ok, _} <- run_cmd("ip", ["netns", "add", ns]),
+             {:ok, _} <-
+               run_cmd("ip", ["link", "add", host_if, "type", "veth", "peer", "name", ns_if]),
+             {:ok, _} <- run_cmd("ip", ["link", "set", ns_if, "netns", ns]),
+             {:ok, _} <-
+               run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", ns_if, "name", "eth0"]),
+             {:ok, _} <- run_cmd("ip", ["addr", "add", "#{host_ip}/30", "dev", host_if]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "ip",
+                 "addr",
+                 "add",
+                 "#{ns_ip}/30",
+                 "dev",
+                 "eth0"
+               ]),
+             {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
+             {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "mtu", "1400"]),
+             {:ok, _} <-
+               run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "mtu", "1400"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "sysctl",
+                 "-w",
+                 "net.ipv4.ip_forward=1"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "sysctl",
+                 "-w",
+                 "net.ipv6.conf.all.forwarding=1"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "sysctl",
+                 "-w",
+                 "net.ipv4.conf.all.rp_filter=0"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "sysctl",
+                 "-w",
+                 "net.ipv4.conf.default.rp_filter=0"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "sysctl",
+                 "-w",
+                 "net.ipv4.conf.eth0.rp_filter=0"
+               ]),
+             {:ok, _} <-
+               run_cmd("sysctl", [
+                 "-w",
+                 "net.ipv4.conf.#{host_if}.rp_filter=0"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "ip",
+                 "route",
+                 "add",
+                 "default",
+                 "via",
+                 host_ip,
+                 "dev",
+                 "eth0"
+               ]),
+             # NAT routing on Host
+             {:ok, _} <-
+               run_cmd("iptables", [
+                 "-t",
+                 "nat",
+                 "-I",
+                 "POSTROUTING",
+                 "-s",
+                 subnet,
+                 "-j",
+                 "MASQUERADE"
+               ]),
+             {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
+             {:ok, _} <-
+               run_cmd("iptables", [
+                 "-I",
+                 "FORWARD",
+                 "-d",
+                 subnet,
+                 "-j",
+                 "ACCEPT"
+               ]),
+             # DNAT port redirection inside namespace
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "iptables",
+                 "-t",
+                 "nat",
+                 "-A",
+                 "PREROUTING",
+                 "-p",
+                 "udp",
+                 "--dport",
+                 "53",
+                 "-j",
+                 "DNAT",
+                 "--to-destination",
+                 "#{host_ip}:#{port}"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "iptables",
+                 "-t",
+                 "nat",
+                 "-A",
+                 "PREROUTING",
+                 "-p",
+                 "tcp",
+                 "--dport",
+                 "53",
+                 "-j",
+                 "DNAT",
+                 "--to-destination",
+                 "#{host_ip}:#{port}"
+               ]),
+             # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "iptables",
+                 "-I",
+                 "FORWARD",
+                 "1",
+                 "-j",
+                 "ACCEPT"
+               ]),
+
+             # Source policy routing on host (replacing global route)
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "rule",
+                 "add",
+                 "from",
+                 host_ip,
+                 "to",
+                 "100.64.0.0/10",
+                 "table",
+                 to_string(table_id)
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "route",
+                 "add",
+                 "default",
+                 "via",
+                 ns_ip,
+                 "dev",
+                 host_if,
+                 "table",
+                 to_string(table_id)
+               ]) do
+          # Apply UDP GRO forwarding optimizations (gracefully)
+          case run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "ethtool",
+                 "-K",
+                 "eth0",
+                 "rx-udp-gro-forwarding",
+                 "on",
+                 "rx-gro-list",
+                 "off"
+               ]) do
+            {:ok, _} ->
+              Logger.info("Successfully enabled UDP GRO forwarding on eth0 in namespace #{ns}")
+
+            {:error, reason} ->
+              Logger.warning(
+                "Could not enable UDP GRO forwarding on eth0 in namespace #{ns}: #{inspect(reason)}. Continuing without GRO optimization."
+              )
+          end
+
+          :ok
+        else
+          {:error, reason} -> {:error, reason}
+        end
       end
 
-    case result do
+    case setup_result do
       :ok ->
-        socket_path = "/run/tailscaled.dns_#{profile_id}.socket"
-        File.rm(socket_path)
-
         state_path = Path.join(storage_dir, "tailscaled.state")
         pid_path = Path.join(storage_dir, "tailscaled.pid")
 
-        port_args = [
-          "netns",
-          "exec",
-          ns,
-          "tailscaled",
-          "--socket=#{socket_path}",
-          "--state=#{state_path}",
-          "--port=#{41640 + profile_id}",
-          "--no-logs-no-support"
-        ]
+        daemon_port =
+          if has_existing_env do
+            # Nếu daemon đã chạy từ trước, ta tái sử dụng port cũ hoặc tìm lại (Elixir port được coi là nil hoặc đã được giữ trong state)
+            # Vì state được truyền vào là state cũ nhưng khi stop ta chỉ giữ trong GenServer state.
+            nil
+          else
+            File.rm(socket_path)
 
-        try do
-          daemon_port = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
+            port_args = [
+              "netns",
+              "exec",
+              ns,
+              "tailscaled",
+              "--socket=#{socket_path}",
+              "--state=#{state_path}",
+              "--port=#{41640 + profile_id}",
+              "--no-logs-no-support"
+            ]
 
-          case Port.info(daemon_port, :os_pid) do
-            {:os_pid, os_pid} -> File.write!(pid_path, "#{os_pid}")
-            _ -> :ok
+            try do
+              p = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
+
+              case Port.info(p, :os_pid) do
+                {:os_pid, os_pid} -> File.write!(pid_path, "#{os_pid}")
+                _ -> :ok
+              end
+
+              wait_for_socket(socket_path)
+              p
+            rescue
+              e -> raise e
+            end
           end
 
-          wait_for_socket(socket_path)
-
+        try do
           # Wait for DNS/Network resolution inside the namespace to be ready
           hosts =
             if login_server && login_server != "" do
@@ -519,6 +554,7 @@ defmodule Hermit.Vpn.DnsWorker do
             else
               ["controlplane.tailscale.com"]
             end
+
           wait_for_dns_resolve(ns, hosts)
 
           ts_up_args = [
@@ -544,46 +580,48 @@ defmodule Hermit.Vpn.DnsWorker do
 
           case run_cmd("ip", ts_up_args) do
             {:ok, _} ->
-              # Avoid masquerading DNS query packets forwarded from tailscale0 to host
-              _ =
-                run_cmd("ip", [
-                  "netns",
-                  "exec",
-                  ns,
-                  "iptables",
-                  "-t",
-                  "nat",
-                  "-I",
-                  "POSTROUTING",
-                  "-p",
-                  "udp",
-                  "-d",
-                  host_ip,
-                  "--dport",
-                  to_string(port),
-                  "-j",
-                  "RETURN"
-                ])
+              # Avoid masquerading DNS query packets forwarded from tailscale0 to host (chỉ chạy khi khởi tạo mới)
+              if not has_existing_env do
+                _ =
+                  run_cmd("ip", [
+                    "netns",
+                    "exec",
+                    ns,
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-I",
+                    "POSTROUTING",
+                    "-p",
+                    "udp",
+                    "-d",
+                    host_ip,
+                    "--dport",
+                    to_string(port),
+                    "-j",
+                    "RETURN"
+                  ])
 
-              _ =
-                run_cmd("ip", [
-                  "netns",
-                  "exec",
-                  ns,
-                  "iptables",
-                  "-t",
-                  "nat",
-                  "-I",
-                  "POSTROUTING",
-                  "-p",
-                  "tcp",
-                  "-d",
-                  host_ip,
-                  "--dport",
-                  to_string(port),
-                  "-j",
-                  "RETURN"
-                ])
+                _ =
+                  run_cmd("ip", [
+                    "netns",
+                    "exec",
+                    ns,
+                    "iptables",
+                    "-t",
+                    "nat",
+                    "-I",
+                    "POSTROUTING",
+                    "-p",
+                    "tcp",
+                    "-d",
+                    host_ip,
+                    "--dport",
+                    to_string(port),
+                    "-j",
+                    "RETURN"
+                  ])
+              end
 
               case System.cmd("ip", [
                      "netns",
@@ -603,7 +641,10 @@ defmodule Hermit.Vpn.DnsWorker do
               end
 
             {:error, reason} ->
-              stop_tailscaled_by_pid(pid_path)
+              if not has_existing_env do
+                stop_tailscaled_by_pid(pid_path)
+              end
+
               {:error, {:tailscale_up_failed, reason}}
           end
         rescue
@@ -659,7 +700,9 @@ defmodule Hermit.Vpn.DnsWorker do
       ])
     rescue
       e ->
-        Logger.warning("Error encountered during DNS namespace cleanup for profile #{profile_id}: #{inspect(e)}")
+        Logger.warning(
+          "Error encountered during DNS namespace cleanup for profile #{profile_id}: #{inspect(e)}"
+        )
     end
 
     :ok
@@ -798,6 +841,13 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
+  defp netns_usable?(ns_name) do
+    case System.cmd("ip", ["netns", "exec", ns_name, "true"]) do
+      {_, 0} -> true
+      _ -> false
+    end
+  end
+
   defp stop_port_process(port) do
     try do
       Port.close(port)
@@ -811,6 +861,7 @@ defmodule Hermit.Vpn.DnsWorker do
       case File.read(pid_path) do
         {:ok, pid_str} ->
           pid = String.trim(pid_str)
+
           try do
             System.cmd("kill", [pid])
             Process.sleep(200)
@@ -876,8 +927,10 @@ defmodule Hermit.Vpn.DnsWorker do
         :ok
     end
   end
+
   defp wait_for_dns_resolve(ns, hosts, retries \\ 10)
   defp wait_for_dns_resolve(_ns, _hosts, 0), do: :ok
+
   defp wait_for_dns_resolve(ns, hosts, retries) do
     resolved? =
       Enum.any?(hosts, fn host ->

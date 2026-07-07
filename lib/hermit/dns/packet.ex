@@ -34,30 +34,31 @@ defmodule Hermit.Dns.Packet do
     case :dns.decode_message(packet) do
       msg when Record.is_record(msg, :dns_message) ->
         qc = dns_message(msg, :qc)
+        questions = dns_message(msg, :questions)
 
-        if qc > 0 do
-          questions = dns_message(msg, :questions)
-          [first_query | _] = questions
-          domain = dns_query(first_query, :name)
-          qclass = dns_query(first_query, :class)
-          qtype_val = dns_query(first_query, :type)
-          id = dns_message(msg, :id)
+        case questions do
+          [first_query | _] when qc > 0 ->
+            domain = dns_query(first_query, :name)
+            qclass = dns_query(first_query, :class)
+            qtype_val = dns_query(first_query, :type)
+            id = dns_message(msg, :id)
 
-          id_bin = <<id::16>>
-          flags_bin = if byte_size(packet) >= 4, do: binary_part(packet, 2, 2), else: <<0, 0>>
+            id_bin = <<id::16>>
+            flags_bin = if byte_size(packet) >= 4, do: binary_part(packet, 2, 2), else: <<0, 0>>
 
-          {:ok,
-           %{
-             id: id_bin,
-             flags: flags_bin,
-             domain: domain,
-             qtype: to_qtype(qtype_val),
-             qtype_val: qtype_val,
-             qclass: qclass,
-             query_record: first_query
-           }}
-        else
-          {:error, :no_questions}
+            {:ok,
+             %{
+               id: id_bin,
+               flags: flags_bin,
+               domain: domain,
+               qtype: to_qtype(qtype_val),
+               qtype_val: qtype_val,
+               qclass: qclass,
+               query_record: first_query
+             }}
+
+          _ ->
+            {:error, :no_questions}
         end
 
       _ ->
@@ -124,7 +125,7 @@ defmodule Hermit.Dns.Packet do
   end
 
   @doc """
-  Builds an A/AAAA record response for redirect.
+  Builds a A/AAAA record response for redirect.
   """
   def build_a_response(id_bin, query_record, ip_str)
       when Record.is_record(query_record, :dns_query) do
@@ -260,39 +261,9 @@ defmodule Hermit.Dns.Packet do
   clamped between 5 and 3600 seconds.
   """
   def extract_min_ttl(packet) do
-    case :dns.decode_message(packet) do
-      msg when Record.is_record(msg, :dns_message) ->
-        rcode = dns_message(msg, :rc)
-        answers = dns_message(msg, :answers)
-
-        cond do
-          # NXDOMAIN
-          rcode == 3 ->
-            5
-
-          rcode == 0 and length(answers) > 0 ->
-            ttls =
-              Enum.flat_map(answers, fn rr ->
-                if Record.is_record(rr, :dns_rr) do
-                  [dns_rr(rr, :ttl)]
-                else
-                  []
-                end
-              end)
-
-            if ttls == [] do
-              10
-            else
-              min_ttl = Enum.min(ttls)
-              max(5, min(min_ttl, 3600))
-            end
-
-          true ->
-            5
-        end
-
-      _ ->
-        10
+    case parse_response_metadata(packet, false) do
+      {:ok, ttl, _ips} -> ttl
+      {:error, _} -> 10
     end
   end
 
@@ -301,40 +272,9 @@ defmodule Hermit.Dns.Packet do
   and returns them as a list of IP address strings.
   """
   def extract_resolved_ips(packet) do
-    case :dns.decode_message(packet) do
-      msg when Record.is_record(msg, :dns_message) ->
-        rcode = dns_message(msg, :rc)
-        answers = dns_message(msg, :answers)
-
-        if rcode == 0 do
-          answers
-          |> Enum.flat_map(fn rr ->
-            if Record.is_record(rr, :dns_rr) do
-              type = dns_rr(rr, :type)
-              data = dns_rr(rr, :data)
-
-              case {type, data} do
-                {1, rrdata} when Record.is_record(rrdata, :dns_rrdata_a) ->
-                  ip = dns_rrdata_a(rrdata, :ip)
-                  [ip_to_string(ip)]
-
-                {28, rrdata} when Record.is_record(rrdata, :dns_rrdata_aaaa) ->
-                  ip = dns_rrdata_aaaa(rrdata, :ip)
-                  [ip_to_string(ip)]
-
-                _ ->
-                  []
-              end
-            else
-              []
-            end
-          end)
-        else
-          []
-        end
-
-      _ ->
-        []
+    case parse_response_metadata(packet, true) do
+      {:ok, _ttl, ips} -> ips
+      {:error, _} -> []
     end
   end
 

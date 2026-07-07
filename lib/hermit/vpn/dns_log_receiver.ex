@@ -36,7 +36,7 @@ defmodule Hermit.Vpn.DnsLogReceiver do
     # Schedule periodic log pruning every 10 seconds to save CPU
     :erlang.send_after(10_000, self(), :periodic_prune)
 
-    case :gen_udp.open(port, [:binary, active: true, reuseaddr: true]) do
+    case :gen_udp.open(port, [:binary, active: 100, reuseaddr: true]) do
       {:ok, socket} ->
         Logger.info("DNS Log Receiver listening on UDP port #{port}")
         {:ok, %{socket: socket, port: port}}
@@ -80,18 +80,19 @@ defmodule Hermit.Vpn.DnsLogReceiver do
 
   @impl true
   def handle_info(:periodic_prune, state) do
-    # Find all unique pair_ids in the table
-    # Standard query to select all keys: {{pair_id, counter}, _}
-    # We retrieve the pair_ids to prune them individually
-    pair_ids =
-      :ets.select(@table, [{{{:"$1", :_}, :_}, [], [:"$1"]}])
-      |> Enum.uniq()
+    pair_ids = collect_pair_ids(@table)
 
     Enum.each(pair_ids, fn pair_id ->
       prune_logs(pair_id)
     end)
 
     :erlang.send_after(10_000, self(), :periodic_prune)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:udp_passive, socket}, %{socket: socket} = state) do
+    :inet.setopts(socket, active: 100)
     {:noreply, state}
   end
 
@@ -138,15 +139,30 @@ defmodule Hermit.Vpn.DnsLogReceiver do
   defp prune_logs(pair_id) do
     pattern = {{pair_id, :"$1"}, :_}
     keys = :ets.select(@table, [{pattern, [], [:"$1"]}])
+    count = length(keys)
 
-    if length(keys) > 100 do
-      sorted_keys = Enum.sort(keys)
-      to_delete_count = length(sorted_keys) - 100
-
-      Enum.take(sorted_keys, to_delete_count)
+    if count > 100 do
+      # keys already in ascending order from :ordered_set select
+      Enum.take(keys, count - 100)
       |> Enum.each(fn counter ->
         :ets.delete(@table, {pair_id, counter})
       end)
+    end
+  end
+
+  defp collect_pair_ids(table) do
+    case :ets.first(table) do
+      :"$end_of_table" -> []
+      first_key -> collect_pair_ids(table, first_key, MapSet.new())
+    end
+  end
+
+  defp collect_pair_ids(table, {pair_id, _counter} = key, acc) do
+    acc = MapSet.put(acc, pair_id)
+
+    case :ets.next(table, key) do
+      :"$end_of_table" -> MapSet.to_list(acc)
+      next_key -> collect_pair_ids(table, next_key, acc)
     end
   end
 end

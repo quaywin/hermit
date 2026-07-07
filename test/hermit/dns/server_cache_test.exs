@@ -46,9 +46,13 @@ defmodule Hermit.Dns.ServerCacheTest do
 
       # Insert into global :dns_cache table
       # Key: {profile_id, domain, qtype}
-      # Value: {{profile_id, domain, qtype}, resp_packet, expires_at}
+      # Value: {{profile_id, domain, qtype}, resp_packet, status, answer_log_info, expires_at}
       expires_at = System.monotonic_time(:second) + 100
-      :ets.insert(:dns_cache, {{profile_id, domain, :A}, mock_response, expires_at})
+
+      :ets.insert(
+        :dns_cache,
+        {{profile_id, domain, :A}, mock_response, "resolved", "1.2.3.4", expires_at}
+      )
 
       # 2. Query the server over UDP
       {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])

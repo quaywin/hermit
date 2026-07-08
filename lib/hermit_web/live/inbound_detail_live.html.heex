@@ -198,10 +198,12 @@
                     <button
                       type="button"
                       phx-click="toggle_dns_enabled"
+                      disabled={@dns_status == :starting}
                       class={[
-                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
+                        "relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#3ecf8e] focus:ring-offset-2",
                         dns_enabled && "bg-emerald-500",
-                        !dns_enabled && "bg-base-300"
+                        !dns_enabled && "bg-base-300",
+                        if(@dns_status == :starting, do: "opacity-50 cursor-not-allowed", else: "cursor-pointer")
                       ]}
                     >
                       <span
@@ -351,20 +353,28 @@
                   <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60">
                     Linked DNS Profile
                   </label>
-                  <form phx-change="select_dns_profile" id="select-dns-profile-form">
-                    <select
-                      name="dns_profile_id"
-                      class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-                    >
-                      <option value="">Auto-create separate DNS Profile</option>
-                      <option
-                        :for={p <- @dns_profiles}
-                        value={p.id}
-                        selected={@profile.dns_profile_id == p.id}
+                  <form phx-submit="select_dns_profile" id="select-dns-profile-form">
+                    <div class="flex gap-2">
+                      <select
+                        name="dns_profile_id"
+                        class="flex-1 select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
                       >
-                        {p.name}
-                      </option>
-                    </select>
+                        <option value="">Auto-create separate DNS Profile</option>
+                        <option
+                          :for={p <- @dns_profiles}
+                          value={p.id}
+                          selected={@profile.dns_profile_id == p.id}
+                        >
+                          {p.name}
+                        </option>
+                      </select>
+                      <button
+                        type="submit"
+                        class="btn btn-primary text-xs uppercase tracking-wider px-4 rounded-[4px] cursor-pointer"
+                      >
+                        Apply
+                      </button>
+                    </div>
                   </form>
                 </div>
 

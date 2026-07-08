@@ -97,12 +97,21 @@ defmodule HermitWeb.InboundDetailLive do
           Hermit.Vpn.DnsSupervisor.start_dns(updated_profile.id)
         end
 
-        changeset_new = InboundProfile.changeset(updated_profile, %{})
+        # Load new dns config (which might update the profile's dns_profile_id in DB if it was nil)
+        updated_dns_config =
+          if updated_profile.type == "tailscale",
+            do: DnsConfig.get_for_profile(updated_profile.id),
+            else: nil
+
+        # Reload profile to reflect any side-effects in get_for_profile
+        reloaded_profile = Hermit.Repo.get!(InboundProfile, updated_profile.id)
+        changeset_new = InboundProfile.changeset(reloaded_profile, %{})
 
         {:noreply,
          socket
          |> put_flash(:info, "Inbound Profile updated successfully.")
-         |> assign(profile: updated_profile)
+         |> assign(profile: reloaded_profile)
+         |> assign(dns_config: updated_dns_config)
          |> assign(editing_inbound_form: to_form(changeset_new))}
 
       {:error, changeset} ->
@@ -161,15 +170,24 @@ defmodule HermitWeb.InboundDetailLive do
     case DnsConfig.update_for_profile(profile_id, update_params) do
       {:ok, updated} ->
         if enabled do
-          case Hermit.Vpn.DnsSupervisor.start_dns(profile_id) do
-            {:ok, _} -> :ok
-            {:error, reason} -> Logger.error("Failed to start DNS: #{inspect(reason)}")
-          end
+          Task.start(fn ->
+            case Hermit.Vpn.DnsSupervisor.start_dns(profile_id) do
+              {:ok, _} -> :ok
+              {:error, reason} -> Logger.error("Failed to start DNS: #{inspect(reason)}")
+            end
+          end)
         else
-          Hermit.Vpn.DnsSupervisor.stop_dns(profile_id)
+          Task.start(fn ->
+            Hermit.Vpn.DnsSupervisor.stop_dns(profile_id)
+          end)
         end
 
-        {status, ip, err} = DnsWorker.get_status(profile_id)
+        {status, ip, err} =
+          if enabled do
+            {:starting, nil, nil}
+          else
+            {:stopped, nil, nil}
+          end
 
         {:noreply,
          socket
@@ -194,24 +212,21 @@ defmodule HermitWeb.InboundDetailLive do
   def handle_event("reconnect_dns", _params, socket) do
     profile_id = socket.assigns.id
 
-    # Stop existing DNS worker to clean up previous run
-    Hermit.Vpn.DnsSupervisor.stop_dns(profile_id)
+    Task.start(fn ->
+      # Stop existing DNS worker to clean up previous run
+      Hermit.Vpn.DnsSupervisor.stop_dns(profile_id)
 
-    # Start DNS components
-    case Hermit.Vpn.DnsSupervisor.start_dns(profile_id) do
-      {:ok, _} ->
-        {status, ip, err} = DnsWorker.get_status(profile_id)
-        {:noreply,
-         socket
-         |> assign(dns_status: status, dns_ip: ip, dns_error: err)
-         |> put_flash(:info, "Reconnecting DNS Node...")}
+      # Start DNS components
+      case Hermit.Vpn.DnsSupervisor.start_dns(profile_id) do
+        {:ok, _} -> :ok
+        {:error, reason} -> Logger.error("Failed to reconnect DNS: #{inspect(reason)}")
+      end
+    end)
 
-      {:error, reason} ->
-        Logger.error("Failed to reconnect DNS: #{inspect(reason)}")
-        {:noreply,
-         socket
-         |> put_flash(:error, "Failed to reconnect DNS: #{inspect(reason)}")}
-    end
+    {:noreply,
+     socket
+     |> assign(dns_status: :starting, dns_ip: nil, dns_error: nil)
+     |> put_flash(:info, "Reconnecting DNS Node...")}
   end
 
   @impl true
@@ -344,31 +359,57 @@ defmodule HermitWeb.InboundDetailLive do
     profile = socket.assigns.profile
     dns_profile_id = if dns_profile_id_str == "", do: nil, else: String.to_integer(dns_profile_id_str)
 
+    # Capture active status of current DNS configuration
+    old_dns_config = socket.assigns.dns_config
+    old_enabled = old_dns_config && old_dns_config.enabled
+    old_override = old_dns_config && old_dns_config.tailscale_override_dns
+
     changeset = InboundProfile.changeset(profile, %{dns_profile_id: dns_profile_id})
 
     case Hermit.Repo.update(changeset) do
       {:ok, updated_profile} ->
-        # Load new dns config
+        # Load new dns config (which might update the profile's dns_profile_id in DB if it was nil)
         updated_dns_config = DnsConfig.get_for_profile(updated_profile.id)
 
-        # Hot-reboot DNS server if running to load new config dynamically
-        {status, ip, err} = DnsWorker.get_status(updated_profile.id)
+        # Preserve the active states from the previous configuration
+        updated_dns_config =
+          if old_dns_config do
+            case DnsConfig.update_for_profile(updated_profile.id, %{
+                   enabled: old_enabled,
+                   tailscale_override_dns: old_override
+                 }) do
+              {:ok, synced_config} -> synced_config
+              _ -> updated_dns_config
+            end
+          else
+            updated_dns_config
+          end
+
+        # Reload profile to reflect any side-effects in get_for_profile
+        reloaded_profile = Hermit.Repo.get!(InboundProfile, updated_profile.id)
+
+        # Hot-reload DNS server and sync Tailscale DNS config if running
+        {status, ip, err} = DnsWorker.get_status(reloaded_profile.id)
         if status == :running do
-          Hermit.Vpn.DnsSupervisor.stop_dns(updated_profile.id)
-          Hermit.Vpn.DnsSupervisor.start_dns(updated_profile.id)
+          Hermit.Vpn.DnsSupervisor.restart_dns_server(reloaded_profile.id)
+          Hermit.Vpn.DnsWorker.sync_state(reloaded_profile.id)
         end
 
         # Reload list of dns profiles
         dns_profiles = Hermit.Repo.all(from(d in Hermit.Vpn.DnsConfig, order_by: d.name))
 
+        # Re-initialize main configuration form changeset with the reloaded profile
+        changeset_new = InboundProfile.changeset(reloaded_profile, %{})
+
         {:noreply,
          socket
-         |> assign(profile: updated_profile)
+         |> assign(profile: reloaded_profile)
          |> assign(dns_config: updated_dns_config)
          |> assign(dns_profiles: dns_profiles)
          |> assign(dns_status: status)
          |> assign(dns_ip: ip)
          |> assign(dns_error: err)
+         |> assign(editing_inbound_form: to_form(changeset_new))
          |> put_flash(:info, "Linked DNS Profile updated successfully.")}
 
       {:error, changeset} ->

@@ -99,6 +99,11 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
       candidate_sockets = [dns_socket | pair_sockets]
       active_socket = Enum.find(candidate_sockets, &File.exists?/1)
 
+      # Always insert local mappings
+      :ets.insert(@table, [
+        {{profile_id, "127.0.0.1"}, "localhost", now}
+      ])
+
       if active_socket do
         case query_tailscale_status(active_socket) do
           {:ok, data} ->

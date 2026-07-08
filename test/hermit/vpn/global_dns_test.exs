@@ -75,7 +75,7 @@ defmodule Hermit.Vpn.GlobalDnsTest do
     assert is_pid(server_pid)
 
     # Status should now be running
-    {status, ip, _} = DnsWorker.get_status(profile.id)
+    {status, ip, _} = wait_for_status(profile.id, :running)
     assert status == :running
     assert ip == "100.64.0.100"
 
@@ -116,11 +116,11 @@ defmodule Hermit.Vpn.GlobalDnsTest do
     {:ok, _} = Hermit.Vpn.DnsSupervisor.start_dns(p2.id)
 
     # Verify both are running independently
-    {s1, ip1, _} = DnsWorker.get_status(p1.id)
+    {s1, ip1, _} = wait_for_status(p1.id, :running)
     assert s1 == :running
     assert ip1 == "100.64.0.100"
 
-    {s2, ip2, _} = DnsWorker.get_status(p2.id)
+    {s2, ip2, _} = wait_for_status(p2.id, :running)
     assert s2 == :running
     assert ip2 == "100.64.0.100"
 
@@ -149,7 +149,7 @@ defmodule Hermit.Vpn.GlobalDnsTest do
 
     # Start DNS
     {:ok, _} = Hermit.Vpn.DnsSupervisor.start_dns(profile.id)
-    assert {s, _ip, _} = DnsWorker.get_status(profile.id)
+    assert {s, _ip, _} = wait_for_status(profile.id, :running)
     assert s == :running
 
     # 2. Toggle tailscale_override_dns to true
@@ -165,5 +165,20 @@ defmodule Hermit.Vpn.GlobalDnsTest do
 
     # Cleanup
     :ok = Hermit.Vpn.DnsSupervisor.stop_dns(profile.id)
+  end
+
+  defp wait_for_status(profile_id, expected_status, retries \\ 20) do
+    case DnsWorker.get_status(profile_id) do
+      {^expected_status, ip, err} ->
+        {expected_status, ip, err}
+
+      _ ->
+        if retries == 0 do
+          DnsWorker.get_status(profile_id)
+        else
+          Process.sleep(100)
+          wait_for_status(profile_id, expected_status, retries - 1)
+        end
+    end
   end
 end

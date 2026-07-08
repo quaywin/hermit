@@ -89,7 +89,8 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "DNS Control Inactive"
 
     # 1. Toggle DNS Enabled (Status changes to active/running)
-    html = view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    html = wait_until_running(view)
     assert html =~ "DNS Filtering enabled for profile."
     assert html =~ "Centralized DNS Node Running"
     assert html =~ "100.64.0.100"
@@ -138,7 +139,7 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert Enum.map(c2.custom_rules, & &1["domain"]) == ["profile2.com"]
 
     # Verify processes in supervision tree
-    assert {s1, _, _} = Hermit.Vpn.DnsWorker.get_status(p1.id)
+    assert {s1, _, _} = wait_for_status(p1.id, :running)
     assert s1 == :running
 
     assert {s2, _, _} = Hermit.Vpn.DnsWorker.get_status(p2.id)
@@ -236,7 +237,8 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "Requires Centralized DNS Node to be running"
 
     # 2. Toggle DNS Enabled (Status changes to active/running in mock mode)
-    html = view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    html = wait_until_running(view)
     assert html =~ "DNS Filtering enabled for profile"
     assert html =~ "Centralized DNS Node Running"
     refute html =~ "Requires Centralized DNS Node to be running"
@@ -263,11 +265,82 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "Cannot toggle Override DNS when DNS Node is not running"
 
     # 4. Click Reconnect Node
-    html = view |> element("button[phx-click=reconnect_dns]") |> render_click()
+    view |> element("button[phx-click=reconnect_dns]") |> render_click()
+    html = wait_until_running(view)
     assert html =~ "Reconnecting DNS Node"
     assert html =~ "Centralized DNS Node Running"
 
     # Cleanup
     Hermit.Vpn.DnsSupervisor.stop_dns(inbound_profile.id)
+  end
+
+  test "updates linked DNS profile via select form", %{conn: conn} do
+    # Create two DNS Configs
+    {:ok, dns_config1} = Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{name: "Test DNS Profile 1", custom_rules: [], enabled: true})
+    {:ok, dns_config2} = Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{name: "Test DNS Profile 2", custom_rules: [], enabled: true})
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "dns_dropdown_test",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-dns-dropdown"},
+        dns_profile_id: dns_config1.id
+      })
+
+    # Start the DNS worker and verify it is running
+    {:ok, _} = Hermit.Vpn.DnsSupervisor.start_dns(inbound_profile.id)
+    assert {status, _, _} = wait_for_status(inbound_profile.id, :running)
+    assert status == :running
+
+    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=dns")
+
+    assert html =~ "Test DNS Profile 1"
+    assert html =~ "Test DNS Profile 2"
+
+    # Select Test DNS Profile 2 and submit the form
+    html =
+      view
+      |> form("#select-dns-profile-form", %{
+        "dns_profile_id" => to_string(dns_config2.id)
+      })
+      |> render_submit()
+
+    assert html =~ "Linked DNS Profile updated successfully"
+
+    # Verify DNS worker did not stop and is still running!
+    assert {status_after, _, _} = Hermit.Vpn.DnsWorker.get_status(inbound_profile.id)
+    assert status_after == :running
+
+    # Verify db update
+    updated_profile = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, inbound_profile.id)
+    assert updated_profile.dns_profile_id == dns_config2.id
+
+    # Cleanup
+    Hermit.Vpn.DnsSupervisor.stop_dns(inbound_profile.id)
+  end
+
+  defp wait_until_running(view, retries \\ 20) do
+    html = render(view)
+    if html =~ "Centralized DNS Node Running" or retries == 0 do
+      html
+    else
+      Process.sleep(100)
+      wait_until_running(view, retries - 1)
+    end
+  end
+
+  defp wait_for_status(profile_id, expected_status, retries \\ 20) do
+    case Hermit.Vpn.DnsWorker.get_status(profile_id) do
+      {^expected_status, ip, err} ->
+        {expected_status, ip, err}
+
+      _ ->
+        if retries == 0 do
+          Hermit.Vpn.DnsWorker.get_status(profile_id)
+        else
+          Process.sleep(100)
+          wait_for_status(profile_id, expected_status, retries - 1)
+        end
+    end
   end
 end

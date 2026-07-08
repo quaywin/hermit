@@ -86,6 +86,30 @@ defmodule Hermit.Vpn.DnsSupervisor do
     :ok
   end
 
+  @doc """
+  Restarts only the DNS server component for a profile, keeping the worker (Tailscale node) running.
+  """
+  def restart_dns_server(profile_id) do
+    Logger.info("DnsSupervisor: restarting DNS server (only) for profile: #{profile_id}")
+
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
+      [{server_pid, _}] ->
+        DynamicSupervisor.terminate_child(@name, server_pid)
+
+      [] ->
+        :ok
+    end
+
+    port = 5400 + profile_id
+    server_spec = {Hermit.Dns.Server, profile_id: profile_id, port: port}
+
+    case DynamicSupervisor.start_child(@name, server_spec) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # --- Callbacks ---
 
   @impl true

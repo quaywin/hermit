@@ -6,7 +6,7 @@ defmodule HermitWeb.DnsProfileLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+    dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
 
     # Chọn profile đầu tiên làm mặc định nếu có, hoặc nil
     selected_profile = List.first(dns_profiles)
@@ -89,7 +89,7 @@ defmodule HermitWeb.DnsProfileLive do
             Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config:#{profile.id}", {:dns_config_updated, updated})
           end
 
-          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
 
           {:noreply,
            socket
@@ -144,7 +144,7 @@ defmodule HermitWeb.DnsProfileLive do
 
     case Hermit.Repo.insert(changeset) do
       {:ok, profile} ->
-        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
 
         {:noreply,
          socket
@@ -173,7 +173,7 @@ defmodule HermitWeb.DnsProfileLive do
     else
       case Hermit.Repo.delete(profile) do
         {:ok, _} ->
-          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
           next_profile = List.first(dns_profiles)
 
           socket =
@@ -311,7 +311,7 @@ defmodule HermitWeb.DnsProfileLive do
   def handle_info({:dns_config_updated, updated_config}, socket) do
     if socket.assigns.selected_profile && socket.assigns.selected_profile.id == updated_config.id do
       # Đồng bộ lại state UI
-      dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+      dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
       {:noreply, assign(socket, selected_profile: updated_config, dns_profiles: dns_profiles)}
     else
       {:noreply, socket}
@@ -342,7 +342,7 @@ defmodule HermitWeb.DnsProfileLive do
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config_profile:#{profile.id}", {:dns_config_updated, updated})
         end
 
-        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
 
         {:noreply,
          socket
@@ -400,4 +400,14 @@ defmodule HermitWeb.DnsProfileLive do
     end
   end
   defp to_datetime(_), do: DateTime.utc_now()
+
+  defp profile_active?(profile) do
+    # check if any associated inbound profile has a running dns_worker
+    Enum.any?(profile.inbound_profiles, fn ip ->
+      case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, ip.id}) do
+        [{_pid, _value}] -> true
+        _ -> false
+      end
+    end)
+  end
 end

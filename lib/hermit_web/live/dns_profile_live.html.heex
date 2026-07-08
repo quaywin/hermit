@@ -39,7 +39,7 @@
           ]}
         >
           <span>{profile.name}</span>
-          <%= if profile.enabled do %>
+          <%= if profile_active?(profile) do %>
             <span class="size-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50 animate-pulse" />
           <% else %>
             <span class="size-1.5 rounded-full bg-base-content/25" />

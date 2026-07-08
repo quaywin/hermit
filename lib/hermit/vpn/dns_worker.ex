@@ -82,6 +82,54 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   @impl true
+  def handle_info({:dns_node_start_result, result}, state) do
+    if state.status == :starting do
+      case result do
+        {:ok, ip, port} ->
+          # Get current config to check if override is enabled
+          config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
+          profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.profile_id)
+
+          mock_timer =
+            if mock?() do
+              Process.send_after(self(), :generate_mock_log, 1000)
+            else
+              nil
+            end
+
+          new_state = %{
+            state
+            | status: :running,
+              ts_ip: ip,
+              ts_port: port,
+              error_reason: nil,
+              mock_timer: mock_timer,
+              tailscale_override_dns: config.tailscale_override_dns
+          }
+
+          if config.tailscale_override_dns do
+            spawn(fn -> update_tailscale_dns_config(ip, profile, config) end)
+          end
+
+          {:noreply, new_state}
+
+        {:error, reason} ->
+          {:noreply, %{state | status: :error, error_reason: inspect(reason)}}
+      end
+    else
+      # If status is not :starting (e.g. stopped while bootstrap was in progress), clean up
+      case result do
+        {:ok, _ip, _port} ->
+          new_state = stop_dns_node(state)
+          {:noreply, new_state}
+
+        {:error, _reason} ->
+          {:noreply, state}
+      end
+    end
+  end
+
+  @impl true
   def handle_info(:generate_mock_log, state) do
     if mock?() and state.status == :running do
       spawn(fn ->
@@ -112,7 +160,7 @@ defmodule Hermit.Vpn.DnsWorker do
       config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
 
       if config && profile do
-        clear_tailscale_dns_config(profile, config)
+        Task.start(fn -> clear_tailscale_dns_config(profile, config) end)
       end
     end
 
@@ -131,18 +179,14 @@ defmodule Hermit.Vpn.DnsWorker do
           "DNS Server is enabled for profile #{state.profile_id}. Ensuring Dedicated DNS Node is running..."
         )
 
-        case start_dns_node(state, profile) do
-          {:ok, new_state} ->
-            if config.tailscale_override_dns do
-              spawn(fn -> update_tailscale_dns_config(new_state.ts_ip, profile, config) end)
-            end
+        parent = self()
+        # Spawn the asynchronous bootstrap process
+        spawn_link(fn ->
+          res = start_dns_node_async(state.profile_id, profile)
+          send(parent, {:dns_node_start_result, res})
+        end)
 
-            {{:ok, :started},
-             %{new_state | tailscale_override_dns: config.tailscale_override_dns}}
-
-          {:error, reason} ->
-            {{:error, reason}, %{state | status: :error, error_reason: inspect(reason)}}
-        end
+        {{:ok, :starting}, %{state | status: :starting, error_reason: nil}}
 
       not config.enabled and state.status in [:running, :starting, :error] ->
         Logger.info(
@@ -187,12 +231,11 @@ defmodule Hermit.Vpn.DnsWorker do
     {auth_key, api_key, tailnet, login_server}
   end
 
-  defp start_dns_node(state, profile) do
+  defp start_dns_node_async(profile_id, profile) do
     if mock?() do
-      timer = Process.send_after(self(), :generate_mock_log, 1000)
-      {:ok, %{state | status: :running, ts_ip: "100.64.0.100", mock_timer: timer}}
+      {:ok, "100.64.0.100", nil}
     else
-      storage_dir = Path.join(get_storage_base_path(), "dns_#{state.profile_id}")
+      storage_dir = Path.join(get_storage_base_path(), "dns_#{profile_id}")
       File.mkdir_p!(storage_dir)
 
       {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(profile)
@@ -200,9 +243,9 @@ defmodule Hermit.Vpn.DnsWorker do
       if auth_key == "" do
         {:error, "Tailscale auth key not configured"}
       else
-        case bootstrap_namespace(state.profile_id, storage_dir, auth_key, login_server) do
+        case bootstrap_namespace(profile_id, storage_dir, auth_key, login_server) do
           {:ok, port, ip} ->
-            {:ok, %{state | status: :running, ts_ip: ip, ts_port: port, error_reason: nil}}
+            {:ok, ip, port}
 
           {:error, reason} ->
             {:error, reason}

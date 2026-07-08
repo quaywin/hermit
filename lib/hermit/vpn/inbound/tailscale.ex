@@ -360,11 +360,29 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       pid_path = Path.join([storage_dir, "tailscale", "tailscaled.pid"])
       Logger.info("Stopping Tailscale daemon for pair: hermit_ts_#{pair_id}")
 
-      # Stop tailscaled daemon process
+      socket_path = "/run/tailscaled.#{pair_id}.socket"
+
+      # 1. Attempt graceful shutdown of tailscaled via tailscale client using its unique socket
+      if File.exists?(socket_path) do
+        try do
+          System.cmd("tailscale", ["--socket=#{socket_path}", "shutdown"])
+          Process.sleep(200)
+        rescue
+          _ -> :ok
+        end
+      end
+
+      # 2. Forcefully kill only this specific tailscaled process using its unique socket argument (avoids killing other pairs)
+      try do
+        System.cmd("pkill", ["-9", "-f", "tailscaled.*#{pair_id}.socket"])
+      rescue
+        _ -> :ok
+      end
+
+      # 3. Stop tailscaled daemon process via stored PID (kills the ip wrapper process if still alive)
       stop_tailscaled_by_pid(pid_path)
 
-      # Clean up Unix domain socket from the container filesystem
-      socket_path = "/run/tailscaled.#{pair_id}.socket"
+      # 4. Clean up Unix domain socket from the container filesystem
       File.rm(socket_path)
 
       :ok

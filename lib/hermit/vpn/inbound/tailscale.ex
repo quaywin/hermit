@@ -254,6 +254,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             _ -> false
           end
 
+        ts_auth_key = Map.get(config, :ts_auth_key) || Map.get(config, "ts_auth_key") || ""
+
         advertise_routes =
           Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
 
@@ -272,6 +274,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
           "--timeout=30s"
         ]
+
+        ts_up_args =
+          if ts_auth_key != "" do
+            ts_up_args ++ ["--authkey=#{ts_auth_key}"]
+          else
+            ts_up_args
+          end
 
         ts_up_args =
           if login_server && login_server != "" do

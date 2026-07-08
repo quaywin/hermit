@@ -35,7 +35,12 @@ flowchart TD
 
 ### DNS Control Plane
 
-The DNS plane is decoupled from VPN Pairs. Each Tailscale Inbound Profile can optionally enable a dedicated **DNS Node** that provides network-wide DNS filtering and caching for all devices on your tailnet.
+The DNS plane is decoupled from VPN Pairs. Hermit supports **Multi-Profile Dynamic DNS Filtering**, allowing you to pre-configure multiple DNS Server Profiles and assign them dynamically to your Inbound Profiles.
+
+- **Multiple Pre-configured DNS Profiles**: You can set up multiple DNS Profiles beforehand, each with its own upstream DNS servers (UDP/DoH), custom routing rules (block/bypass/redirect), and toggleable blocklists (AdGuard, GoodbyeAds, adult content).
+- **Flexible Association**: Each Inbound Tailscale Profile can be linked to any pre-configured DNS Profile.
+- **Automated Node Setup**: When a Tailscale Inbound Profile starts, Hermit automatically provisions and boots a dedicated **DNS Node** (running `tailscaled` in an isolated network namespace `hermit_dns_#{profile_id}`) and its associated Elixir DNS resolver.
+- **Automated Global DNS Configuration**: When **Tailscale DNS Override** is enabled, Hermit automatically uses the Tailscale API to register this DNS Node as the global nameserver for your entire tailnet. All devices on your tailnet will use this node automatically without any manual client configuration.
 
 ```mermaid
 flowchart TD

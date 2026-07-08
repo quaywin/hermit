@@ -1,6 +1,5 @@
 defmodule HermitWeb.DashboardLive do
   use HermitWeb, :live_view
-  import Ecto.Query
   alias Hermit.Vpn.Form
   alias Hermit.Vpn.PairWorker
   alias Hermit.Vpn.DynamicSupervisor
@@ -21,23 +20,26 @@ defmodule HermitWeb.DashboardLive do
     {:ok,
      socket
      |> stream(:vpn_pairs, pairs)
-     |> stream(:dns_logs, [])
      |> assign(inbound_profiles: inbound_profiles)
      |> assign(outbound_profiles: outbound_profiles)
-     |> assign(active_tab: :tunnels)
-     |> assign(editing_outbound_profile: nil)
-     |> assign(editing_outbound_form: nil)
-     |> assign_form()
-     |> assign_inbound_form()
-     |> assign_outbound_form()}
+     |> assign(show_create_modal: false)
+     |> assign_form()}
   end
 
   @impl true
-  def handle_event("set_tab", %{"tab" => tab}, socket) do
-    {:noreply, assign(socket, active_tab: String.to_atom(tab))}
+  def handle_event("open_create_modal", _params, socket) do
+    {:noreply, assign(socket, show_create_modal: true)}
   end
 
-  # --- VPN Pair & Profile Management ---
+  @impl true
+  def handle_event("close_create_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(show_create_modal: false)
+     |> assign_form()}
+  end
+
+  # --- VPN Pair Management ---
 
   @impl true
   def handle_event("validate", %{"form" => params}, socket) do
@@ -74,6 +76,7 @@ defmodule HermitWeb.DashboardLive do
                 {:noreply,
                  socket
                  |> put_flash(:info, "VPN Pair '#{data.pair_id}' started bootstrapping.")
+                 |> assign(show_create_modal: false)
                  |> assign_form()}
 
               {:error, {:already_started, _}} ->
@@ -109,190 +112,6 @@ defmodule HermitWeb.DashboardLive do
     end
   end
 
-  @impl true
-  def handle_event("validate_inbound", %{"inbound_profile" => params}, socket) do
-    params = clean_dns_params(params)
-
-    changeset =
-      %Hermit.Vpn.InboundProfile{}
-      |> Hermit.Vpn.InboundProfile.changeset(params)
-      |> Map.put(:action, :validate)
-
-    {:noreply, assign(socket, inbound_form: to_form(changeset))}
-  end
-
-  @impl true
-  def handle_event("save_inbound", %{"inbound_profile" => params}, socket) do
-    params = clean_dns_params(params)
-    changeset = Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{}, params)
-
-    case Hermit.Repo.insert(changeset) do
-      {:ok, _profile} ->
-        inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Inbound Profile created successfully.")
-         |> assign(inbound_profiles: inbound_profiles)
-         |> assign_inbound_form()}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, inbound_form: to_form(changeset))}
-    end
-  end
-
-  @impl true
-  def handle_event("edit_outbound", %{"id" => id}, socket) do
-    profile = Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, id)
-    changeset = Hermit.Vpn.OutboundProfile.changeset(profile, %{})
-
-    {:noreply,
-     socket
-     |> assign(editing_outbound_profile: profile)
-     |> assign(editing_outbound_form: to_form(changeset))}
-  end
-
-  @impl true
-  def handle_event("close_edit_outbound", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(editing_outbound_profile: nil)
-     |> assign(editing_outbound_form: nil)}
-  end
-
-  @impl true
-  def handle_event("validate_edit_outbound", %{"outbound_profile" => params}, socket) do
-    profile = socket.assigns.editing_outbound_profile
-
-    changeset =
-      profile
-      |> Hermit.Vpn.OutboundProfile.changeset(params)
-      |> Map.put(:action, :validate)
-
-    {:noreply, assign(socket, editing_outbound_form: to_form(changeset))}
-  end
-
-  @impl true
-  def handle_event("save_edit_outbound", %{"outbound_profile" => params}, socket) do
-    profile = socket.assigns.editing_outbound_profile
-    changeset = Hermit.Vpn.OutboundProfile.changeset(profile, params)
-
-    case Hermit.Repo.update(changeset) do
-      {:ok, _profile} ->
-        outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Outbound Profile updated successfully.")
-         |> assign(outbound_profiles: outbound_profiles)
-         |> assign(editing_outbound_profile: nil)
-         |> assign(editing_outbound_form: nil)}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, editing_outbound_form: to_form(changeset))}
-    end
-  end
-
-  @impl true
-  def handle_event("delete_inbound", %{"id" => id}, socket) do
-    profile = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, id)
-
-    active_referencing_tunnels =
-      Hermit.Repo.all(
-        from(p in Hermit.Vpn.VpnPair,
-          where: p.inbound_profile_id == ^profile.id
-        )
-      )
-
-    if active_referencing_tunnels != [] do
-      {:noreply,
-       put_flash(socket, :error, "Cannot delete profile because it is in use by active tunnels.")}
-    else
-      # Stop DNS components if running
-      if profile.type == "tailscale" do
-        dns_config = Hermit.Vpn.DnsConfig.get_for_profile(profile.id)
-
-        if dns_config.tailscale_override_dns do
-          Task.start(fn -> Hermit.Vpn.DnsWorker.clear_tailscale_dns_config(dns_config) end)
-        end
-      end
-
-      Hermit.Vpn.DnsSupervisor.stop_dns(profile.id)
-
-      case Hermit.Repo.delete(profile) do
-        {:ok, _} ->
-          inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile)
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Inbound Profile deleted.")
-           |> assign(inbound_profiles: inbound_profiles)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to delete profile.")}
-      end
-    end
-  end
-
-  @impl true
-  def handle_event("validate_outbound", %{"outbound_profile" => params}, socket) do
-    changeset =
-      %Hermit.Vpn.OutboundProfile{}
-      |> Hermit.Vpn.OutboundProfile.changeset(params)
-      |> Map.put(:action, :validate)
-
-    {:noreply, assign(socket, outbound_form: to_form(changeset))}
-  end
-
-  @impl true
-  def handle_event("save_outbound", %{"outbound_profile" => params}, socket) do
-    changeset = Hermit.Vpn.OutboundProfile.changeset(%Hermit.Vpn.OutboundProfile{}, params)
-
-    case Hermit.Repo.insert(changeset) do
-      {:ok, _profile} ->
-        outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Outbound Profile created successfully.")
-         |> assign(outbound_profiles: outbound_profiles)
-         |> assign_outbound_form()}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, outbound_form: to_form(changeset))}
-    end
-  end
-
-  @impl true
-  def handle_event("delete_outbound", %{"id" => id}, socket) do
-    profile = Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, id)
-
-    active_referencing_tunnels =
-      Hermit.Repo.all(
-        from(p in Hermit.Vpn.VpnPair,
-          where: p.outbound_profile_id == ^profile.id
-        )
-      )
-
-    if active_referencing_tunnels != [] do
-      {:noreply,
-       put_flash(socket, :error, "Cannot delete profile because it is in use by active tunnels.")}
-    else
-      case Hermit.Repo.delete(profile) do
-        {:ok, _} ->
-          outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Outbound Profile deleted.")
-           |> assign(outbound_profiles: outbound_profiles)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to delete profile.")}
-      end
-    end
-  end
-
   # --- PubSub Handling ---
 
   @impl true
@@ -310,53 +129,6 @@ defmodule HermitWeb.DashboardLive do
   defp assign_form(socket) do
     changeset = Form.changeset(%Form{}, %{})
     assign(socket, form: to_form(changeset))
-  end
-
-  defp assign_inbound_form(socket) do
-    changeset =
-      Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{type: "tailscale"}, %{})
-
-    assign(socket, inbound_form: to_form(changeset))
-  end
-
-  defp assign_outbound_form(socket) do
-    changeset =
-      Hermit.Vpn.OutboundProfile.changeset(%Hermit.Vpn.OutboundProfile{type: "wireguard"}, %{})
-
-    assign(socket, outbound_form: to_form(changeset))
-  end
-
-  defp clean_dns_params(params) do
-    config = Map.get(params, "config")
-
-    if is_map(config) do
-      dns_mode = Map.get(config, "dns_mode")
-      dns_resolvers = Map.get(config, "dns_resolvers", "") |> String.trim()
-
-      {dns_mode, dns_resolvers} =
-        cond do
-          dns_mode == "custom" ->
-            {"custom", dns_resolvers}
-
-          dns_mode == "default" ->
-            {"default", ""}
-
-          dns_resolvers != "" ->
-            {"custom", dns_resolvers}
-
-          true ->
-            {"default", ""}
-        end
-
-      updated_config =
-        config
-        |> Map.put("dns_mode", dns_mode)
-        |> Map.put("dns_resolvers", dns_resolvers)
-
-      Map.put(params, "config", updated_config)
-    else
-      params
-    end
   end
 
   def format_uptime(nil), do: "-"

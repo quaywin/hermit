@@ -18,6 +18,8 @@ defmodule HermitWeb.Router do
     pipe_through :browser
 
     live "/", DashboardLive
+    live "/inbounds", InboundLive
+    live "/outbounds", OutboundLive
     live "/tunnels/:id", TunnelDetailLive
     live "/inbounds/:id", InboundDetailLive
   end

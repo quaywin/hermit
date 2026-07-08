@@ -848,13 +848,7 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
-  defp stop_port_process(port) do
-    try do
-      Port.close(port)
-    rescue
-      _ -> :ok
-    end
-  end
+
 
   defp stop_tailscaled_by_pid(pid_path) do
     if File.exists?(pid_path) do

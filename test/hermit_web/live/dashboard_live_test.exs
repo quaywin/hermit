@@ -49,7 +49,10 @@ defmodule HermitWeb.DashboardLiveTest do
 
     {:ok, view, html} = live(conn, ~p"/")
 
-    assert html =~ "HERMIT GATEWAY"
+    assert html =~ "Active VPN Tunnels"
+
+    # Open Modal
+    view |> element("button[phx-click=open_create_modal]") |> render_click()
 
     # 1. Test validation error
     invalid_form = %{
@@ -160,99 +163,7 @@ defmodule HermitWeb.DashboardLiveTest do
     refute html =~ "prod_eu"
   end
 
-  test "switches tabs using CSS hidden class to preserve stream state", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/")
 
-    # By default, tunnels tab is active, inbound/outbound are hidden
-    assert render(view) =~ "Deploy VPN Tunnel"
-    assert has_element?(view, "div.hidden", "Create Inbound Profile")
-    assert has_element?(view, "div.hidden", "Create Outbound Profile")
-    refute has_element?(view, "div.hidden", "Deploy VPN Tunnel")
-
-    # Switch to inbound tab
-    view
-    |> element("button[phx-click=set_tab][phx-value-tab=inbound]")
-    |> render_click()
-
-    # Now inbound is visible, tunnels and outbound are hidden
-    assert has_element?(view, "div.hidden", "Deploy VPN Tunnel")
-    refute has_element?(view, "div.hidden", "Create Inbound Profile")
-    assert has_element?(view, "div.hidden", "Create Outbound Profile")
-
-    # Switch to outbound tab
-    view
-    |> element("button[phx-click=set_tab][phx-value-tab=outbound]")
-    |> render_click()
-
-    assert has_element?(view, "div.hidden", "Deploy VPN Tunnel")
-    assert has_element?(view, "div.hidden", "Create Inbound Profile")
-    refute has_element?(view, "div.hidden", "Create Outbound Profile")
-  end
-
-  test "renders edit outbound profile modal, validates, and saves updates", %{conn: conn} do
-    {:ok, outbound_profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
-        name: "outbound_to_edit",
-        type: "wireguard",
-        config: %{"wg_config" => "[Interface]\nPrivateKey = oldkey\n"}
-      })
-
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    # Switch to outbound tab
-    view
-    |> element("button[phx-click=set_tab][phx-value-tab=outbound]")
-    |> render_click()
-
-    # Click edit button
-    html =
-      view
-      |> element("#edit-outbound-#{outbound_profile.id}")
-      |> render_click()
-
-    assert html =~ "Edit Outbound Profile"
-    assert html =~ "outbound_to_edit"
-
-    # Test validation error
-    invalid_form = %{
-      "outbound_profile" => %{
-        "name" => "",
-        "type" => "wireguard",
-        "config" => %{"wg_config" => ""}
-      }
-    }
-
-    html =
-      view
-      |> form("#edit-outbound-profile-form", invalid_form)
-      |> render_change()
-
-    assert html =~ "can&#39;t be blank"
-    assert html =~ "WireGuard requires wg_config payload"
-
-    # Test successful update
-    valid_form = %{
-      "outbound_profile" => %{
-        "name" => "outbound_updated",
-        "type" => "wireguard",
-        "config" => %{"wg_config" => "[Interface]\nPrivateKey = newkey\n"}
-      }
-    }
-
-    html =
-      view
-      |> form("#edit-outbound-profile-form", valid_form)
-      |> render_submit()
-
-    assert html =~ "Outbound Profile updated successfully"
-    refute html =~ "Edit Outbound Profile"
-    assert html =~ "outbound_updated"
-
-    # Verify update in DB
-    updated = Hermit.Repo.get!(Hermit.Vpn.OutboundProfile, outbound_profile.id)
-    assert updated.name == "outbound_updated"
-    assert updated.config["wg_config"] == "[Interface]\nPrivateKey = newkey\n"
-  end
 
   test "cannot deploy a pair if the outbound profile is already in use by an active tunnel", %{
     conn: conn
@@ -284,6 +195,9 @@ defmodule HermitWeb.DashboardLiveTest do
     _ = Hermit.Repo.insert!(active_pair)
 
     {:ok, view, _html} = live(conn, ~p"/")
+
+    # Open Modal
+    view |> element("button[phx-click=open_create_modal]") |> render_click()
 
     # Try to deploy a new pair (pair_id: new_t) using the same outbound_profile
     form_data = %{

@@ -27,6 +27,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     advertise_routes =
       Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
 
+    dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode) || "default"
+
     cond do
       err = get_mock_error() ->
         {:error, err}
@@ -101,7 +103,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "up",
             "--reset",
             "--authkey=#{ts_auth_key}",
-            "--accept-dns=true",
+            "--accept-dns=#{dns_mode == "default"}",
             "--accept-routes=false",
             "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
             "--timeout=30s"
@@ -255,6 +257,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         advertise_routes =
           Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
 
+        dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode) || "default"
+
         ts_up_args = [
           "netns",
           "exec",
@@ -263,7 +267,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "--socket=#{socket_path}",
           "up",
           "--reset",
-          "--accept-dns=true",
+          "--accept-dns=#{dns_mode == "default"}",
           "--accept-routes=false",
           "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
           "--timeout=30s"

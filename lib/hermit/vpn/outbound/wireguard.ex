@@ -228,6 +228,18 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    "wg0",
                    "-j",
                    "MASQUERADE"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "iptables",
+                   "-I",
+                   "FORWARD",
+                   "1",
+                   "-j",
+                   "ACCEPT"
                  ]) do
             # Setup network namespace specific DNS
             if dns_servers != [] do

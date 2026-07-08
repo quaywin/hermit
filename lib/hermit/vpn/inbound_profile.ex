@@ -7,6 +7,8 @@ defmodule Hermit.Vpn.InboundProfile do
     field(:type, :string)
     field(:config, :map, default: %{})
 
+    belongs_to(:dns_profile, Hermit.Vpn.DnsConfig, foreign_key: :dns_profile_id)
+
     timestamps()
   end
 
@@ -15,7 +17,7 @@ defmodule Hermit.Vpn.InboundProfile do
     attrs = stringify_config_keys(attrs)
 
     inbound_profile
-    |> cast(attrs, [:name, :type, :config])
+    |> cast(attrs, [:name, :type, :config, :dns_profile_id])
     |> validate_required([:name, :type])
     |> validate_inclusion(:type, ["tailscale", "proxy"])
     |> validate_config()

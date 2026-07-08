@@ -1,0 +1,230 @@
+<div class="space-y-6">
+  <!-- Header Section -->
+  <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-base-300 pb-6">
+    <div>
+      <h1 class="text-2xl font-medium tracking-display-lg text-base-content uppercase">
+        Inbound Profiles
+      </h1>
+      <p class="text-base-content/60 mt-1 text-sm">
+        Configure how inbound clients connect to network namespaces (Tailscale nodes, Proxy endpoints).
+      </p>
+    </div>
+    <div class="mt-4 md:mt-0 flex items-center gap-3">
+      <button
+        phx-click="open_create_modal"
+        class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer flex items-center gap-2"
+      >
+        <.icon name="hero-plus" class="size-4" /> Create Inbound
+      </button>
+    </div>
+  </header>
+
+  <!-- List Inbound Profiles -->
+  <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr class="border-b border-base-300 text-base-content/60 text-xs font-medium uppercase tracking-wider">
+            <th class="py-3 px-4">Name</th>
+            <th class="py-3 px-4">Type</th>
+            <th class="py-3 px-4">Details</th>
+            <th class="py-3 px-4 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300 text-sm">
+          <%= if @inbound_profiles == [] do %>
+            <tr>
+              <td colspan="4" class="py-8 text-center text-base-content/50 italic">
+                No Inbound Profiles configured yet. Click "Create Inbound" to get started.
+              </td>
+            </tr>
+          <% else %>
+            <tr
+              :for={profile <- @inbound_profiles}
+              class="hover:bg-base-200/50 transition-colors"
+            >
+              <td class="py-4 px-4 font-semibold text-base-content">{profile.name}</td>
+              <td class="py-4 px-4">
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 uppercase font-mono">
+                  {profile.type}
+                </span>
+              </td>
+              <td class="py-4 px-4 font-mono text-xs text-base-content/60">
+                <%= case profile.type do %>
+                  <% "tailscale" -> %>
+                    <span>Key: {if(profile.config["ts_auth_key"], do: "Configured (tskey-...)", else: "Default")}, Server: {profile.config["login_server"] || "Official"}</span>
+                  <% "proxy" -> %>
+                    <span>Port: {profile.config["port"] || "Auto-allocate"} (Dual SOCKS5/HTTP)</span>
+                  <% _ -> %>
+                    <span>-</span>
+                <% end %>
+              </td>
+              <td class="py-4 px-4 text-right">
+                <div class="flex items-center justify-end gap-2">
+                  <%= if profile.type == "tailscale" do %>
+                    <.link
+                      navigate={~p"/inbounds/#{profile.id}?tab=dns"}
+                      id={"configure-dns-#{profile.id}"}
+                      class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs text-[#3ecf8e] px-2.5"
+                    >
+                      Configure DNS
+                    </.link>
+                  <% end %>
+                  <.link
+                    navigate={~p"/inbounds/#{profile.id}?tab=config"}
+                    id={"edit-inbound-#{profile.id}"}
+                    class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs px-2.5"
+                  >
+                    Edit Config
+                  </.link>
+                  <button
+                    id={"delete-inbound-#{profile.id}"}
+                    phx-click="delete_inbound"
+                    phx-value-id={profile.id}
+                    data-confirm="Are you sure you want to delete this inbound profile?"
+                    class="btn btn-xs btn-error btn-outline rounded-[4px] cursor-pointer font-medium text-xs px-2.5"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Create Inbound Profile Modal -->
+  <%= if @show_create_modal do %>
+    <dialog id="inbound-profile-modal" class="modal modal-open z-50 backdrop-blur-sm">
+      <div class="modal-box w-full max-w-lg bg-base-100 border border-base-300 p-6 space-y-4 text-base-content rounded-[16px]">
+        <div class="flex items-center justify-between border-b border-base-300 pb-3">
+          <h3 class="text-lg font-medium text-base-content flex items-center gap-2">
+            📥 Create Inbound Profile
+          </h3>
+          <button
+            type="button"
+            phx-click="close_create_modal"
+            class="text-base-content/60 hover:text-base-content transition-colors cursor-pointer"
+          >
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
+
+        <.form
+          :let={f}
+          for={@inbound_form}
+          phx-change="validate_inbound"
+          phx-submit="save_inbound"
+          id="inbound-profile-form"
+          class="space-y-4"
+        >
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Profile Name</label>
+            <.input
+              field={f[:name]}
+              type="text"
+              placeholder="e.g., Office Tailscale or Proxy Inbound"
+              class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Type</label>
+            <.input
+              field={f[:type]}
+              type="select"
+              options={[
+                {"Tailscale", "tailscale"},
+                {"Proxy", "proxy"}
+              ]}
+              class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">DNS Server Profile</label>
+            <.input
+              field={f[:dns_profile_id]}
+              type="select"
+              prompt="Auto-create separate DNS Profile"
+              options={Enum.map(@dns_profiles, &{&1.name, &1.id})}
+              class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+            />
+          </div>
+
+          <!-- Dynamic Input Fields based on Type -->
+          <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
+            <% "tailscale" -> %>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Auth Key (Optional)</label>
+                  <input
+                    type="password"
+                    name="inbound_profile[config][ts_auth_key]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_auth_key"]}
+                    placeholder="tskey-auth-..."
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale API Key (Optional)</label>
+                  <input
+                    type="password"
+                    name="inbound_profile[config][ts_api_key]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_api_key"]}
+                    placeholder="tskey-api-..."
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Tailnet Name (Optional)</label>
+                  <input
+                    type="text"
+                    name="inbound_profile[config][ts_tailnet]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_tailnet"]}
+                    placeholder="e.g., example.com"
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
+              </div>
+            <% "proxy" -> %>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Proxy Inbound Port (Leave blank to auto-allocate)</label>
+                  <input
+                    type="number"
+                    name="inbound_profile[config][port]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["port"]}
+                    placeholder="e.g., 1080 (or auto-allocate)"
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
+              </div>
+            <% _ -> %>
+          <% end %>
+
+          <div class="flex justify-end gap-3 pt-4 border-t border-base-300">
+            <button
+              type="button"
+              phx-click="close_create_modal"
+              class="btn btn-outline-custom px-4 py-2 rounded-[6px] text-xs font-medium uppercase tracking-wider cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="btn btn-primary px-4 py-2 rounded-[6px] text-xs font-medium uppercase tracking-wider cursor-pointer"
+            >
+              Save Inbound Profile
+            </button>
+          </div>
+        </.form>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button type="button" phx-click="close_create_modal">close</button>
+      </form>
+    </dialog>
+  <% end %>
+</div>

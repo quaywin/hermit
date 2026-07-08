@@ -42,7 +42,7 @@ defmodule HermitWeb.Layouts do
           <!-- Logo / Header -->
           <div class="h-16 flex items-center px-6 border-b border-base-300">
             <.link navigate={~p"/"} class="flex items-center gap-2">
-              <img src={~p"/images/logo.svg"} width="30" />
+              <img src={~p"/images/logo.png"} width="30" />
               <span class="font-bold text-lg tracking-wider uppercase text-base-content">Hermit</span>
             </.link>
           </div>
@@ -66,15 +66,18 @@ defmodule HermitWeb.Layouts do
             >
               Outbound Profiles
             </.sidebar_link>
+            <.sidebar_link
+              navigate={~p"/dns"}
+              active={@active == :dns_profiles}
+              icon="hero-globe-alt"
+            >
+              DNS Profiles
+            </.sidebar_link>
           </nav>
         </div>
 
-        <!-- Sidebar Bottom (Theme Toggle / Info) -->
+        <!-- Sidebar Bottom (Info) -->
         <div class="p-4 border-t border-base-300 space-y-4 bg-base-100">
-          <div class="flex items-center justify-between">
-            <span class="text-xs text-base-content/60 font-medium">Theme</span>
-            <.theme_toggle />
-          </div>
           <div class="text-[10px] text-base-content/40 text-center font-mono">
             v0.1.0-alpha
           </div>
@@ -87,7 +90,7 @@ defmodule HermitWeb.Layouts do
         <header class="h-16 flex items-center justify-between px-6 border-b border-base-300 lg:hidden bg-base-100 shrink-0">
           <div class="flex items-center gap-4">
             <.link navigate={~p"/"} class="flex items-center gap-2">
-              <img src={~p"/images/logo.svg"} width="28" />
+              <img src={~p"/images/logo.png"} width="28" />
               <span class="font-bold text-sm uppercase tracking-wider">Hermit</span>
             </.link>
             <!-- Mobile Menu Links -->
@@ -95,6 +98,7 @@ defmodule HermitWeb.Layouts do
               <.link navigate={~p"/"} class={if @active == :tunnels, do: "text-emerald-500", else: "text-base-content/60"}>Tunnels</.link>
               <.link navigate={~p"/inbounds"} class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}>Inbounds</.link>
               <.link navigate={~p"/outbounds"} class={if @active == :outbounds, do: "text-emerald-500", else: "text-base-content/60"}>Outbounds</.link>
+              <.link navigate={~p"/dns"} class={if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"}>DNS</.link>
             </nav>
           </div>
           <.theme_toggle />
@@ -144,6 +148,7 @@ defmodule HermitWeb.Layouts do
           HermitWeb.InboundLive -> :inbounds
           HermitWeb.InboundDetailLive -> :inbounds
           HermitWeb.OutboundLive -> :outbounds
+          HermitWeb.DnsProfileLive -> :dns_profiles
           _ -> :tunnels
         end
     end

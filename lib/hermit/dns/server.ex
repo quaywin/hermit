@@ -35,6 +35,7 @@ defmodule Hermit.Dns.Server do
 
     if :erlang.whereis(Hermit.PubSub) != :undefined do
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config:#{profile_id}")
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
     end
 
     upstreams = parse_upstreams(config.upstream_dns)
@@ -213,6 +214,7 @@ defmodule Hermit.Dns.Server do
 
             log_and_broadcast(
               state.profile_id,
+              state.config.id,
               client_ip,
               original_query.domain,
               original_query.qtype,
@@ -284,6 +286,7 @@ defmodule Hermit.Dns.Server do
 
           log_and_broadcast(
             state.profile_id,
+            state.config.id,
             client_ip,
             original_query.domain,
             original_query.qtype,
@@ -342,6 +345,7 @@ defmodule Hermit.Dns.Server do
 
             log_and_broadcast(
               state.profile_id,
+              state.config.id,
               client_ip,
               original_query.domain,
               original_query.qtype,
@@ -489,6 +493,7 @@ defmodule Hermit.Dns.Server do
 
         log_and_broadcast(
           profile_id,
+          config.id,
           ip,
           query.domain,
           query.qtype,
@@ -533,6 +538,7 @@ defmodule Hermit.Dns.Server do
 
             log_and_broadcast(
               profile_id,
+              config.id,
               ip,
               query.domain,
               query.qtype,
@@ -561,6 +567,7 @@ defmodule Hermit.Dns.Server do
 
               log_and_broadcast(
                 profile_id,
+                config.id,
                 ip,
                 query.domain,
                 query.qtype,
@@ -585,6 +592,7 @@ defmodule Hermit.Dns.Server do
 
               log_and_broadcast(
                 profile_id,
+                config.id,
                 ip,
                 query.domain,
                 query.qtype,
@@ -894,7 +902,7 @@ defmodule Hermit.Dns.Server do
 
   # --- Log Recording ---
 
-  defp log_and_broadcast(profile_id, client_ip, domain, qtype, status, answer, true) do
+  defp log_and_broadcast(profile_id, config_id, client_ip, domain, qtype, status, answer, true) do
     pair_id = to_string(profile_id)
     client_ip_str = ip_to_string(client_ip)
     client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
@@ -912,12 +920,17 @@ defmodule Hermit.Dns.Server do
 
     counter = System.unique_integer([:monotonic])
     :ets.insert(@table, {{pair_id, counter}, log_data})
+    # Đồng bộ lưu thêm vào ETS theo dns_profile_id để phục vụ trang /dns load logs cũ
+    :ets.insert(:dns_query_logs, {{config_id, counter}, log_data})
 
+    # Broadcast tới cả kênh inbound cũ và kênh dns profile mới
     Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{profile_id}", {:dns_log, log_data})
+    Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs_profile:#{config_id}", {:dns_log, log_data})
   end
 
   defp log_and_broadcast(
          _profile_id,
+         _config_id,
          _client_ip,
          _domain,
          _qtype,

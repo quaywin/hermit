@@ -18,9 +18,8 @@ defmodule HermitWeb.InboundDetailLive do
          |> push_navigate(to: ~p"/")}
 
       profile ->
-        # Subscription for DNS logs and status polling
+        # Subscription for status polling
         if connected?(socket) and profile.type == "tailscale" do
-          Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_logs:#{profile.id}")
           :timer.send_interval(1000, self(), :tick)
         end
 
@@ -32,19 +31,7 @@ defmodule HermitWeb.InboundDetailLive do
             do: DnsWorker.get_status(profile.id),
             else: {:stopped, nil, nil}
 
-        recent_logs =
-          if profile.type == "tailscale" do
-            Hermit.Vpn.DnsLogReceiver.get_recent_logs(to_string(profile.id))
-            |> Enum.map(fn log ->
-              Map.put(
-                log,
-                :id,
-                "#{log["timestamp"] || System.system_time(:second)}-#{System.unique_integer([:monotonic])}"
-              )
-            end)
-          else
-            []
-          end
+        dns_profiles = Hermit.Repo.all(from(d in Hermit.Vpn.DnsConfig, order_by: d.name))
 
         changeset = InboundProfile.changeset(profile, %{})
 
@@ -53,13 +40,13 @@ defmodule HermitWeb.InboundDetailLive do
          |> assign(id: id)
          |> assign(profile: profile)
          |> assign(dns_config: dns_config)
+         |> assign(dns_profiles: dns_profiles)
          |> assign(dns_status: dns_status)
          |> assign(dns_ip: dns_ip)
          |> assign(dns_error: dns_error)
          |> assign(custom_rule_action: "block")
          |> assign(vpn_pairs: [])
-         |> assign(editing_inbound_form: to_form(changeset))
-         |> stream(:dns_logs, recent_logs, reset: true)}
+         |> assign(editing_inbound_form: to_form(changeset))}
     end
   end
 
@@ -168,7 +155,10 @@ defmodule HermitWeb.InboundDetailLive do
     config = socket.assigns.dns_config
     enabled = not config.enabled
 
-    case DnsConfig.update_for_profile(profile_id, %{enabled: enabled}) do
+    # If we are disabling DNS, we must also disable tailscale_override_dns
+    update_params = if not enabled, do: %{enabled: false, tailscale_override_dns: false}, else: %{enabled: true}
+
+    case DnsConfig.update_for_profile(profile_id, update_params) do
       {:ok, updated} ->
         if enabled do
           case Hermit.Vpn.DnsSupervisor.start_dns(profile_id) do
@@ -197,6 +187,30 @@ defmodule HermitWeb.InboundDetailLive do
           end
 
         {:noreply, put_flash(socket, :error, error_msg)}
+    end
+  end
+
+  @impl true
+  def handle_event("reconnect_dns", _params, socket) do
+    profile_id = socket.assigns.id
+
+    # Stop existing DNS worker to clean up previous run
+    Hermit.Vpn.DnsSupervisor.stop_dns(profile_id)
+
+    # Start DNS components
+    case Hermit.Vpn.DnsSupervisor.start_dns(profile_id) do
+      {:ok, _} ->
+        {status, ip, err} = DnsWorker.get_status(profile_id)
+        {:noreply,
+         socket
+         |> assign(dns_status: status, dns_ip: ip, dns_error: err)
+         |> put_flash(:info, "Reconnecting DNS Node...")}
+
+      {:error, reason} ->
+        Logger.error("Failed to reconnect DNS: #{inspect(reason)}")
+        {:noreply,
+         socket
+         |> put_flash(:error, "Failed to reconnect DNS: #{inspect(reason)}")}
     end
   end
 
@@ -289,33 +303,81 @@ defmodule HermitWeb.InboundDetailLive do
   @impl true
   def handle_event("toggle_override_dns", _params, socket) do
     profile_id = socket.assigns.id
-    config = socket.assigns.dns_config
-    override = not config.tailscale_override_dns
+    {status, _, _} = DnsWorker.get_status(profile_id)
 
-    case DnsConfig.update_for_profile(profile_id, %{tailscale_override_dns: override}) do
-      {:ok, updated} ->
-        case DnsWorker.sync_state(profile_id) do
-          {:ok, _} ->
-            :ok
+    if status != :running do
+      {:noreply, put_flash(socket, :error, "Cannot toggle Override DNS when DNS Node is not running.")}
+    else
+      config = socket.assigns.dns_config
+      override = not config.tailscale_override_dns
 
-          {:error, :not_found} ->
-            if not override do
-              Task.start(fn -> Hermit.Vpn.DnsWorker.clear_tailscale_dns_config(updated) end)
-            end
+      case DnsConfig.update_for_profile(profile_id, %{tailscale_override_dns: override}) do
+        {:ok, updated} ->
+          case DnsWorker.sync_state(profile_id) do
+            {:ok, _} ->
+              :ok
 
-            :ok
+            {:error, :not_found} ->
+              if not override do
+                Task.start(fn -> Hermit.Vpn.DnsWorker.clear_tailscale_dns_config(updated) end)
+              end
+
+              :ok
+          end
+
+          {:noreply,
+           socket
+           |> assign(dns_config: updated)
+           |> put_flash(
+             :info,
+             "Tailscale DNS integration #{if override, do: "enabled", else: "disabled"}."
+           )}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to update Tailscale DNS integration.")}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("select_dns_profile", %{"dns_profile_id" => dns_profile_id_str}, socket) do
+    profile = socket.assigns.profile
+    dns_profile_id = if dns_profile_id_str == "", do: nil, else: String.to_integer(dns_profile_id_str)
+
+    changeset = InboundProfile.changeset(profile, %{dns_profile_id: dns_profile_id})
+
+    case Hermit.Repo.update(changeset) do
+      {:ok, updated_profile} ->
+        # Load new dns config
+        updated_dns_config = DnsConfig.get_for_profile(updated_profile.id)
+
+        # Hot-reboot DNS server if running to load new config dynamically
+        {status, ip, err} = DnsWorker.get_status(updated_profile.id)
+        if status == :running do
+          Hermit.Vpn.DnsSupervisor.stop_dns(updated_profile.id)
+          Hermit.Vpn.DnsSupervisor.start_dns(updated_profile.id)
         end
+
+        # Reload list of dns profiles
+        dns_profiles = Hermit.Repo.all(from(d in Hermit.Vpn.DnsConfig, order_by: d.name))
 
         {:noreply,
          socket
-         |> assign(dns_config: updated)
-         |> put_flash(
-           :info,
-           "Tailscale DNS integration #{if override, do: "enabled", else: "disabled"}."
-         )}
+         |> assign(profile: updated_profile)
+         |> assign(dns_config: updated_dns_config)
+         |> assign(dns_profiles: dns_profiles)
+         |> assign(dns_status: status)
+         |> assign(dns_ip: ip)
+         |> assign(dns_error: err)
+         |> put_flash(:info, "Linked DNS Profile updated successfully.")}
 
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to update Tailscale DNS integration.")}
+      {:error, changeset} ->
+        error_msg =
+          Enum.map_join(changeset.errors, ", ", fn {field, {msg, _}} ->
+            "#{field} #{msg}"
+          end)
+
+        {:noreply, put_flash(socket, :error, "Failed to change DNS profile: #{error_msg}")}
     end
   end
 
@@ -483,25 +545,6 @@ defmodule HermitWeb.InboundDetailLive do
   end
 
   @impl true
-  def handle_event("clear_dns_logs", _params, socket) do
-    profile_id = socket.assigns.id
-    Hermit.Vpn.DnsLogReceiver.clear_logs(to_string(profile_id))
-    {:noreply, stream(socket, :dns_logs, [], reset: true)}
-  end
-
-  @impl true
-  def handle_info({:dns_log, log}, socket) do
-    log_with_id =
-      Map.put(
-        log,
-        :id,
-        "#{log["timestamp"] || System.system_time(:second)}-#{System.unique_integer([:monotonic])}"
-      )
-
-    {:noreply, stream_insert(socket, :dns_logs, log_with_id, at: 0, limit: 150)}
-  end
-
-  @impl true
   def handle_info(:tick, socket) do
     profile = socket.assigns.profile
 
@@ -510,48 +553,6 @@ defmodule HermitWeb.InboundDetailLive do
       {:noreply, assign(socket, dns_status: status, dns_ip: ip, dns_error: err)}
     else
       {:noreply, socket}
-    end
-  end
-
-  # --- Helpers ---
-
-  defp clean_dns_params(params) do
-    config = Map.get(params, "config")
-
-    if is_map(config) do
-      dns_mode = Map.get(config, "dns_mode")
-      dns_resolvers = Map.get(config, "dns_resolvers", "") |> String.trim()
-
-      {dns_mode, dns_resolvers} =
-        cond do
-          dns_mode == "custom" ->
-            {"custom", dns_resolvers}
-
-          dns_mode == "default" ->
-            {"default", ""}
-
-          dns_resolvers != "" ->
-            {"custom", dns_resolvers}
-
-          true ->
-            {"default", ""}
-        end
-
-      updated_config =
-        config
-        |> Map.put("dns_mode", dns_mode)
-        |> Map.put("dns_resolvers", dns_resolvers)
-
-      Map.put(params, "config", updated_config)
-    else
-      params
-    end
-  end
-
-  def format_dns_time(timestamp) do
-    case DateTime.from_unix(timestamp) do
-      {:ok, datetime} -> Calendar.strftime(datetime, "%H:%M:%S")
-      _ -> "-"
     end
   end
 
@@ -636,6 +637,39 @@ defmodule HermitWeb.InboundDetailLive do
       |> Enum.reject(&(&1 == ""))
     else
       []
+    end
+  end
+
+  defp clean_dns_params(params) do
+    config = Map.get(params, "config")
+
+    if is_map(config) do
+      dns_mode = Map.get(config, "dns_mode")
+      dns_resolvers = Map.get(config, "dns_resolvers", "") |> String.trim()
+
+      {dns_mode, dns_resolvers} =
+        cond do
+          dns_mode == "custom" ->
+            {"custom", dns_resolvers}
+
+          dns_mode == "default" ->
+            {"default", ""}
+
+          dns_resolvers != "" ->
+            {"custom", dns_resolvers}
+
+          true ->
+            {"default", ""}
+        end
+
+      updated_config =
+        config
+        |> Map.put("dns_mode", dns_mode)
+        |> Map.put("dns_resolvers", dns_resolvers)
+
+      Map.put(params, "config", updated_config)
+    else
+      params
     end
   end
 end

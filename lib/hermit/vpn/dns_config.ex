@@ -3,6 +3,7 @@ defmodule Hermit.Vpn.DnsConfig do
   import Ecto.Changeset
 
   schema "dns_configs" do
+    field(:name, :string, default: "Default DNS Profile")
     field(:enabled, :boolean, default: false)
     field(:block_ads, :boolean, default: false)
     field(:block_goodbyeads, :boolean, default: false)
@@ -12,7 +13,10 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:tailscale_override_dns, :boolean, default: false)
     field(:enable_query_logging, :boolean, default: false)
 
-    belongs_to(:inbound_profile, Hermit.Vpn.InboundProfile)
+    # Virtual field to maintain backward compatibility with old tests and code
+    field(:inbound_profile_id, :integer, virtual: true)
+
+    has_many(:inbound_profiles, Hermit.Vpn.InboundProfile, foreign_key: :dns_profile_id)
 
     timestamps()
   end
@@ -20,6 +24,7 @@ defmodule Hermit.Vpn.DnsConfig do
   def changeset(dns_config, attrs) do
     dns_config
     |> cast(attrs, [
+      :name,
       :enabled,
       :block_ads,
       :block_goodbyeads,
@@ -30,7 +35,7 @@ defmodule Hermit.Vpn.DnsConfig do
       :enable_query_logging,
       :inbound_profile_id
     ])
-    |> validate_required([:upstream_dns, :custom_rules])
+    |> validate_required([:name, :upstream_dns, :custom_rules])
     |> validate_upstream_dns()
     |> validate_custom_rules()
     |> validate_inbound_profile_presence()
@@ -40,7 +45,13 @@ defmodule Hermit.Vpn.DnsConfig do
     enabled = get_field(changeset, :enabled)
     inbound_profile_id = get_field(changeset, :inbound_profile_id)
 
-    if enabled && is_nil(inbound_profile_id) do
+    # Chỉ xác thực nếu trường ảo inbound_profile_id thực sự được truyền vào trong params để thay đổi
+    # hoặc khi changeset explicitly muốn kiểm tra liên kết inbound
+    is_profile_validation? =
+      Map.has_key?(changeset.params || %{}, "inbound_profile_id") or
+      Map.has_key?(changeset.params || %{}, :inbound_profile_id)
+
+    if is_profile_validation? and enabled and is_nil(inbound_profile_id) do
       add_error(
         changeset,
         :inbound_profile_id,
@@ -101,23 +112,50 @@ defmodule Hermit.Vpn.DnsConfig do
 
   # Profile-specific helpers
   def get_for_profile(profile_id) do
-    case Hermit.Repo.get_by(__MODULE__, inbound_profile_id: profile_id) do
-      nil ->
-        %__MODULE__{inbound_profile_id: profile_id}
-        |> changeset(%{custom_rules: []})
-        |> Hermit.Repo.insert!()
-        |> Hermit.Repo.preload(:inbound_profile)
+    profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
 
-      config ->
-        config
-        |> Hermit.Repo.preload(:inbound_profile)
+    cond do
+      is_nil(profile) ->
+        # Trả về config trống nếu profile không tồn tại
+        %__MODULE__{}
+
+      is_nil(profile.dns_profile_id) ->
+        # Nếu chưa liên kết DNS Profile nào, tự động tạo một DNS Profile riêng biệt cho Inbound này
+        profile_dns_name = "DNS Profile for Inbound #{profile_id}"
+        new_config =
+          case Hermit.Repo.get_by(__MODULE__, name: profile_dns_name) do
+            nil ->
+              %__MODULE__{}
+              |> changeset(%{name: profile_dns_name, custom_rules: []})
+              |> Hermit.Repo.insert!()
+
+            config ->
+              config
+          end
+
+        # Gán dns_profile_id cho inbound profile
+        profile
+        |> Hermit.Vpn.InboundProfile.changeset(%{dns_profile_id: new_config.id})
+        |> Hermit.Repo.update!()
+
+        %{new_config | inbound_profile_id: profile_id}
+
+      true ->
+        config = Hermit.Repo.get!(__MODULE__, profile.dns_profile_id)
+        %{config | inbound_profile_id: profile_id}
     end
   end
 
   def update_for_profile(profile_id, attrs) do
-    case get_for_profile(profile_id) |> changeset(attrs) |> Hermit.Repo.update() do
+    config = get_for_profile(profile_id)
+    attrs = Map.put(attrs, :inbound_profile_id, profile_id)
+
+    # Đảm bảo trường :name không bị lỗi validate_required nếu attrs không truyền :name
+    attrs = Map.put_new(attrs, :name, config.name)
+
+    case config |> changeset(attrs) |> Hermit.Repo.update() do
       {:ok, updated} ->
-        updated = Hermit.Repo.preload(updated, :inbound_profile)
+        updated = %{updated | inbound_profile_id: profile_id}
         if :erlang.whereis(Hermit.PubSub) != :undefined do
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config:#{profile_id}", {:dns_config_updated, updated})
         end

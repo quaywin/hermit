@@ -108,12 +108,11 @@ defmodule Hermit.Vpn.DnsWorker do
   @impl true
   def terminate(_reason, state) do
     if state.tailscale_override_dns do
-      config =
-        Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
-        |> Hermit.Repo.preload(:inbound_profile)
+      profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.profile_id)
+      config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
 
-      if config && config.inbound_profile do
-        clear_tailscale_dns_config(config)
+      if config && profile do
+        clear_tailscale_dns_config(profile, config)
       end
     end
 
@@ -123,9 +122,8 @@ defmodule Hermit.Vpn.DnsWorker do
   # --- Internal Lifecycle Management ---
 
   defp do_sync_state(state) do
-    config =
-      Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
-      |> Hermit.Repo.preload(:inbound_profile)
+    profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.profile_id)
+    config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
 
     cond do
       config.enabled and state.status in [:stopped, :error] ->
@@ -133,10 +131,10 @@ defmodule Hermit.Vpn.DnsWorker do
           "DNS Server is enabled for profile #{state.profile_id}. Ensuring Dedicated DNS Node is running..."
         )
 
-        case start_dns_node(state, config) do
+        case start_dns_node(state, profile) do
           {:ok, new_state} ->
             if config.tailscale_override_dns do
-              spawn(fn -> update_tailscale_dns_config(new_state.ts_ip, config) end)
+              spawn(fn -> update_tailscale_dns_config(new_state.ts_ip, profile, config) end)
             end
 
             {{:ok, :started},
@@ -154,7 +152,7 @@ defmodule Hermit.Vpn.DnsWorker do
         new_state = stop_dns_node(state)
 
         if config.tailscale_override_dns or state.tailscale_override_dns == true do
-          spawn(fn -> clear_tailscale_dns_config(config) end)
+          spawn(fn -> clear_tailscale_dns_config(profile, config) end)
         end
 
         {{:ok, :stopped}, %{new_state | tailscale_override_dns: false}}
@@ -162,9 +160,9 @@ defmodule Hermit.Vpn.DnsWorker do
       config.enabled and state.status == :running ->
         if state.tailscale_override_dns != config.tailscale_override_dns do
           if config.tailscale_override_dns do
-            spawn(fn -> update_tailscale_dns_config(state.ts_ip, config) end)
+            spawn(fn -> update_tailscale_dns_config(state.ts_ip, profile, config) end)
           else
-            spawn(fn -> clear_tailscale_dns_config(config) end)
+            spawn(fn -> clear_tailscale_dns_config(profile, config) end)
           end
 
           {{:ok, :updated_dns_integration},
@@ -178,8 +176,8 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
-  defp get_dns_credentials(dns_config) do
-    profile_config = (dns_config.inbound_profile && dns_config.inbound_profile.config) || %{}
+  defp get_dns_credentials(profile) do
+    profile_config = (profile && profile.config) || %{}
 
     auth_key = Map.get(profile_config, "ts_auth_key") || ""
     api_key = Map.get(profile_config, "ts_api_key") || ""
@@ -189,7 +187,7 @@ defmodule Hermit.Vpn.DnsWorker do
     {auth_key, api_key, tailnet, login_server}
   end
 
-  defp start_dns_node(state, dns_config) do
+  defp start_dns_node(state, profile) do
     if mock?() do
       timer = Process.send_after(self(), :generate_mock_log, 1000)
       {:ok, %{state | status: :running, ts_ip: "100.64.0.100", mock_timer: timer}}
@@ -197,7 +195,7 @@ defmodule Hermit.Vpn.DnsWorker do
       storage_dir = Path.join(get_storage_base_path(), "dns_#{state.profile_id}")
       File.mkdir_p!(storage_dir)
 
-      {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(dns_config)
+      {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(profile)
 
       if auth_key == "" do
         {:error, "Tailscale auth key not configured"}
@@ -710,14 +708,14 @@ defmodule Hermit.Vpn.DnsWorker do
 
   # --- Tailscale DNS Config API Update ---
 
-  def update_tailscale_dns_config(dns_ip, dns_config) do
+  def update_tailscale_dns_config(dns_ip, profile, _dns_config) do
     cond do
       mock?() ->
         Logger.info("Mock: Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
         {:ok, :updated}
 
       true ->
-        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
+        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(profile)
 
         if api_key != "" and tailnet != "" and dns_ip != "" do
           Logger.info("Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
@@ -741,13 +739,19 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   def clear_tailscale_dns_config(dns_config) do
+    profile_id = dns_config.inbound_profile_id
+    profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
+    clear_tailscale_dns_config(profile, dns_config)
+  end
+
+  def clear_tailscale_dns_config(profile, _dns_config) do
     cond do
       mock?() ->
         Logger.info("Mock: Clearing Tailscale global nameservers")
         {:ok, :cleared}
 
       true ->
-        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(dns_config)
+        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(profile)
 
         if api_key != "" and tailnet != "" do
           Logger.info("Clearing Tailscale global nameservers...")

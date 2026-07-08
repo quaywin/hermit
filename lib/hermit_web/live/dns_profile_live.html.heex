@@ -1,0 +1,483 @@
+<div class="space-y-6">
+  <!-- Header Section -->
+  <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-base-300 pb-6">
+    <div>
+      <h1 class="text-2xl font-medium tracking-display-lg text-base-content uppercase">
+        DNS Server Profiles
+      </h1>
+      <p class="text-base-content/60 mt-1 text-sm">
+        Manage DNS server configs, custom rules, blocklists, and DoH/DoT upstream servers globally.
+      </p>
+    </div>
+    <div class="mt-4 md:mt-0 flex items-center gap-3">
+      <button
+        phx-click="open_create_modal"
+        class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer flex items-center gap-2"
+      >
+        <.icon name="hero-plus" class="size-4" /> Create DNS Profile
+      </button>
+    </div>
+  </header>
+
+  <!-- Horizontal Profile Selector: Tối ưu diện tích thay cho cột dọc -->
+  <%= if @dns_profiles != [] do %>
+    <div class="flex flex-wrap items-center gap-2 border-b border-base-300 pb-4">
+      <span class="text-xs font-semibold uppercase tracking-wider text-base-content/40 mr-2">
+        Profiles:
+      </span>
+      <div class="flex flex-wrap gap-1.5">
+        <button
+          :for={profile <- @dns_profiles}
+          phx-click="select_profile"
+          phx-value-id={profile.id}
+          class={[
+            "px-4 py-2 text-xs font-medium uppercase tracking-wider rounded-[6px] transition-all flex items-center gap-2 cursor-pointer border",
+            if(@selected_profile && @selected_profile.id == profile.id,
+              do: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 font-semibold shadow-sm",
+              else: "text-base-content/65 hover:bg-base-200/50 hover:text-base-content border-transparent"
+            )
+          ]}
+        >
+          <span>{profile.name}</span>
+          <%= if profile.enabled do %>
+            <span class="size-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50 animate-pulse" />
+          <% else %>
+            <span class="size-1.5 rounded-full bg-base-content/25" />
+          <% end %>
+        </button>
+      </div>
+    </div>
+  <% end %>
+
+  <!-- Main Content Area: Rộng toàn bộ chiều ngang (Full-Width) -->
+  <div class="w-full">
+    <%= if is_nil(@selected_profile) do %>
+      <div class="bg-base-100 border border-base-300 rounded-[12px] p-12 text-center shadow-sm">
+        <p class="text-base-content/40 italic">No DNS Profiles found. Create one to configure DNS settings.</p>
+      </div>
+    <% else %>
+      <div class="space-y-6">
+        <!-- Profile Header with Delete & Edit Option -->
+        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex items-center justify-between flex-wrap gap-4">
+          <div class="flex-1 min-w-[280px]">
+            <%= if @editing_name do %>
+              <.form
+                id="edit-profile-name-form"
+                for={@name_form}
+                phx-submit="save_name"
+                class="flex items-center gap-2 max-w-md"
+              >
+                <div class="flex-1">
+                  <.input
+                    field={@name_form[:name]}
+                    type="text"
+                    required
+                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-semibold focus:outline-none focus:border-primary"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px] cursor-pointer"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  phx-click="cancel_edit_name"
+                  class="btn btn-outline btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </.form>
+            <% else %>
+              <div class="flex items-center gap-2">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content">
+                  DNS Profile: {@selected_profile.name}
+                </h2>
+                <button
+                  type="button"
+                  phx-click="start_edit_name"
+                  class="text-base-content/50 hover:text-base-content cursor-pointer transition-colors"
+                  title="Rename Profile"
+                >
+                  <.icon name="hero-pencil-square" class="size-4" />
+                </button>
+              </div>
+              <p class="text-xs text-base-content/60 mt-0.5">Configure upstream servers, security filter levels and domain rules for this profile.</p>
+            <% end %>
+          </div>
+          <button
+            phx-click="delete_profile"
+            phx-value-id={@selected_profile.id}
+            data-confirm="Are you sure you want to delete this DNS Profile?"
+            class="btn btn-error btn-outline btn-xs uppercase tracking-wider text-[10px] rounded-[4px] cursor-pointer"
+          >
+            Delete Profile
+          </button>
+        </div>
+
+        <!-- Card 2: Blocklists Filters -->
+        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
+          <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 border-b border-base-300 pb-2 mb-4">
+            Security & Ad-Blocking Filters
+          </h2>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <!-- AdGuard Blocklist -->
+            <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between gap-3">
+              <div>
+                <span class="text-xs font-semibold uppercase tracking-wider block">AdGuard Filter</span>
+                <p class="text-[11px] text-base-content/50 mt-1">
+                  Blocks known ads, analytics, trackers, and telemetry domains.
+                </p>
+              </div>
+              <button
+                phx-click="toggle_block_ads"
+                class={[
+                  "btn btn-xs w-full rounded-[4px] font-semibold uppercase tracking-wider",
+                  if(@selected_profile.block_ads, do: "btn-primary", else: "btn-outline")
+                ]}
+              >
+                {if @selected_profile.block_ads, do: "Blocking", else: "Allowing"}
+              </button>
+            </div>
+
+            <!-- GoodbyeAds Blocklist -->
+            <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between gap-3">
+              <div>
+                <span class="text-xs font-semibold uppercase tracking-wider block">GoodbyeAds Filter</span>
+                <p class="text-[11px] text-base-content/50 mt-1">
+                  Blocks aggressive mobile trackers, ads, and telemetry.
+                </p>
+              </div>
+              <button
+                phx-click="toggle_block_goodbyeads"
+                class={[
+                  "btn btn-xs w-full rounded-[4px] font-semibold uppercase tracking-wider",
+                  if(@selected_profile.block_goodbyeads, do: "btn-primary", else: "btn-outline")
+                ]}
+              >
+                {if @selected_profile.block_goodbyeads, do: "Blocking", else: "Allowing"}
+              </button>
+            </div>
+
+            <!-- Adult Filter -->
+            <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between gap-3">
+              <div>
+                <span class="text-xs font-semibold uppercase tracking-wider block">Adult Filter</span>
+                <p class="text-[11px] text-base-content/50 mt-1">
+                  Blocks major adult websites and pornography domains.
+                </p>
+              </div>
+              <button
+                phx-click="toggle_block_adult"
+                class={[
+                  "btn btn-xs w-full rounded-[4px] font-semibold uppercase tracking-wider",
+                  if(@selected_profile.block_adult, do: "btn-primary", else: "btn-outline")
+                ]}
+              >
+                {if @selected_profile.block_adult, do: "Blocking", else: "Allowing"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 3: Upstream DNS & Custom Rules (Đặt song song cạnh nhau) -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <!-- Upstream Servers -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col justify-between">
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 mb-1">
+                Upstream DNS Servers
+              </h3>
+              <p class="text-[11px] text-base-content/50 mb-4">
+                Support legacy DNS IPs (53) or HTTPS DoH URLs (e.g. <code>https://cloudflare-dns.com/dns-query</code>).
+              </p>
+              <form id="save-upstream-dns-form" phx-submit="save_upstream_dns" class="space-y-4">
+                <input
+                  type="text"
+                  name="upstream_dns"
+                  value={@selected_profile.upstream_dns}
+                  placeholder="e.g. 1.1.1.1, 8.8.8.8, https://dns.google/dns-query"
+                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+                />
+                <button
+                  type="submit"
+                  class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px]"
+                >
+                  Save Upstream
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <!-- Custom Routing Rules -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              Custom Domain Routing Rules
+            </h3>
+            <div class="overflow-x-auto max-h-[220px]">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="border-b border-base-300 text-base-content/40 font-semibold uppercase">
+                    <th class="pb-2">Domain Suffix</th>
+                    <th class="pb-2">Action</th>
+                    <th class="pb-2">Target IP</th>
+                    <th class="pb-2 text-right">Delete</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
+                  <%= if is_nil(@selected_profile.custom_rules) or @selected_profile.custom_rules == [] do %>
+                    <tr>
+                      <td colspan="4" class="py-4 text-center text-base-content/30 italic">
+                        No custom rules configured.
+                      </td>
+                    </tr>
+                  <% else %>
+                    <tr :for={rule <- @selected_profile.custom_rules}>
+                      <td class="py-2">{rule["domain"]}</td>
+                      <td class="py-2">
+                        <span class={[
+                          "px-1.5 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase font-sans border",
+                          case rule["action"] do
+                            "block" -> "bg-red-500/10 text-red-500 border-red-500/20"
+                            "bypass" -> "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                            "redirect" -> "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                          end
+                        ]}>
+                          {rule["action"]}
+                        </span>
+                      </td>
+                      <td class="py-2 text-base-content/65">{rule["value"] || "-"}</td>
+                      <td class="py-2 text-right">
+                        <button
+                          phx-click="delete_custom_rule"
+                          phx-value-domain={rule["domain"]}
+                          class="text-red-500 hover:text-red-700 cursor-pointer"
+                        >
+                          <.icon name="hero-trash" class="size-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  <% end %>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Form thêm Custom Rule -->
+            <form id="add-custom-rule-form" phx-submit="add_custom_rule" class="border-t border-base-300/50 pt-4 flex flex-col md:flex-row gap-3 items-end">
+              <div class="flex-1 w-full">
+                <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Domain</label>
+                <input
+                  type="text"
+                  name="domain"
+                  placeholder="e.g. ad.doubleclick.net, *.dev"
+                  required
+                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
+                />
+              </div>
+
+              <div class="w-full md:w-32">
+                <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Action</label>
+                <select
+                  name="action"
+                  phx-change="custom_rule_action_changed"
+                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs focus:outline-none cursor-pointer"
+                >
+                  <option value="block" selected={@custom_rule_action == "block"}>Block</option>
+                  <option value="bypass" selected={@custom_rule_action == "bypass"}>Bypass Filter</option>
+                  <option value="redirect" selected={@custom_rule_action == "redirect"}>Redirect IP</option>
+                </select>
+              </div>
+
+              <%= if @custom_rule_action == "redirect" do %>
+                <div class="w-full md:w-36">
+                  <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Target IP</label>
+                  <input
+                    type="text"
+                    name="value"
+                    placeholder="e.g. 192.168.1.10"
+                    required
+                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
+                  />
+                </div>
+              <% end %>
+
+              <button
+                type="submit"
+                class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 h-[32px] rounded-[4px]"
+              >
+                Add Rule
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Card 4: Realtime DNS Query Logs -->
+        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+          <div class="flex items-center justify-between border-b border-base-300 pb-2 mb-2">
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                Realtime DNS Logs
+              </h3>
+              <p class="text-[11px] text-base-content/40">
+                Realtime streams of DNS request traffic under this profile.
+                <%= if @pause_logs do %>
+                  <span class="text-amber-500 font-semibold uppercase text-[10px] ml-1.5 animate-pulse">(Paused)</span>
+                <% end %>
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <!-- Bật/Tắt Logging trực tiếp trên bảng Logs -->
+              <button
+                phx-click="toggle_query_logging"
+                class={[
+                  "btn btn-xs uppercase tracking-wider text-[10px] rounded-[4px] cursor-pointer flex items-center gap-1.5",
+                  if(@selected_profile.enable_query_logging, do: "btn-primary", else: "btn-outline")
+                ]}
+              >
+                <.icon name="hero-circle-stack" class="size-3.5" />
+                {if @selected_profile.enable_query_logging, do: "Logging On", else: "Logging Off"}
+              </button>
+
+              <button
+                phx-click="toggle_pause_logs"
+                class={[
+                  "btn btn-xs uppercase tracking-wider text-[10px] rounded-[4px] cursor-pointer flex items-center gap-1.5",
+                  if(@pause_logs, do: "btn-success btn-outline", else: "btn-outline")
+                ]}
+              >
+                <%= if @pause_logs do %>
+                  <.icon name="hero-play" class="size-3.5" /> Resume Stream
+                <% else %>
+                  <.icon name="hero-pause" class="size-3.5" /> Pause Stream
+                <% end %>
+              </button>
+              <button
+                phx-click="clear_logs"
+                class="btn btn-outline btn-xs uppercase tracking-wider text-[10px] rounded-[4px] cursor-pointer"
+              >
+                Clear Log Buffer
+              </button>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto max-h-[350px]">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="border-b border-base-300 text-base-content/40 font-semibold uppercase tracking-wider">
+                  <th class="pb-2">Client IP</th>
+                  <th class="pb-2">Device</th>
+                  <th class="pb-2">Domain</th>
+                  <th class="pb-2">Type</th>
+                  <th class="pb-2">Status</th>
+                  <th class="pb-2">Result</th>
+                  <th class="pb-2 text-right">Time</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
+                <%= if @dns_logs == [] do %>
+                  <tr>
+                    <td colspan="7" class="py-8 text-center text-base-content/30 italic">
+                      No logs captured yet. Capture will start when queries begin.
+                    </td>
+                  </tr>
+                <% else %>
+                  <tr :for={log <- @dns_logs} class="hover:bg-base-200/30 transition-all">
+                    <td class="py-2.5 pr-2 font-mono text-base-content/75">{log.client_ip}</td>
+                    <td class="py-2.5 pr-2 text-base-content/65 truncate max-w-[120px]">
+                      <%= if log.client_name && log.client_name != log.client_ip do %>
+                        {log.client_name}
+                      <% else %>
+                        -
+                      <% end %>
+                    </td>
+                    <td class="py-2.5 pr-2 font-mono truncate max-w-xs">{log.domain}</td>
+                    <td class="py-2.5 pr-2 font-mono uppercase text-base-content/65">{log.qtype}</td>
+                    <td class="py-2.5 pr-2 font-sans font-semibold">
+                      <span class={[
+                        "px-2 py-0.5 rounded-full text-[10px] uppercase font-mono border",
+                        case log.status do
+                          "blocked" -> "bg-red-500/10 text-red-500 border-red-500/20"
+                          "redirected" -> "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                          "resolved" -> "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                          _ -> "bg-base-content/10 text-base-content/75 border-base-content/20"
+                        end
+                      ]}>
+                        {log.status}
+                      </span>
+                    </td>
+                    <td class="py-2.5 pr-2 text-base-content/60 truncate max-w-xs">{log.answer}</td>
+                    <td class="py-2.5 text-right text-base-content/40">
+                      {Calendar.strftime(log.timestamp, "%H:%M:%S")}
+                    </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+
+  <!-- Create Modal (Dynamic) -->
+  <%= if @show_create_modal do %>
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-base-100 border border-base-300 rounded-[12px] w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95 duration-200">
+        <header class="h-14 flex items-center justify-between px-6 border-b border-base-300">
+          <span class="font-bold text-sm uppercase tracking-wider text-base-content">
+            Create DNS Profile
+          </span>
+          <button phx-click="close_create_modal" class="text-base-content/50 hover:text-base-content cursor-pointer">
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </header>
+
+        <.form
+          id="create-dns-profile-form"
+          for={@create_form}
+          phx-change="validate_create"
+          phx-submit="save_profile"
+          class="p-6 space-y-4"
+        >
+          <div class="space-y-1">
+            <label class="text-xs font-semibold uppercase text-base-content/60 block">Profile Name</label>
+            <.input
+              field={@create_form[:name]}
+              placeholder="e.g. Home Ad-Blocker, Kids Protection"
+              required
+              class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs focus:outline-none"
+            />
+          </div>
+
+          <div class="space-y-1">
+            <label class="text-xs font-semibold uppercase text-base-content/60 block">Upstream DNS Servers</label>
+            <.input
+              field={@create_form[:upstream_dns]}
+              placeholder="e.g. 1.1.1.1, 8.8.8.8"
+              required
+              class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs focus:outline-none"
+            />
+          </div>
+
+          <div class="flex items-center justify-end gap-3 pt-4 border-t border-base-300/60 mt-6">
+            <button
+              type="button"
+              phx-click="close_create_modal"
+              class="btn btn-outline btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px] cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={not @create_form.source.valid?}
+              class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px] cursor-pointer"
+            >
+              Create
+            </button>
+          </div>
+        </.form>
+      </div>
+    </div>
+  <% end %>
+</div>

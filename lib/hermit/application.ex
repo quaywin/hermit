@@ -70,11 +70,11 @@ defmodule Hermit.Application do
     if Application.get_env(:hermit, :boot_persisted_pairs, true) do
       Task.start(fn ->
         try do
-          dns_configs = Hermit.Repo.all(Hermit.Vpn.DnsConfig)
+          inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile) |> Hermit.Repo.preload(:dns_profile)
 
-          Enum.each(dns_configs, fn config ->
-            if config.enabled do
-              case Hermit.Vpn.DnsSupervisor.start_dns(config.inbound_profile_id) do
+          Enum.each(inbound_profiles, fn profile ->
+            if profile.dns_profile && profile.dns_profile.enabled do
+              case Hermit.Vpn.DnsSupervisor.start_dns(profile.id) do
                 {:ok, _} -> :ok
                 _ -> :error
               end

@@ -94,83 +94,6 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "Centralized DNS Node Running"
     assert html =~ "100.64.0.100"
 
-    # 2. Toggle Filters
-    html = view |> element("button[phx-click=toggle_block_ads]") |> render_click()
-    assert html =~ "Ads/Trackers blocking enabled!"
-    html = view |> element("button[phx-click=toggle_block_goodbyeads]") |> render_click()
-    assert html =~ "GoodbyeAds blocking enabled!"
-    html = view |> element("button[phx-click=toggle_block_adult]") |> render_click()
-    assert html =~ "Adult content blocking enabled!"
-
-    # 3. Save Upstream DNS
-    html =
-      view
-      |> form("#save_upstream_dns_form", %{"upstream_dns" => "1.1.1.1, 9.9.9.9"})
-      |> render_submit()
-
-    assert html =~ "Upstream DNS servers updated."
-
-    # 4. Add Custom Rules (Block)
-    html =
-      view
-      |> form("#add_custom_rule_form", %{
-        "domain" => "ad.example.com",
-        "action" => "block"
-      })
-      |> render_submit()
-
-    assert html =~ "Custom rule for ad.example.com added."
-    assert html =~ "ad.example.com"
-    assert html =~ "Block"
-
-    # 5. Add Custom Redirect Rule
-    _ = view |> element("select[name=action]") |> render_change(%{"action" => "redirect"})
-
-    html =
-      view
-      |> form("#add_custom_rule_form", %{
-        "domain" => "my-redirect.com",
-        "action" => "redirect",
-        "value" => "192.168.1.5"
-      })
-      |> render_submit()
-
-    assert html =~ "Custom rule for my-redirect.com added."
-    assert html =~ "my-redirect.com"
-    assert html =~ "192.168.1.5"
-
-    # 6. Delete rule
-    html =
-      view |> element("button[phx-value-domain='ad.example.com']", "Delete") |> render_click()
-
-    assert html =~ "Custom rule for ad.example.com deleted."
-
-    # Verify in DB directly
-    updated_config = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    assert Enum.find(updated_config.custom_rules, &(&1["domain"] == "ad.example.com")) == nil
-
-    # 7. Test live logs streaming
-    log = %{
-      "pair_id" => to_string(inbound_profile.id),
-      "domain" => "live-test.org",
-      "type" => "A",
-      "status" => "resolved",
-      "answer" => "1.1.1.1",
-      "duration" => 8,
-      "timestamp" => System.system_time(:second)
-    }
-
-    Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{inbound_profile.id}", {:dns_log, log})
-    Process.sleep(50)
-
-    html = render(view)
-    assert html =~ "live-test.org"
-    assert html =~ "1.1.1.1"
-
-    # Clear logs
-    html = view |> element("button[phx-click=clear_dns_logs]", "Clear") |> render_click()
-    refute html =~ "live-test.org"
-
     # Cleanup
     Hermit.Vpn.DnsSupervisor.stop_dns(inbound_profile.id)
   end
@@ -191,25 +114,18 @@ defmodule HermitWeb.InboundDetailLiveTest do
       })
 
     {:ok, view1, _html} = live(conn, ~p"/inbounds/#{p1.id}?tab=dns")
-    {:ok, view2, _html} = live(conn, ~p"/inbounds/#{p2.id}?tab=dns")
+    {:ok, _view2, _html} = live(conn, ~p"/inbounds/#{p2.id}?tab=dns")
 
-    # Enable and configure rule on p1
+    # Enable on p1 via UI
     _ = view1 |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
 
-    view1
-    |> form("#add_custom_rule_form", %{
-      "domain" => "profile1.com",
-      "action" => "block"
+    # Write configs directly to DB instead of using legacy UI forms
+    {:ok, _} = Hermit.Vpn.DnsConfig.update_for_profile(p1.id, %{
+      custom_rules: [%{"domain" => "profile1.com", "action" => "block"}]
     })
-    |> render_submit()
-
-    # Configure rule on p2 (leave disabled)
-    view2
-    |> form("#add_custom_rule_form", %{
-      "domain" => "profile2.com",
-      "action" => "block"
+    {:ok, _} = Hermit.Vpn.DnsConfig.update_for_profile(p2.id, %{
+      custom_rules: [%{"domain" => "profile2.com", "action" => "block"}]
     })
-    |> render_submit()
 
     # Verify both configurations are distinct in database
     c1 = Hermit.Vpn.DnsConfig.get_for_profile(p1.id)
@@ -231,70 +147,6 @@ defmodule HermitWeb.InboundDetailLiveTest do
     # Cleanup
     Hermit.Vpn.DnsSupervisor.stop_dns(p1.id)
     Hermit.Vpn.DnsSupervisor.stop_dns(p2.id)
-  end
-
-  test "toggles override dns without crashing when DNS worker is not running", %{conn: conn} do
-    {:ok, inbound_profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "dns_toggle_test",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "tskey-dns-toggle"}
-      })
-
-    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=dns")
-    assert html =~ "DNS Control"
-
-    # Initially, tailscale_override_dns is false
-    config = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    refute config.tailscale_override_dns
-
-    # Toggle to true (it should not crash even if the worker is not running)
-    html = view |> element("button[phx-click=toggle_override_dns]") |> render_click()
-    assert html =~ "Tailscale DNS integration enabled."
-
-    # Verify db updated to true
-    config_after = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    assert config_after.tailscale_override_dns == true
-
-    # Toggle back to false
-    html = view |> element("button[phx-click=toggle_override_dns]") |> render_click()
-    assert html =~ "Tailscale DNS integration disabled."
-
-    # Verify db updated to false
-    config_final = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    assert config_final.tailscale_override_dns == false
-  end
-
-  test "toggles query logging updates database", %{conn: conn} do
-    {:ok, inbound_profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "dns_query_log_test",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "tskey-dns-toggle"}
-      })
-
-    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=dns")
-    assert html =~ "Enable Query Logs"
-
-    # Initially, enable_query_logging is false
-    config = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    refute config.enable_query_logging
-
-    # Toggle to true
-    html = view |> element("button[phx-click=toggle_query_logging]") |> render_click()
-    assert html =~ "Query logging enabled for this profile."
-
-    # Verify db updated to true
-    config_after = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    assert config_after.enable_query_logging == true
-
-    # Toggle back to false
-    html = view |> element("button[phx-click=toggle_query_logging]") |> render_click()
-    assert html =~ "Query logging disabled for this profile."
-
-    # Verify db updated to false
-    config_final = Hermit.Vpn.DnsConfig.get_for_profile(inbound_profile.id)
-    assert config_final.enable_query_logging == false
   end
 
   test "delete_inbound clears tailscale dns override if enabled", %{conn: conn} do
@@ -367,5 +219,55 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "Domain external.com removed from external node tag:connector-external-node"
     refute html =~ "phx-value-domain=\"external.com\""
     assert html =~ "phx-value-domain=\"other-external.com\""
+  end
+
+  test "reconnect button and disabled override toggle when DNS node is not running", %{conn: conn} do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "dns_reconnect_test",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-dns-reconnect"}
+      })
+
+    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=dns")
+
+    # 1. DNS is disabled by default. Override DNS button must be disabled.
+    assert html =~ "disabled"
+    assert html =~ "Requires Centralized DNS Node to be running"
+
+    # 2. Toggle DNS Enabled (Status changes to active/running in mock mode)
+    html = view |> element("button[phx-click=toggle_dns_enabled]") |> render_click()
+    assert html =~ "DNS Filtering enabled for profile"
+    assert html =~ "Centralized DNS Node Running"
+    refute html =~ "Requires Centralized DNS Node to be running"
+
+    # Toggle Tailscale Override DNS to true
+    html = view |> element("button[phx-click=toggle_override_dns]") |> render_click()
+    assert html =~ "Tailscale DNS integration enabled"
+
+    # 3. Simulate DNS node crash/offline by stopping the DNS worker
+    Hermit.Vpn.DnsSupervisor.stop_dns(inbound_profile.id)
+    # Trigger a tick or page update to refresh status
+    send(view.pid, :tick)
+    html = render(view)
+
+    assert html =~ "Centralized DNS Node Offline"
+    assert html =~ "Reconnect Node"
+    assert html =~ "Requires Centralized DNS Node to be running"
+
+    # Verify that toggle_override_dns is disabled in the UI
+    assert has_element?(view, "button[phx-click=toggle_override_dns][disabled]")
+
+    # Verify that toggle_override_dns cannot be triggered when not running
+    html = render_click(view, :toggle_override_dns, %{})
+    assert html =~ "Cannot toggle Override DNS when DNS Node is not running"
+
+    # 4. Click Reconnect Node
+    html = view |> element("button[phx-click=reconnect_dns]") |> render_click()
+    assert html =~ "Reconnecting DNS Node"
+    assert html =~ "Centralized DNS Node Running"
+
+    # Cleanup
+    Hermit.Vpn.DnsSupervisor.stop_dns(inbound_profile.id)
   end
 end

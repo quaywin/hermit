@@ -563,7 +563,7 @@ defmodule Hermit.Vpn.DnsWorker do
             "--socket=#{socket_path}",
             "up",
             "--authkey=#{auth_key}",
-            "--accept-dns=true",
+            "--accept-dns=false",
             "--accept-routes=false",
             "--hostname=hermit-dns-#{profile_id}",
             "--timeout=30s"

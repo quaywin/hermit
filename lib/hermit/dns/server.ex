@@ -225,6 +225,13 @@ defmodule Hermit.Dns.Server do
                 ttl
               )
 
+              resolver_tag =
+                case upstream do
+                  {:udp, {ip_addr, port}} -> "UDP (#{ip_to_string(ip_addr)}:#{port})"
+                  {:udp, ip_addr} -> "UDP (#{ip_to_string(ip_addr)})"
+                  {:doh, url} -> "DoH (#{extract_host(url)})"
+                end
+
               log_and_broadcast(
                 profile_id,
                 config_id,
@@ -233,6 +240,7 @@ defmodule Hermit.Dns.Server do
                 original_query.qtype,
                 "resolved",
                 answer_log_info,
+                resolver_tag,
                 enable_query_logging
               )
             end)
@@ -306,6 +314,8 @@ defmodule Hermit.Dns.Server do
               ttl
             )
 
+            resolver_tag = "DoH (#{extract_host(url)})"
+
             log_and_broadcast(
               profile_id,
               config_id,
@@ -314,6 +324,7 @@ defmodule Hermit.Dns.Server do
               original_query.qtype,
               "resolved",
               answer_log_info,
+              resolver_tag,
               enable_query_logging
             )
           end)
@@ -335,76 +346,30 @@ defmodule Hermit.Dns.Server do
   def handle_info(:clean_timeouts, state) do
     now = System.monotonic_time(:millisecond)
 
-    new_pending =
-      Enum.reduce(state.pending_queries, state.pending_queries, fn {tx_id, info}, acc ->
-        {client_ip, client_port, original_query, sent_at, target_upstreams, current_index} = info
+    new_state =
+      Enum.reduce(state.pending_queries, state, fn {tx_id, info}, acc_state ->
+        {_client_ip, _client_port, _original_query, sent_at, _target_upstreams, _current_index} = info
 
-        # Timeout threshold at 2000ms
+        # Nếu bị quá hạn 2 giây mà chưa nhận được phản hồi
         if now - sent_at >= 2000 do
-          next_index = current_index + 1
-
-          if next_index < tuple_size(target_upstreams) do
-            # We have a fallback upstream to try
-            next_upstream = elem(target_upstreams, next_index)
-
-            # Log latency update for the failed upstream (set to 2000ms latency penalty)
-            failed_upstream = elem(target_upstreams, current_index)
-            GenServer.cast(self(), {:update_latency, failed_upstream, 2000})
-
-            # Send query to the next fallback upstream asynchronously
-            packet = Packet.build_query_packet(tx_id, original_query.query_record)
-            async_send_to_upstream(state.upstream_sockets, state.doh_client, next_upstream, packet)
-
-            # Update pending query record with next index and new sent timestamp
-            updated_info =
-              {client_ip, client_port, original_query, now, target_upstreams, next_index}
-
-            Map.put(acc, tx_id, updated_info)
-          else
-            # No fallback upstreams left. Return SERVFAIL to client
-            servfail = Packet.build_nxdomain(original_query.id, original_query.query_record)
-            servfail = Packet.patch_rcode(servfail, 2)
-            :gen_udp.send(state.socket, client_ip, client_port, servfail)
-
-            # Store SERVFAIL in cache to prevent continuous query bombing when upstream is down
-            store_cache(
-              state.profile_id,
-              original_query.domain,
-              original_query.qtype,
-              servfail,
-              "resolved",
-              "SERVFAIL",
-              5
-            )
-
-            log_and_broadcast(
-              state.profile_id,
-              state.config.id,
-              client_ip,
-              original_query.domain,
-              original_query.qtype,
-              "resolved",
-              "SERVFAIL",
-              state.config.enable_query_logging
-            )
-
-            # Log latency penalty for the last failed upstream
-            failed_upstream = elem(target_upstreams, current_index)
-            GenServer.cast(self(), {:update_latency, failed_upstream, 2000})
-
-            # Remove from pending queries
-            Map.delete(acc, tx_id)
-          end
+          handle_upstream_failure(tx_id, acc_state)
         else
-          # Query is still waiting, keep it
-          acc
+          acc_state
         end
       end)
 
     :erlang.send_after(1000, self(), :clean_timeouts)
-    {:noreply, %{state | pending_queries: new_pending}}
+    {:noreply, new_state}
   end
 
+  @impl true
+  def handle_info({:doh_failure, tx_id, _url}, state) do
+    # Kích hoạt failover lập tức khi nhận tin báo lỗi từ Task DoH
+    new_state = handle_upstream_failure(tx_id, state)
+    {:noreply, new_state}
+  end
+
+  # Hàm helper dùng chung xử lý lỗi upstream được chuyển xuống dưới
   @impl true
   def handle_info(:active_probe, state) do
     :erlang.send_after(30_000, self(), :active_probe)
@@ -511,9 +476,28 @@ defmodule Hermit.Dns.Server do
     upstreams = state.upstreams
     enable_query_logging = config.enable_query_logging
 
-    # 1. Lookup cache first (max optimization)
-    case lookup_cache(profile_id, query.domain, query.qtype) do
-      {:ok, cached_packet, status, answer_log_info} ->
+    # 0. AAAA Blocking (Filter IPv6)
+    if query.qtype == :AAAA and Map.get(config, :block_ipv6, false) do
+      resp = Packet.build_empty_response(query.id, query.query_record)
+      :gen_udp.send(socket, ip, port, resp)
+
+      log_and_broadcast(
+        profile_id,
+        config.id,
+        ip,
+        query.domain,
+        query.qtype,
+        "blocked",
+        "Empty (IPv6 Blocked)",
+        "Local Filter",
+        enable_query_logging
+      )
+
+      state
+    else
+      # 1. Lookup cache first (max optimization)
+      case lookup_cache(profile_id, query.domain, query.qtype) do
+        {:ok, cached_packet, status, answer_log_info} ->
         <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
         resp_packet = query.id <> rest_packet
         :gen_udp.send(socket, ip, port, resp_packet)
@@ -533,6 +517,7 @@ defmodule Hermit.Dns.Server do
           query.qtype,
           status,
           cached_answer,
+          "Cache",
           enable_query_logging
         )
 
@@ -578,6 +563,7 @@ defmodule Hermit.Dns.Server do
               query.qtype,
               "blocked",
               "NXDOMAIN",
+              "Local Filter",
               enable_query_logging
             )
 
@@ -607,6 +593,7 @@ defmodule Hermit.Dns.Server do
                 query.qtype,
                 "redirected",
                 redirect_val,
+                "Local Rules",
                 enable_query_logging
               )
             else
@@ -632,6 +619,7 @@ defmodule Hermit.Dns.Server do
                 query.qtype,
                 "redirected",
                 "NXDOMAIN",
+                "Local Rules",
                 enable_query_logging
               )
             end
@@ -643,6 +631,7 @@ defmodule Hermit.Dns.Server do
             target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
             async_forward_to_upstream(socket, ip, port, packet, query, target_upstreams, state)
         end
+    end
     end
   end
 
@@ -686,13 +675,8 @@ defmodule Hermit.Dns.Server do
   defp local_ip?(_), do: false
 
   defp async_forward_to_upstream(socket, ip, port, packet, query, target_upstreams, state) do
-    # Sort target upstreams so active_upstream is tried first
-    sorted_upstreams =
-      if state.active_upstream in target_upstreams do
-        [state.active_upstream | List.delete(target_upstreams, state.active_upstream)]
-      else
-        target_upstreams
-      end
+    # Sort target upstreams based on configured priority and health status
+    sorted_upstreams = sort_upstreams_by_priority(target_upstreams, state.upstreams, state.upstreams_map)
 
     if sorted_upstreams == [] do
       # Return SERVFAIL if no upstreams configured
@@ -717,6 +701,30 @@ defmodule Hermit.Dns.Server do
 
       %{state | pending_queries: new_pending}
     end
+  end
+
+  defp sort_upstreams_by_priority(target_upstreams, upstreams_order, upstreams_map) do
+    # Classify upstreams into healthy and penalized (latency >= 2000ms due to timeout)
+    {healthy, penalized} =
+      Enum.split_with(target_upstreams, fn upstream ->
+        latency = Map.get(upstreams_map, upstream, 20)
+        latency < 2000
+      end)
+
+    # Sort healthy ones based on the original user configuration order
+    sorted_healthy =
+      Enum.sort_by(healthy, fn upstream ->
+        Enum.find_index(upstreams_order, &(&1 == upstream)) || 999
+      end)
+
+    # Sort penalized ones similarly
+    sorted_penalized =
+      Enum.sort_by(penalized, fn upstream ->
+        Enum.find_index(upstreams_order, &(&1 == upstream)) || 999
+      end)
+
+    # Healthy ones first, penalized ones last (Failover)
+    sorted_healthy ++ sorted_penalized
   end
 
   defp async_send_to_upstream(upstream_sockets, _doh_client, {:udp, {ip, port}}, packet) when is_tuple(upstream_sockets) do
@@ -779,8 +787,78 @@ defmodule Hermit.Dns.Server do
 
         other ->
           Logger.warning("DNS Server: DoH query to upstream #{url} failed: #{inspect(other)}")
+          send(server_pid, {:doh_failure, tx_id, url})
       end
     end)
+  end
+
+  # Hàm helper dùng chung xử lý lỗi upstream
+  defp handle_upstream_failure(tx_id, state) do
+    case Map.get(state.pending_queries, tx_id) do
+      {client_ip, client_port, original_query, _sent_at, target_upstreams, current_index} ->
+        failed_upstream = elem(target_upstreams, current_index)
+
+        # 1. Phạt độ trễ ngay lập tức trong state của GenServer
+        new_upstreams_map = Map.put(state.upstreams_map, failed_upstream, 2000)
+        active_upstream =
+          if map_size(new_upstreams_map) > 0 do
+            {best_ip, _best_latency} = Enum.min_by(new_upstreams_map, fn {_ip, lat} -> lat end)
+            best_ip
+          else
+            nil
+          end
+
+        state = %{state | upstreams_map: new_upstreams_map, active_upstream: active_upstream}
+        next_index = current_index + 1
+
+        if next_index < tuple_size(target_upstreams) do
+          # 2. Có DNS dự phòng: Gửi truy vấn qua DNS tiếp theo ngay lập tức
+          next_upstream = elem(target_upstreams, next_index)
+          packet = Packet.build_query_packet(tx_id, original_query.query_record)
+          async_send_to_upstream(state.upstream_sockets, state.doh_client, next_upstream, packet)
+
+          # Cập nhật thông tin truy vấn trong pending_queries
+          now = System.monotonic_time(:millisecond)
+          updated_info = {client_ip, client_port, original_query, now, target_upstreams, next_index}
+          new_pending = Map.put(state.pending_queries, tx_id, updated_info)
+
+          %{state | pending_queries: new_pending}
+        else
+          # 3. Hết DNS dự phòng: Trả về SERVFAIL cho client
+          servfail = Packet.build_nxdomain(original_query.id, original_query.query_record)
+          servfail = Packet.patch_rcode(servfail, 2)
+          :gen_udp.send(state.socket, client_ip, client_port, servfail)
+
+          # Lưu cache lỗi SERVFAIL trong 5 giây (Negative Caching)
+          store_cache(
+            state.profile_id,
+            original_query.domain,
+            original_query.qtype,
+            servfail,
+            "resolved",
+            "SERVFAIL",
+            5
+          )
+
+          log_and_broadcast(
+            state.profile_id,
+            state.config.id,
+            client_ip,
+            original_query.domain,
+            original_query.qtype,
+            "resolved",
+            "SERVFAIL",
+            "Failover",
+            state.config.enable_query_logging
+          )
+
+          new_pending = Map.delete(state.pending_queries, tx_id)
+          %{state | pending_queries: new_pending}
+        end
+
+      nil ->
+        state
+    end
   end
 
   # Simplified query_upstream for active latency probing task
@@ -942,7 +1020,14 @@ defmodule Hermit.Dns.Server do
 
   # --- Log Recording ---
 
-  defp log_and_broadcast(profile_id, config_id, client_ip, domain, qtype, status, answer, true) do
+  defp extract_host(url) do
+    case URI.new(url) do
+      {:ok, %URI{host: host}} when not is_nil(host) -> host
+      _ -> "DoH Server"
+    end
+  end
+
+  defp log_and_broadcast(profile_id, config_id, client_ip, domain, qtype, status, answer, resolver, true) do
     Task.start(fn ->
       pair_id = to_string(profile_id)
       client_ip_str = ip_to_string(client_ip)
@@ -956,6 +1041,7 @@ defmodule Hermit.Dns.Server do
         "type" => Packet.qtype_to_string(qtype),
         "status" => status,
         "answer" => answer,
+        "resolver" => resolver,
         "timestamp" => System.system_time(:second)
       }
 
@@ -979,6 +1065,7 @@ defmodule Hermit.Dns.Server do
          _qtype,
          _status,
          _answer_or_packet,
+         _resolver,
          false
        ) do
     :ok

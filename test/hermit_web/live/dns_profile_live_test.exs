@@ -66,6 +66,11 @@ defmodule HermitWeb.DnsProfileLiveTest do
     html = view |> element("button[phx-click=toggle_block_adult]") |> render_click()
     assert html =~ "Adult content blocking enabled!"
     assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:block_adult) == true
+
+    # Toggle IPv6 Blocking
+    html = view |> element("button[phx-click=toggle_block_ipv6]") |> render_click()
+    assert html =~ "IPv6 blocking enabled!"
+    assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:block_ipv6) == true
   end
 
   test "saves upstream DNS configurations", %{conn: conn, default_profile: profile} do

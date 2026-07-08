@@ -190,4 +190,57 @@ defmodule Hermit.Dns.ServerCacheTest do
       end
     end
   end
+
+  test "DNS Server blocks IPv6 AAAA queries when block_ipv6 is enabled" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_IPv6Block",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_ipv6"}
+      })
+
+    profile_id = profile.id
+    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+        enabled: true,
+        block_ipv6: true,
+        upstream_dns: "1.1.1.1",
+        custom_rules: []
+      })
+
+    port = 35356
+    {:ok, server_pid} = Server.start_link(profile_id: profile_id, port: port)
+
+    try do
+      # google.com
+      qname = <<6>> <> "google" <> <<3>> <> "com" <> <<0>>
+      # AAAA record (28), IN class (1)
+      question = qname <> <<0, 28, 0, 1>>
+
+      {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
+      query_id = <<0x99, 0x99>>
+      query_packet =
+        query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
+
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, port, query_packet)
+
+      assert {:ok, {{127, 0, 0, 1}, ^port, response}} = :gen_udp.recv(client_sock, 0, 1000)
+
+      # Verify response: NOERROR (rcode == 0) and 0 answers
+      assert binary_part(response, 0, 2) == query_id
+      <<_id::binary-size(2), flags::binary-size(2), _qdcount::16, ancount::16, _rest::binary>> = response
+      <<_qr::1, _opcode::4, _aa::1, _tc::1, _rd::1, _ra::1, _z::3, rcode::4>> = flags
+
+      assert rcode == 0
+      assert ancount == 0
+
+      :gen_udp.close(client_sock)
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
 end

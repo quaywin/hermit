@@ -8,6 +8,7 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:block_ads, :boolean, default: false)
     field(:block_goodbyeads, :boolean, default: false)
     field(:block_adult, :boolean, default: false)
+    field(:block_ipv6, :boolean, default: false)
     field(:upstream_dns, :string, default: "1.1.1.1, 8.8.8.8")
     field(:custom_rules, {:array, :map}, default: [])
     field(:tailscale_override_dns, :boolean, default: false)
@@ -29,6 +30,7 @@ defmodule Hermit.Vpn.DnsConfig do
       :block_ads,
       :block_goodbyeads,
       :block_adult,
+      :block_ipv6,
       :upstream_dns,
       :custom_rules,
       :tailscale_override_dns,

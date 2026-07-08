@@ -121,19 +121,19 @@
           <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 border-b border-base-300 pb-2 mb-4">
             Security & Ad-Blocking Filters
           </h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <!-- AdGuard Blocklist -->
-            <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between gap-3">
-              <div>
+            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
+              <div class="space-y-0.5">
                 <span class="text-xs font-semibold uppercase tracking-wider block">AdGuard Filter</span>
-                <p class="text-[11px] text-base-content/50 mt-1">
+                <p class="text-[11px] text-base-content/50 leading-normal">
                   Blocks known ads, analytics, trackers, and telemetry domains.
                 </p>
               </div>
               <button
                 phx-click="toggle_block_ads"
                 class={[
-                  "btn btn-xs w-full rounded-[4px] font-semibold uppercase tracking-wider",
+                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
                   if(@selected_profile.block_ads, do: "btn-primary", else: "btn-outline")
                 ]}
               >
@@ -142,17 +142,17 @@
             </div>
 
             <!-- GoodbyeAds Blocklist -->
-            <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between gap-3">
-              <div>
+            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
+              <div class="space-y-0.5">
                 <span class="text-xs font-semibold uppercase tracking-wider block">GoodbyeAds Filter</span>
-                <p class="text-[11px] text-base-content/50 mt-1">
+                <p class="text-[11px] text-base-content/50 leading-normal">
                   Blocks aggressive mobile trackers, ads, and telemetry.
                 </p>
               </div>
               <button
                 phx-click="toggle_block_goodbyeads"
                 class={[
-                  "btn btn-xs w-full rounded-[4px] font-semibold uppercase tracking-wider",
+                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
                   if(@selected_profile.block_goodbyeads, do: "btn-primary", else: "btn-outline")
                 ]}
               >
@@ -161,21 +161,40 @@
             </div>
 
             <!-- Adult Filter -->
-            <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between gap-3">
-              <div>
+            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
+              <div class="space-y-0.5">
                 <span class="text-xs font-semibold uppercase tracking-wider block">Adult Filter</span>
-                <p class="text-[11px] text-base-content/50 mt-1">
+                <p class="text-[11px] text-base-content/50 leading-normal">
                   Blocks major adult websites and pornography domains.
                 </p>
               </div>
               <button
                 phx-click="toggle_block_adult"
                 class={[
-                  "btn btn-xs w-full rounded-[4px] font-semibold uppercase tracking-wider",
+                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
                   if(@selected_profile.block_adult, do: "btn-primary", else: "btn-outline")
                 ]}
               >
                 {if @selected_profile.block_adult, do: "Blocking", else: "Allowing"}
+              </button>
+            </div>
+
+            <!-- IPv6 (AAAA) Filter -->
+            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
+              <div class="space-y-0.5">
+                <span class="text-xs font-semibold uppercase tracking-wider block">IPv6 (AAAA) Filter</span>
+                <p class="text-[11px] text-base-content/50 leading-normal">
+                  Blocks IPv6 AAAA requests. Improves speed and prevents IPv6 leaks.
+                </p>
+              </div>
+              <button
+                phx-click="toggle_block_ipv6"
+                class={[
+                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
+                  if(@selected_profile.block_ipv6, do: "btn-primary", else: "btn-outline")
+                ]}
+              >
+                {if @selected_profile.block_ipv6, do: "Blocking", else: "Allowing"}
               </button>
             </div>
           </div>
@@ -370,6 +389,7 @@
                   <th class="pb-2">Domain</th>
                   <th class="pb-2">Type</th>
                   <th class="pb-2">Status</th>
+                  <th class="pb-2">Source</th>
                   <th class="pb-2">Result</th>
                   <th class="pb-2 text-right">Time</th>
                 </tr>
@@ -377,7 +397,7 @@
               <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
                 <%= if @dns_logs == [] do %>
                   <tr>
-                    <td colspan="7" class="py-8 text-center text-base-content/30 italic">
+                    <td colspan="8" class="py-8 text-center text-base-content/30 italic">
                       No logs captured yet. Capture will start when queries begin.
                     </td>
                   </tr>
@@ -405,6 +425,9 @@
                       ]}>
                         {log.status}
                       </span>
+                    </td>
+                    <td class="py-2.5 pr-2 font-mono text-[10px] text-base-content/50">
+                      {log.resolver}
                     </td>
                     <td class="py-2.5 pr-2 text-base-content/60 truncate max-w-xs">{log.answer}</td>
                     <td class="py-2.5 text-right text-base-content/40">

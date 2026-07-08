@@ -173,6 +173,30 @@ defmodule Hermit.Dns.Packet do
   end
 
   @doc """
+  Builds an empty response (NOERROR with 0 answers) for AAAA blocking.
+  """
+  def build_empty_response(id_bin, query_record) when Record.is_record(query_record, :dns_query) do
+    id_val = parse_id_bin(id_bin)
+
+    msg =
+      dns_message(
+        id: id_val,
+        qr: true,
+        aa: false,
+        rd: true,
+        ra: true,
+        # NOERROR
+        rc: 0,
+        qc: 1,
+        anc: 0,
+        questions: [query_record],
+        answers: []
+      )
+
+    :dns.encode_message(msg)
+  end
+
+  @doc """
   Builds a A/AAAA record response for redirect.
   """
   def build_a_response(id_bin, query_record, ip_str)

@@ -223,6 +223,13 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   @impl true
+  def handle_event("toggle_block_ipv6", _params, socket) do
+    profile = socket.assigns.selected_profile
+    block_ipv6 = not profile.block_ipv6
+    update_profile(socket, profile, %{block_ipv6: block_ipv6}, "IPv6 blocking #{if block_ipv6, do: "enabled", else: "disabled"}!")
+  end
+
+  @impl true
   def handle_event("toggle_query_logging", _params, socket) do
     profile = socket.assigns.selected_profile
     enable_logging = not profile.enable_query_logging
@@ -388,6 +395,7 @@ defmodule HermitWeb.DnsProfileLive do
       qtype: Map.get(log, "type") || Map.get(log, :qtype) || "A",
       status: Map.get(log, "status") || Map.get(log, :status) || "resolved",
       answer: Map.get(log, "answer") || Map.get(log, :answer) || "-",
+      resolver: Map.get(log, "resolver") || Map.get(log, :resolver) || "-",
       timestamp: to_datetime(Map.get(log, "timestamp") || Map.get(log, :timestamp))
     }
   end

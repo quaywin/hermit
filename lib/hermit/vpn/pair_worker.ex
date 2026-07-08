@@ -1089,8 +1089,8 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:inbound_config_updated, _new_config}, state) do
-    if state.ts_error_reason do
-      updated_state = %{state | ts_error_reason: nil}
+    if state.ts_error_reason || state.ts_status == :error do
+      updated_state = %{state | ts_error_reason: nil, ts_status: :running}
       updated_state = broadcast_update(updated_state)
       {:noreply, updated_state}
     else
@@ -1102,7 +1102,8 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_info({:inbound_config_update_failed, reason}, state) do
     error_state = %{
       state
-      | ts_error_reason: "Failed to dynamically update Tailscale settings: #{inspect(reason)}"
+      | ts_status: :error,
+        ts_error_reason: "Failed to dynamically update Tailscale settings: #{inspect(reason)}"
     }
 
     updated_state = broadcast_update(error_state)

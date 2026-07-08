@@ -37,8 +37,8 @@ flowchart TD
 
 The DNS plane is decoupled from VPN Pairs. Hermit supports **Multi-Profile Dynamic DNS Filtering**, allowing you to pre-configure multiple DNS Server Profiles and assign them dynamically to your Inbound Profiles.
 
-- **Multiple Pre-configured DNS Profiles**: You can set up multiple DNS Profiles beforehand, each with its own upstream DNS servers (UDP/DoH), custom routing rules (block/bypass/redirect), and toggleable blocklists (AdGuard, GoodbyeAds, adult content).
-- **Flexible Association**: Each Inbound Tailscale Profile can be linked to any pre-configured DNS Profile.
+- **Multiple Pre-configured DNS Profiles**: Set up multiple DNS Profiles beforehand, each with its own upstream DNS servers (UDP/DoH), custom routing rules (block/bypass/redirect), and toggleable blocklists.
+- **Dynamic & Easy Switching**: A single Tailscale Inbound Profile can be easily linked to and switched between any of the pre-configured DNS Profiles on the fly. Switching profiles updates the DNS filters and upstream servers instantly without interrupting the main Tailscale connection.
 - **Automated Node Setup**: When a Tailscale Inbound Profile starts, Hermit automatically provisions and boots a dedicated **DNS Node** (running `tailscaled` in an isolated network namespace `hermit_dns_#{profile_id}`) and its associated Elixir DNS resolver.
 - **Automated Global DNS Configuration**: When **Tailscale DNS Override** is enabled, Hermit automatically uses the Tailscale API to register this DNS Node as the global nameserver for your entire tailnet. All devices on your tailnet will use this node automatically without any manual client configuration.
 
@@ -46,21 +46,28 @@ The DNS plane is decoupled from VPN Pairs. Hermit supports **Multi-Profile Dynam
 flowchart TD
     Client["Tailnet Device"] -->|"1. DNS Query"| TS
 
-    subgraph DNS_NS["DNS Namespace"]
+    subgraph DNS_NS["DNS Namespace<br/>(hermit_dns_{profile_id})"]
         TS["Tailscale Node"]
     end
 
-    subgraph Host["Host"]
-        Server["DNS Server"]
+    subgraph Host["Host Machine"]
+        Server["DNS Server<br/>(Port 5400 + {profile_id})"]
+
+        subgraph Active_DNS["Active DNS Config (Switchable)"]
+            Profile["Selected DNS Profile<br/>(Choose from Profile A, B, C...)"]
+        end
+
         Fast["Fast Path<br/>(Cache / Blocklist)"]
         Upstream["Upstream DNS / DoH"]
         Magic["Tailscale MagicDNS"]
     end
 
-    TS -->|"2. Redirect"| Server
-    Server --> Fast
-    Server --> Upstream
-    Server --> Magic
+    TS -->|"2. DNAT Redirect"| Server
+    Server -->|"Loads"| Profile
+    
+    Profile --> Fast
+    Profile --> Upstream
+    Profile --> Magic
 
     Fast -->|"Instant Return"| Client
     Upstream -->|"Cache & Return"| Server

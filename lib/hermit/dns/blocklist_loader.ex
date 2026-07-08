@@ -15,7 +15,7 @@ defmodule Hermit.Dns.BlocklistLoader do
     # Create ETS tables with read_concurrency to optimize concurrent DNS queries
     :ets.new(@adguard_table, [:set, :public, :named_table, read_concurrency: true])
     :ets.new(@goodbyeads_table, [:set, :public, :named_table, read_concurrency: true])
-    :ets.new(@dns_cache_table, [:set, :public, :named_table, read_concurrency: true])
+    :ets.new(@dns_cache_table, [:set, :public, :named_table, read_concurrency: true, write_concurrency: :auto])
 
     # Load blocklists asynchronously to not block application startup
     send(self(), :load_blocklists)

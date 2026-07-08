@@ -31,7 +31,7 @@ defmodule Hermit.Vpn.DnsLogReceiver do
   def init(opts) do
     port = opts[:port] || 5300
 
-    :ets.new(@table, [:ordered_set, :public, :named_table, read_concurrency: true])
+    :ets.new(@table, [:ordered_set, :public, :named_table, read_concurrency: true, write_concurrency: :auto])
 
     # Schedule periodic log pruning every 10 seconds to save CPU
     :erlang.send_after(10_000, self(), :periodic_prune)

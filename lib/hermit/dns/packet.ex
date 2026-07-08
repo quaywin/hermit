@@ -26,11 +26,59 @@ defmodule Hermit.Dns.Packet do
 
   @type qtype :: :A | :AAAA | :MX | :TXT | :CNAME | :NS | :PTR | :SOA | {:unknown, integer()}
 
-  @doc """
-  Parses a raw DNS binary packet.
-  Returns {:ok, query_map} or {:error, reason}.
-  """
   def parse(packet) do
+    case packet do
+      # QR = 0 (Query)
+      <<_id::16, 0::1, _rest::bits>> ->
+        parse_query_fast(packet)
+
+      # QR = 1 (Response) hoặc gói tin khác
+      _ ->
+        parse_response_slow(packet)
+    end
+  end
+
+  defp parse_query_fast(<<id::16, _rest_header::binary-size(10), question_section::binary>> = packet) do
+    case parse_name(question_section) do
+      {domain, <<qtype_val::16, qclass::16, _rest::binary>>} ->
+        id_bin = <<id::16>>
+        flags_bin = if byte_size(packet) >= 4, do: binary_part(packet, 2, 2), else: <<0, 0>>
+        query_rec = dns_query(name: domain, class: qclass, type: qtype_val)
+
+        {:ok,
+         %{
+           id: id_bin,
+           flags: flags_bin,
+           domain: domain,
+           qtype: to_qtype(qtype_val),
+           qtype_val: qtype_val,
+           qclass: qclass,
+           query_record: query_rec
+         }}
+
+      _ ->
+        parse_response_slow(packet)
+    end
+  end
+
+  defp parse_query_fast(packet) do
+    parse_response_slow(packet)
+  end
+
+  defp parse_name(data), do: parse_name(data, [])
+
+  defp parse_name(<<0, rest::binary>>, labels) do
+    domain = labels |> Enum.reverse() |> Enum.join(".")
+    {domain, rest}
+  end
+
+  defp parse_name(<<len::8, label::binary-size(len), rest::binary>>, labels) do
+    parse_name(rest, [label | labels])
+  end
+
+  defp parse_name(_, _), do: :error
+
+  defp parse_response_slow(packet) do
     case :dns.decode_message(packet) do
       msg when Record.is_record(msg, :dns_message) ->
         qc = dns_message(msg, :qc)

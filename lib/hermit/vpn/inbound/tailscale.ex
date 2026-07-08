@@ -919,43 +919,48 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             tag = if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
             domains = Enum.map(domains, &String.trim/1) |> Enum.reject(&(&1 == ""))
 
-            updated_acl_map = update_acl_for_app_connector(acl_map, tag, domains)
-            hujson_str = "// Hermit App Connector Update\n" <> Jason.encode!(updated_acl_map)
+            if domains == [] and not has_connector_tag?(acl_map, tag) do
+              Logger.info("Connector tag #{tag} not present in Tailscale ACL and no domains provided. Skipping ACL update.")
+              {:ok, :skipped_no_change}
+            else
+              updated_acl_map = update_acl_for_app_connector(acl_map, tag, domains)
+              hujson_str = "// Hermit App Connector Update\n" <> Jason.encode!(updated_acl_map)
 
-            req_opts =
-              if wrapped? do
-                [
-                  json: Map.put(acl, "acl", hujson_str),
-                  auth: {:basic, "#{api_key}:"},
-                  headers: [{"content-type", "application/json"}]
-                ]
-              else
-                [
-                  body: hujson_str,
-                  auth: {:basic, "#{api_key}:"},
-                  headers: [{"content-type", "text/plain"}]
-                ]
+              req_opts =
+                if wrapped? do
+                  [
+                    json: Map.put(acl, "acl", hujson_str),
+                    auth: {:basic, "#{api_key}:"},
+                    headers: [{"content-type", "application/json"}]
+                  ]
+                else
+                  [
+                    body: hujson_str,
+                    auth: {:basic, "#{api_key}:"},
+                    headers: [{"content-type", "text/plain"}]
+                  ]
+                end
+
+              req_opts =
+                if etag do
+                  Keyword.put(req_opts, :headers, req_opts[:headers] ++ [{"if-match", etag}])
+                else
+                  req_opts
+                end
+
+              case Req.post(acl_url, req_opts) do
+                {:ok, %{status: 200}} ->
+                  Logger.info("Successfully updated Tailscale ACL for App Connector tag #{tag}")
+                  {:ok, :updated}
+
+                {:ok, %{status: status, body: body}} ->
+                  Logger.error("Failed to update Tailscale ACL (HTTP #{status}): #{inspect(body)}")
+                  {:error, {:acl_update_failed, status, body}}
+
+                {:error, reason} ->
+                  Logger.error("Failed to call Tailscale ACL update API: #{inspect(reason)}")
+                  {:error, reason}
               end
-
-            req_opts =
-              if etag do
-                Keyword.put(req_opts, :headers, req_opts[:headers] ++ [{"if-match", etag}])
-              else
-                req_opts
-              end
-
-            case Req.post(acl_url, req_opts) do
-              {:ok, %{status: 200}} ->
-                Logger.info("Successfully updated Tailscale ACL for App Connector tag #{tag}")
-                {:ok, :updated}
-
-              {:ok, %{status: status, body: body}} ->
-                Logger.error("Failed to update Tailscale ACL (HTTP #{status}): #{inspect(body)}")
-                {:error, {:acl_update_failed, status, body}}
-
-              {:error, reason} ->
-                Logger.error("Failed to call Tailscale ACL update API: #{inspect(reason)}")
-                {:error, reason}
             end
 
           {:error, reason} ->
@@ -973,40 +978,103 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   def update_acl_for_app_connector(acl_map, tag, domains) do
-    tag_owners = Map.get(acl_map, "tagOwners", %{})
+    tag = if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
 
-    updated_tag_owners =
-      if Map.has_key?(tag_owners, tag) do
-        tag_owners
-      else
-        Map.put(tag_owners, tag, ["autogroup:admin"])
-      end
+    if domains == [] do
+      tag_owners = Map.get(acl_map, "tagOwners", %{})
+      updated_tag_owners = Map.delete(tag_owners, tag)
+
+      node_attrs = Map.get(acl_map, "nodeAttrs", [])
+      updated_node_attrs = update_node_attrs(node_attrs, tag, [])
+
+      auto_approvers = Map.get(acl_map, "autoApprovers", %{})
+      routes = Map.get(auto_approvers, "routes", %{})
+      existing_v4 = Map.get(routes, "0.0.0.0/0", [])
+      existing_v6 = Map.get(routes, "::/0", [])
+      updated_v4 = List.delete(existing_v4, tag)
+      updated_v6 = List.delete(existing_v6, tag)
+
+      updated_routes =
+        routes
+        |> Map.put("0.0.0.0/0", updated_v4)
+        |> Map.put("::/0", updated_v6)
+
+      updated_auto_approvers = Map.put(auto_approvers, "routes", updated_routes)
+
+      grants = Map.get(acl_map, "grants", [])
+      updated_grants = Enum.reject(grants, fn grant -> Map.get(grant, "dst") == [tag] end)
+
+      acl_map
+      |> Map.put("tagOwners", updated_tag_owners)
+      |> Map.put("nodeAttrs", updated_node_attrs)
+      |> Map.put("autoApprovers", updated_auto_approvers)
+      |> Map.put("grants", updated_grants)
+    else
+      tag_owners = Map.get(acl_map, "tagOwners", %{})
+
+      updated_tag_owners =
+        if Map.has_key?(tag_owners, tag) do
+          tag_owners
+        else
+          Map.put(tag_owners, tag, ["autogroup:admin"])
+        end
+
+      node_attrs = Map.get(acl_map, "nodeAttrs", [])
+      updated_node_attrs = update_node_attrs(node_attrs, tag, domains)
+
+      auto_approvers = Map.get(acl_map, "autoApprovers", %{})
+      routes = Map.get(auto_approvers, "routes", %{})
+      existing_v4 = Map.get(routes, "0.0.0.0/0", [])
+      existing_v6 = Map.get(routes, "::/0", [])
+      updated_v4 = if tag in existing_v4, do: existing_v4, else: existing_v4 ++ [tag]
+      updated_v6 = if tag in existing_v6, do: existing_v6, else: existing_v6 ++ [tag]
+
+      updated_routes =
+        routes
+        |> Map.put("0.0.0.0/0", updated_v4)
+        |> Map.put("::/0", updated_v6)
+
+      updated_auto_approvers = Map.put(auto_approvers, "routes", updated_routes)
+
+      grants = Map.get(acl_map, "grants", [])
+      updated_grants = update_grants(grants, tag)
+
+      acl_map
+      |> Map.put("tagOwners", updated_tag_owners)
+      |> Map.put("nodeAttrs", updated_node_attrs)
+      |> Map.put("autoApprovers", updated_auto_approvers)
+      |> Map.put("grants", updated_grants)
+    end
+  end
+
+  defp has_connector_tag?(acl_map, tag) do
+    tag_owners = Map.get(acl_map, "tagOwners", %{})
+    has_tag_owner? = Map.has_key?(tag_owners, tag)
 
     node_attrs = Map.get(acl_map, "nodeAttrs", [])
-    updated_node_attrs = update_node_attrs(node_attrs, tag, domains)
+    has_node_attr? =
+      Enum.any?(node_attrs, fn attr ->
+        app = Map.get(attr, "app", %{})
+        connectors_list = Map.get(app, "tailscale.com/app-connectors", [])
+        Enum.any?(connectors_list, fn conn ->
+          tag in Map.get(conn, "connectors", [])
+        end)
+      end)
 
     auto_approvers = Map.get(acl_map, "autoApprovers", %{})
     routes = Map.get(auto_approvers, "routes", %{})
-    existing_v4 = Map.get(routes, "0.0.0.0/0", [])
-    existing_v6 = Map.get(routes, "::/0", [])
-    updated_v4 = if tag in existing_v4, do: existing_v4, else: existing_v4 ++ [tag]
-    updated_v6 = if tag in existing_v6, do: existing_v6, else: existing_v6 ++ [tag]
-
-    updated_routes =
-      routes
-      |> Map.put("0.0.0.0/0", updated_v4)
-      |> Map.put("::/0", updated_v6)
-
-    updated_auto_approvers = Map.put(auto_approvers, "routes", updated_routes)
+    has_auto_approve? =
+      Enum.any?(routes, fn {_route, tags} ->
+        is_list(tags) and tag in tags
+      end)
 
     grants = Map.get(acl_map, "grants", [])
-    updated_grants = update_grants(grants, tag)
+    has_grant? =
+      Enum.any?(grants, fn grant ->
+        tag in Map.get(grant, "dst", [])
+      end)
 
-    acl_map
-    |> Map.put("tagOwners", updated_tag_owners)
-    |> Map.put("nodeAttrs", updated_node_attrs)
-    |> Map.put("autoApprovers", updated_auto_approvers)
-    |> Map.put("grants", updated_grants)
+    has_tag_owner? or has_node_attr? or has_auto_approve? or has_grant?
   end
 
   defp update_node_attrs(node_attrs, tag, domains) do

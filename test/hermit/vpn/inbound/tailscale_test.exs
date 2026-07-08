@@ -162,6 +162,75 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       other_conn = Enum.find(connectors, &("tag:connector-other" in &1["connectors"]))
       assert other_conn["domains"] == ["keep-this.com"]
     end
+
+    test "cleans up and removes app connector configurations when domains is empty" do
+      acl_map = %{
+        "tagOwners" => %{
+          "tag:connector-to-delete" => ["autogroup:admin"],
+          "tag:keep-me" => ["autogroup:admin"]
+        },
+        "nodeAttrs" => [
+          %{
+            "target" => ["*"],
+            "app" => %{
+              "tailscale.com/app-connectors" => [
+                %{
+                  "name" => "hermit-connector-to-delete",
+                  "connectors" => ["tag:connector-to-delete"],
+                  "domains" => ["delete.com"]
+                },
+                %{
+                  "name" => "hermit-connector-keep",
+                  "connectors" => ["tag:keep-me"],
+                  "domains" => ["keep.com"]
+                }
+              ]
+            }
+          }
+        ],
+        "autoApprovers" => %{
+          "routes" => %{
+            "0.0.0.0/0" => ["tag:connector-to-delete", "tag:keep-me"],
+            "::/0" => ["tag:connector-to-delete", "tag:keep-me"]
+          }
+        },
+        "grants" => [
+          %{
+            "src" => ["autogroup:member"],
+            "dst" => ["tag:connector-to-delete"],
+            "ip" => ["tcp:53", "udp:53"]
+          },
+          %{
+            "src" => ["autogroup:member"],
+            "dst" => ["tag:keep-me"],
+            "ip" => ["tcp:53", "udp:53"]
+          }
+        ]
+      }
+
+      tag = "tag:connector-to-delete"
+      updated = Tailscale.update_acl_for_app_connector(acl_map, tag, [])
+
+      # 1. tagOwners should not have the deleted tag
+      refute Map.has_key?(updated["tagOwners"], tag)
+      assert Map.has_key?(updated["tagOwners"], "tag:keep-me")
+
+      # 2. nodeAttrs should not have the deleted connector
+      [attr] = updated["nodeAttrs"]
+      connectors = attr["app"]["tailscale.com/app-connectors"]
+      refute Enum.any?(connectors, &("tag:connector-to-delete" in &1["connectors"]))
+      assert Enum.any?(connectors, &("tag:keep-me" in &1["connectors"]))
+
+      # 3. autoApprovers routes should not have the deleted tag
+      refute tag in updated["autoApprovers"]["routes"]["0.0.0.0/0"]
+      refute tag in updated["autoApprovers"]["routes"]["::/0"]
+      assert "tag:keep-me" in updated["autoApprovers"]["routes"]["0.0.0.0/0"]
+      assert "tag:keep-me" in updated["autoApprovers"]["routes"]["::/0"]
+
+      # 4. grants should not have the deleted grant
+      refute Enum.any?(updated["grants"], &(tag in &1["dst"]))
+      assert Enum.any?(updated["grants"], &("tag:keep-me" in &1["dst"]))
+    end
   end
 
   describe "update_dns_settings_local/3" do

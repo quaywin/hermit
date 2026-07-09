@@ -73,6 +73,13 @@ defmodule HermitWeb.Layouts do
             >
               DNS Profiles
             </.sidebar_link>
+            <.sidebar_link
+              navigate={~p"/dns/blocklists"}
+              active={@active == :dns_blocklists}
+              icon="hero-shield-check"
+            >
+              Filters
+            </.sidebar_link>
           </nav>
         </div>
 
@@ -99,6 +106,7 @@ defmodule HermitWeb.Layouts do
               <.link navigate={~p"/inbounds"} class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}>Inbounds</.link>
               <.link navigate={~p"/outbounds"} class={if @active == :outbounds, do: "text-emerald-500", else: "text-base-content/60"}>Outbounds</.link>
               <.link navigate={~p"/dns"} class={if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"}>DNS</.link>
+              <.link navigate={~p"/dns/blocklists"} class={if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"}>Filters</.link>
             </nav>
           </div>
           <.theme_toggle />
@@ -149,6 +157,7 @@ defmodule HermitWeb.Layouts do
           HermitWeb.InboundDetailLive -> :inbounds
           HermitWeb.OutboundLive -> :outbounds
           HermitWeb.DnsProfileLive -> :dns_profiles
+          HermitWeb.BlocklistLive -> :dns_blocklists
           _ -> :tunnels
         end
     end

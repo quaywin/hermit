@@ -6,7 +6,7 @@ defmodule HermitWeb.DnsProfileLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
+    dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
 
     # Chọn profile đầu tiên làm mặc định nếu có, hoặc nil
     selected_profile = List.first(dns_profiles)
@@ -19,6 +19,10 @@ defmodule HermitWeb.DnsProfileLive do
       end
     end
 
+    if :erlang.whereis(Hermit.PubSub) != :undefined do
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_blocklist")
+    end
+
     dns_logs = if selected_profile, do: get_recent_logs(selected_profile.id), else: []
     dns_metrics = if selected_profile, do: get_metrics(selected_profile.id, "24h"), else: nil
 
@@ -26,6 +30,7 @@ defmodule HermitWeb.DnsProfileLive do
      socket
      |> assign(dns_profiles: dns_profiles)
      |> assign(selected_profile: selected_profile)
+     |> assign(available_blocklists: fetch_available_blocklists())
      |> assign(dns_logs: dns_logs)
      |> assign(dns_metrics: dns_metrics)
      |> assign(time_range: "24h")
@@ -40,7 +45,7 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def handle_params(%{"id" => id_str}, _uri, socket) do
     id = String.to_integer(id_str)
-    profile = Hermit.Repo.get!(DnsConfig, id)
+    profile = Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload(:blocklists)
 
     # Hủy đăng ký PubSub cũ
     if socket.assigns.selected_profile do
@@ -59,6 +64,7 @@ defmodule HermitWeb.DnsProfileLive do
     {:noreply,
      socket
      |> assign(selected_profile: profile)
+     |> assign(available_blocklists: fetch_available_blocklists())
      |> assign(editing_name: false)
      |> assign(dns_logs: get_recent_logs(profile.id))
      |> assign(dns_metrics: get_metrics(profile.id, socket.assigns[:time_range] || "24h"))
@@ -93,11 +99,11 @@ defmodule HermitWeb.DnsProfileLive do
             Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config:#{profile.id}", {:dns_config_updated, updated})
           end
 
-          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
+          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
 
           {:noreply,
            socket
-           |> assign(selected_profile: updated)
+           |> assign(selected_profile: updated |> Hermit.Repo.preload(:blocklists))
            |> assign(dns_profiles: dns_profiles)
            |> assign(editing_name: false)
            |> assign_name_form()
@@ -155,7 +161,7 @@ defmodule HermitWeb.DnsProfileLive do
 
     case Hermit.Repo.insert(changeset) do
       {:ok, profile} ->
-        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
+        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
 
         {:noreply,
          socket
@@ -184,7 +190,7 @@ defmodule HermitWeb.DnsProfileLive do
     else
       case Hermit.Repo.delete(profile) do
         {:ok, _} ->
-          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
+          dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
           next_profile = List.first(dns_profiles)
 
           socket =
@@ -213,25 +219,38 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   @impl true
-  def handle_event("toggle_block_ads", _params, socket) do
+  def handle_event("toggle_profile_blocklist", %{"blocklist-id" => blocklist_id}, socket) do
     profile = socket.assigns.selected_profile
-    block_ads = not profile.block_ads
-    update_profile(socket, profile, %{block_ads: block_ads}, "Ads/Trackers blocking #{if block_ads, do: "enabled", else: "disabled"}!")
+    blocklist_id = String.to_integer(blocklist_id)
+    current_ids = Enum.map(profile.blocklists || [], & &1.id)
+
+    new_ids =
+      if blocklist_id in current_ids do
+        List.delete(current_ids, blocklist_id)
+      else
+        [blocklist_id | current_ids]
+      end
+
+    case Hermit.Vpn.DnsConfig.update_blocklists(profile, new_ids) do
+      {:ok, updated_config} ->
+        if :erlang.whereis(Hermit.PubSub) != :undefined do
+          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config_profile:#{updated_config.id}", {:dns_config_updated, updated_config})
+        end
+
+        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Filters updated successfully.")
+         |> assign(selected_profile: updated_config)
+         |> assign(dns_profiles: dns_profiles)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to update profile filters.")}
+    end
   end
 
-  @impl true
-  def handle_event("toggle_block_adult", _params, socket) do
-    profile = socket.assigns.selected_profile
-    block_adult = not profile.block_adult
-    update_profile(socket, profile, %{block_adult: block_adult}, "Adult content blocking #{if block_adult, do: "enabled", else: "disabled"}!")
-  end
 
-  @impl true
-  def handle_event("toggle_block_goodbyeads", _params, socket) do
-    profile = socket.assigns.selected_profile
-    block_goodbyeads = not profile.block_goodbyeads
-    update_profile(socket, profile, %{block_goodbyeads: block_goodbyeads}, "GoodbyeAds blocking #{if block_goodbyeads, do: "enabled", else: "disabled"}!")
-  end
 
   @impl true
   def handle_event("toggle_block_ipv6", _params, socket) do
@@ -330,11 +349,19 @@ defmodule HermitWeb.DnsProfileLive do
   def handle_info({:dns_config_updated, updated_config}, socket) do
     if socket.assigns.selected_profile && socket.assigns.selected_profile.id == updated_config.id do
       # Đồng bộ lại state UI
-      dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
+      updated_config = Hermit.Repo.preload(updated_config, :blocklists)
+      dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
       {:noreply, assign(socket, selected_profile: updated_config, dns_profiles: dns_profiles)}
     else
       {:noreply, socket}
     end
+  end
+
+  @impl true
+  def handle_info({:blocklist_updated, _blocklist_id}, socket) do
+    available_blocklists = fetch_available_blocklists()
+    selected_profile = if socket.assigns.selected_profile, do: Hermit.Repo.preload(socket.assigns.selected_profile, :blocklists, force: true), else: nil
+    {:noreply, socket |> assign(available_blocklists: available_blocklists) |> assign(selected_profile: selected_profile)}
   end
 
   def handle_info(_msg, socket) do
@@ -361,11 +388,11 @@ defmodule HermitWeb.DnsProfileLive do
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config_profile:#{profile.id}", {:dns_config_updated, updated})
         end
 
-        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload(:inbound_profiles)
+        dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
 
         {:noreply,
          socket
-         |> assign(selected_profile: updated)
+         |> assign(selected_profile: updated |> Hermit.Repo.preload(:blocklists))
          |> assign(dns_profiles: dns_profiles)
          |> put_flash(:info, success_msg)}
 
@@ -482,6 +509,24 @@ defmodule HermitWeb.DnsProfileLive do
       |> Enum.take(3)
       |> Enum.map(fn {domain, count} -> %{domain: domain, count: count} end)
 
+    # Match spec to fetch blocklist stats: {{:blocklist, profile_id, blocklist_id, hour_timestamp}, count}
+    head_bl = {{:blocklist, profile_id, :"$1", :"$2"}, :"$3"}
+    guard_bl = [{:>=, :"$2", cutoff_time}]
+    result_bl = [{{:"$1", :"$3"}}]
+    pattern_bl = {head_bl, guard_bl, result_bl}
+
+    blocklist_records =
+      case :ets.whereis(:dns_hourly_metrics) do
+        :undefined -> []
+        _ -> :ets.select(:dns_hourly_metrics, [pattern_bl])
+      end
+
+    blocklist_breakdown =
+      blocklist_records
+      |> Enum.reduce(%{}, fn {blocklist_id, count}, acc ->
+        Map.update(acc, blocklist_id, count, &(&1 + count))
+      end)
+
     %{
       total: total_queries,
       blocked: blocked_queries,
@@ -492,7 +537,8 @@ defmodule HermitWeb.DnsProfileLive do
       adguard_blocked_count: adguard_blocked,
       goodbyeads_blocked_count: goodbyeads_blocked,
       adult_blocked_count: adult_blocked,
-      custom_blocked_count: custom_blocked
+      custom_blocked_count: custom_blocked,
+      blocklist_breakdown: blocklist_breakdown
     }
   end
 
@@ -508,5 +554,7 @@ defmodule HermitWeb.DnsProfileLive do
     Enum.map(raw_logs, &to_log_struct/1)
   end
 
-
+  defp fetch_available_blocklists do
+    Hermit.Repo.all(from b in Hermit.Dns.Blocklist, where: b.enabled == true, order_by: b.name)
+  end
 end

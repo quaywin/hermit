@@ -119,60 +119,40 @@
         <!-- Card 2: Blocklists Filters -->
         <div class="bg-base-100 border border-base-300 rounded-[12px] p-4 shadow-sm">
           <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 shrink-0">
-              Security & Ad-Blocking Filters
-            </h2>
+            <div class="flex items-center gap-2">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 shrink-0">
+                Security & Ad-Blocking Filters
+              </h2>
+              <.link navigate={~p"/dns/blocklists"} class="text-[10px] text-emerald-500 hover:text-emerald-600 font-semibold underline">
+                (Manage Sources)
+              </.link>
+            </div>
             <div class="flex flex-wrap items-center gap-3">
-              <!-- AdGuard Blocklist -->
-              <div
-                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
-                title="Blocks known ads, analytics, trackers, and telemetry domains."
-              >
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">AdGuard</span>
-                <button
-                  phx-click="toggle_block_ads"
-                  class={[
-                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
-                    if(@selected_profile.block_ads, do: "btn-primary", else: "btn-outline")
-                  ]}
-                >
-                  {if @selected_profile.block_ads, do: "Blocking", else: "Allowing"}
-                </button>
-              </div>
-
-              <!-- GoodbyeAds Blocklist -->
-              <div
-                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
-                title="Blocks aggressive mobile trackers, ads, and telemetry."
-              >
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">GoodbyeAds</span>
-                <button
-                  phx-click="toggle_block_goodbyeads"
-                  class={[
-                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
-                    if(@selected_profile.block_goodbyeads, do: "btn-primary", else: "btn-outline")
-                  ]}
-                >
-                  {if @selected_profile.block_goodbyeads, do: "Blocking", else: "Allowing"}
-                </button>
-              </div>
-
-              <!-- Adult Filter -->
-              <div
-                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
-                title="Blocks major adult websites and pornography domains."
-              >
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">Adult</span>
-                <button
-                  phx-click="toggle_block_adult"
-                  class={[
-                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
-                    if(@selected_profile.block_adult, do: "btn-primary", else: "btn-outline")
-                  ]}
-                >
-                  {if @selected_profile.block_adult, do: "Blocking", else: "Allowing"}
-                </button>
-              </div>
+              <%= if @available_blocklists == [] do %>
+                <span class="text-xs text-base-content/40 italic">
+                  No active blocklist filters configured.
+                </span>
+              <% else %>
+                <%= for blocklist <- @available_blocklists do %>
+                  <% active = Enum.any?(@selected_profile.blocklists || [], &(&1.id == blocklist.id)) %>
+                  <div
+                    class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
+                    title={blocklist.description || "Blocks domains matching this filter source."}
+                  >
+                    <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">{blocklist.name}</span>
+                    <button
+                      phx-click="toggle_profile_blocklist"
+                      phx-value-blocklist-id={blocklist.id}
+                      class={[
+                        "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                        if(active, do: "btn-primary", else: "btn-outline")
+                      ]}
+                    >
+                      {if active, do: "Blocking", else: "Allowing"}
+                    </button>
+                  </div>
+                <% end %>
+              <% end %>
 
               <!-- IPv6 (AAAA) Filter -->
               <div
@@ -456,27 +436,30 @@
                   <%= if @dns_metrics.blocked == 0 do %>
                     <p class="text-[10px] text-base-content/40 italic text-center py-4">No blocking actions recorded.</p>
                   <% else %>
-                    <!-- AdGuard Blocklist -->
-                    <div class="space-y-1">
-                      <div class="flex items-center justify-between text-[10px]">
-                        <span class="text-base-content/70 font-medium">AdGuard Blocklist</span>
-                        <span class="font-bold font-mono">{@dns_metrics.adguard_blocked_count}</span>
+                    <%
+                      total_blocked_in_blocklists = Enum.sum(Map.values(@dns_metrics.blocklist_breakdown || %{}))
+                    %>
+                    <!-- Dynamic Enabled Blocklists -->
+                    <%= for blocklist <- @selected_profile.blocklists || [] do %>
+                      <%
+                        name_lc = String.downcase(blocklist.name)
+                        count = Map.get(@dns_metrics.blocklist_breakdown || %{}, blocklist.id, 0)
+                        color = cond do
+                          String.contains?(name_lc, "goodbye") -> "bg-amber-500"
+                          String.contains?(name_lc, "adult") -> "bg-red-500"
+                          true -> "bg-emerald-500"
+                        end
+                      %>
+                      <div class="space-y-1">
+                        <div class="flex items-center justify-between text-[10px]">
+                          <span class="text-base-content/70 font-medium">{blocklist.name}</span>
+                          <span class="font-bold font-mono">{count}</span>
+                        </div>
+                        <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                          <div class={["h-full rounded-full", color]} style={"width: #{if total_blocked_in_blocklists > 0, do: (count / total_blocked_in_blocklists * 100), else: 0}%"}></div>
+                        </div>
                       </div>
-                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
-                        <div class="bg-emerald-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.adguard_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
-                      </div>
-                    </div>
-
-                    <!-- GoodbyeAds Blocklist -->
-                    <div class="space-y-1">
-                      <div class="flex items-center justify-between text-[10px]">
-                        <span class="text-base-content/70 font-medium">GoodbyeAds List</span>
-                        <span class="font-bold font-mono">{@dns_metrics.goodbyeads_blocked_count}</span>
-                      </div>
-                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
-                        <div class="bg-amber-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.goodbyeads_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
-                      </div>
-                    </div>
+                    <% end %>
 
                     <!-- Custom Block Rules -->
                     <div class="space-y-1">
@@ -489,16 +472,18 @@
                       </div>
                     </div>
 
-                    <!-- IPv6 Block Filter -->
-                    <div class="space-y-1">
-                      <div class="flex items-center justify-between text-[10px]">
-                        <span class="text-base-content/70 font-medium">IPv6 Leak Filter</span>
-                        <span class="font-bold font-mono">{@dns_metrics.ipv6_blocked_count}</span>
+                    <!-- IPv6 Block Filter (Show only if enabled) -->
+                    <%= if @selected_profile.block_ipv6 do %>
+                      <div class="space-y-1">
+                        <div class="flex items-center justify-between text-[10px]">
+                          <span class="text-base-content/70 font-medium">IPv6 Leak Filter</span>
+                          <span class="font-bold font-mono">{@dns_metrics.ipv6_blocked_count}</span>
+                        </div>
+                        <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                          <div class="bg-indigo-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.ipv6_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
+                        </div>
                       </div>
-                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
-                        <div class="bg-indigo-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.ipv6_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
-                      </div>
-                    </div>
+                    <% end %>
                   <% end %>
                 </div>
               </div>

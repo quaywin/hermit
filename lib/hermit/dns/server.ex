@@ -578,25 +578,41 @@ defmodule Hermit.Dns.Server do
             {act, val} -> {act, val, nil}
           end
 
-        # 3. Match built-in blocklists if not matched by custom rules
-        {action, redirect_val, block_reason} =
+        # 3. Match dynamic blocklists if not matched by custom rules
+        {action, redirect_val, block_reason, blocklist_id} =
           if is_nil(action) and config.enabled do
-            cond do
-              config.block_ads and Filter.match_ets_blocklist?(query.domain, :adguard_blocklist) ->
-                {"block", nil, "adguard"}
+            blocklists_list =
+              case config.blocklists do
+                %Ecto.Association.NotLoaded{} -> []
+                nil -> []
+                list when is_list(list) -> list
+              end
 
-              config.block_goodbyeads and
-                  Filter.match_ets_blocklist?(query.domain, :goodbyeads_blocklist) ->
-                {"block", nil, "goodbyeads"}
+            enabled_blocklist_ids =
+              blocklists_list
+              |> Enum.filter(& &1.enabled)
+              |> Enum.map(& &1.id)
 
-              config.block_adult and Filter.match_adult?(query.domain) ->
-                {"block", nil, "adult"}
+            matched_id =
+              if enabled_blocklist_ids != [] do
+                Filter.match_any_ets_blocklist?(query.domain, enabled_blocklist_ids)
+              else
+                nil
+              end
 
-              true ->
-                {nil, nil, nil}
+            if matched_id do
+              matched_name =
+                case Enum.find(blocklists_list, &(&1.id == matched_id)) do
+                  nil -> "blocklist"
+                  b -> b.name
+                end
+
+              {"block", nil, matched_name, matched_id}
+            else
+              {nil, nil, nil, nil}
             end
           else
-            {action, redirect_val, block_reason}
+            {action, redirect_val, block_reason, nil}
           end
 
         case action do
@@ -605,11 +621,10 @@ defmodule Hermit.Dns.Server do
 
             answer_log_info =
               case block_reason do
-                "adguard" -> "NXDOMAIN (AdGuard)"
-                "goodbyeads" -> "NXDOMAIN (GoodbyeAds)"
                 "adult" -> "NXDOMAIN (Adult Filter)"
                 "custom_rule" -> "NXDOMAIN (Custom Rule)"
-                _ -> "NXDOMAIN"
+                nil -> "NXDOMAIN"
+                name -> "NXDOMAIN (#{name})"
               end
 
             # Store blocks in cache with 5s TTL
@@ -629,6 +644,7 @@ defmodule Hermit.Dns.Server do
                 answer: answer_log_info,
                 resolver: "Local Filter",
                 block_reason: block_reason,
+                blocklist_id: blocklist_id,
                 enable_query_logging: enable_query_logging
               }
             )

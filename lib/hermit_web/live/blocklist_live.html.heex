@@ -1,0 +1,284 @@
+<div class="space-y-6">
+  <!-- Header Section -->
+  <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-base-300 pb-6">
+    <div>
+      <h1 class="text-2xl font-medium tracking-display-lg text-base-content uppercase">
+        Ad-Blocking Filters
+      </h1>
+      <p class="text-base-content/60 mt-1 text-sm">
+        Manage DNS ad-blocking and tracking filter sources. These lists are loaded into memory to sinkhole requests to advertising and tracking networks.
+      </p>
+    </div>
+    <div class="mt-4 md:mt-0 flex items-center gap-3">
+      <button
+        phx-click="reload_all_blocklists"
+        class="btn btn-outline btn-secondary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer flex items-center gap-2"
+      >
+        <.icon name="hero-arrow-path" class="size-4" /> Reload All
+      </button>
+      <button
+        phx-click="open_create_modal"
+        class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer flex items-center gap-2"
+      >
+        <.icon name="hero-plus" class="size-4" /> Add Filter Source
+      </button>
+    </div>
+  </header>
+
+  <!-- Overview Stats -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-5 shadow-sm flex items-center gap-4">
+      <div class="p-3 bg-emerald-500/10 text-emerald-500 rounded-[8px]">
+        <.icon name="hero-shield-check" class="size-6" />
+      </div>
+      <div>
+        <span class="text-xs uppercase tracking-wider text-base-content/50 block">Active Sources</span>
+        <span class="text-xl font-bold text-base-content">
+          {Enum.count(@blocklists, & &1.enabled)} / {length(@blocklists)}
+        </span>
+      </div>
+    </div>
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-5 shadow-sm flex items-center gap-4">
+      <div class="p-3 bg-indigo-500/10 text-indigo-500 rounded-[8px]">
+        <.icon name="hero-circle-stack" class="size-6" />
+      </div>
+      <div>
+        <span class="text-xs uppercase tracking-wider text-base-content/50 block">Total Blocked Domains</span>
+        <span class="text-xl font-bold text-base-content">
+          {format_number(@blocklists |> Enum.filter(& &1.enabled) |> Enum.map(& &1.rules_count) |> Enum.sum())}
+        </span>
+      </div>
+    </div>
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-5 shadow-sm flex items-center gap-4">
+      <div class="p-3 bg-sky-500/10 text-sky-500 rounded-[8px]">
+        <.icon name="hero-cpu-chip" class="size-6" />
+      </div>
+      <div>
+        <span class="text-xs uppercase tracking-wider text-base-content/50 block">Filtering Engine</span>
+        <span class="text-xs font-semibold text-emerald-500 uppercase tracking-wider flex items-center gap-1 mt-1">
+          <span class="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          Active in Memory
+        </span>
+        <span class="text-[10px] text-base-content/40 mt-1 block font-mono">
+          RAM: {@ram_usage} (Free: {@free_ram})
+        </span>
+      </div>
+    </div>
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-5 shadow-sm flex items-center gap-4">
+      <div class="p-3 bg-amber-500/10 text-amber-500 rounded-[8px]">
+        <.icon name="hero-clock" class="size-6" />
+      </div>
+      <div class="flex-1">
+        <span class="text-xs uppercase tracking-wider text-base-content/50 block">Auto-Update</span>
+        <form phx-change="change_update_interval" class="mt-1">
+          <select name="interval" class="select select-xs select-bordered w-full rounded-[6px] text-xs font-semibold bg-base-100 border-base-300 focus:outline-none">
+            <option value="disabled" selected={@update_interval == "disabled"}>Disabled</option>
+            <option value="12h" selected={@update_interval == "12h"}>Every 12 Hours</option>
+            <option value="24h" selected={@update_interval == "24h"}>Every 24 Hours</option>
+            <option value="7d" selected={@update_interval == "7d"}>Every 7 Days</option>
+          </select>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cards Grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <%= for blocklist <- @blocklists do %>
+      <div class={[
+        "bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col justify-between transition-all hover:shadow-md hover:border-base-content/20",
+        if(not blocklist.enabled, do: "opacity-60")
+      ]}>
+        <div>
+          <!-- Card Header -->
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h3 class="font-bold text-base text-base-content flex items-center gap-2">
+                {blocklist.name}
+              </h3>
+              <span class={[
+                "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider mt-1 border",
+                case blocklist.format do
+                  "adguard" -> "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                  "hosts" -> "bg-purple-500/10 text-purple-500 border-purple-500/20"
+                  "domains" -> "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                  _ -> "bg-base-200 text-base-content border-base-300"
+                end
+              ]}>
+                {blocklist.format}
+              </span>
+            </div>
+            
+            <button
+              phx-click="toggle_blocklist"
+              phx-value-id={blocklist.id}
+              class={[
+                "btn btn-xs rounded-[6px] font-semibold uppercase tracking-wider",
+                if(blocklist.enabled, do: "btn-primary", else: "btn-outline")
+              ]}
+            >
+              {if blocklist.enabled, do: "Active", else: "Inactive"}
+            </button>
+          </div>
+
+          <!-- Description -->
+          <p class="text-xs text-base-content/60 mt-3 line-clamp-2 min-h-[2rem]">
+            {blocklist.description || "No description provided."}
+          </p>
+
+          <!-- Path / URL info -->
+          <div class="mt-4 p-2 bg-base-200/50 rounded-[6px] border border-base-300/40 flex items-center gap-2 font-mono text-[10px] text-base-content/50 truncate select-all" title={blocklist.url}>
+            <.icon name="hero-link" class="size-3 shrink-0" />
+            <span class="truncate">{blocklist.url}</span>
+          </div>
+        </div>
+
+        <!-- Card Footer -->
+        <div class="mt-6 pt-4 border-t border-base-300 flex items-center justify-between text-xs text-base-content/50">
+          <div class="flex flex-col gap-0.5">
+            <span class="font-semibold text-base-content/80 text-sm">
+              {format_number(blocklist.rules_count)} <span class="text-[10px] font-normal text-base-content/50 uppercase">domains</span>
+            </span>
+            <span class="text-[10px]">
+              Last updated: {if blocklist.last_fetched_at, do: NaiveDateTime.to_string(blocklist.last_fetched_at), else: "Never"}
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <%= if blocklist.enabled do %>
+              <button
+                phx-click="fetch_blocklist"
+                phx-value-id={blocklist.id}
+                class="btn btn-ghost btn-xs p-1 hover:bg-base-200 rounded-[4px]"
+                title="Force download & reload"
+              >
+                <.icon name="hero-arrow-path" class="size-4 text-emerald-500" />
+              </button>
+            <% end %>
+            <button
+              phx-click="open_edit_modal"
+              phx-value-id={blocklist.id}
+              class="btn btn-ghost btn-xs p-1 hover:bg-base-200 rounded-[4px]"
+              title="Edit source details"
+            >
+              <.icon name="hero-pencil-square" class="size-4" />
+            </button>
+            <button
+              phx-click="delete_blocklist"
+              phx-value-id={blocklist.id}
+              data-confirm={"Are you sure you want to delete '#{blocklist.name}'?"}
+              class="btn btn-ghost btn-xs p-1 hover:bg-base-200 hover:text-error rounded-[4px]"
+              title="Delete filter source"
+            >
+              <.icon name="hero-trash" class="size-4 text-error/85" />
+            </button>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+
+  <!-- Create/Edit Modal -->
+  <%= if @show_modal do %>
+    <dialog class="modal modal-open z-50 backdrop-blur-sm">
+      <div class="modal-box max-w-md bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-xl relative">
+        <h3 class="text-base font-bold uppercase tracking-wider text-base-content border-b border-base-300 pb-3">
+          {if @editing_blocklist, do: "Edit Filter Source", else: "Add Filter Source"}
+        </h3>
+        
+        <.form for={@form} phx-change="validate_blocklist" phx-submit="save_blocklist" class="space-y-4 mt-4">
+          <!-- Name -->
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
+              Source Name
+            </label>
+            <.input
+              field={@form[:name]}
+              type="text"
+              placeholder="e.g. AdGuard DNS Filter"
+              class="w-full input input-bordered rounded-[6px] text-sm"
+              required
+            />
+          </div>
+
+          <!-- Description -->
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
+              Description
+            </label>
+            <.input
+              field={@form[:description]}
+              type="textarea"
+              placeholder="A brief description of what this filter blocks..."
+              class="w-full textarea textarea-bordered rounded-[6px] text-sm min-h-[60px]"
+            />
+          </div>
+
+          <!-- URL / Path -->
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
+              Source URL or Local Path
+            </label>
+            <.input
+              field={@form[:url]}
+              type="text"
+              placeholder="https://... or priv/dns_blocklists/..."
+              class="w-full input input-bordered rounded-[6px] text-sm font-mono"
+              required
+            />
+            <span class="text-[10px] text-base-content/40 mt-1 block">
+              Supports web URLs (`https://`) or paths relative to root (`priv/...`).
+            </span>
+          </div>
+
+          <!-- Format and Enabled -->
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
+                Format
+              </label>
+              <.input
+                field={@form[:format]}
+                type="select"
+                options={[{"AdGuard Filter", "adguard"}, {"Hosts File", "hosts"}, {"Plain Domains", "domains"}]}
+                class="w-full select select-bordered rounded-[6px] text-sm"
+                required
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
+                Enable Globally
+              </label>
+              <div class="h-[3rem] flex items-center">
+                <.input
+                  field={@form[:enabled]}
+                  type="checkbox"
+                  class="checkbox checkbox-primary rounded-[4px]"
+                />
+                <span class="ml-2 text-xs text-base-content/70">Enabled</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="flex justify-end gap-3 pt-4 border-t border-base-300 mt-6">
+            <button
+              type="button"
+              phx-click="close_modal"
+              class="btn btn-outline rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 cursor-pointer"
+            >
+              Save Source
+            </button>
+          </div>
+        </.form>
+      </div>
+    </dialog>
+  <% end %>
+</div>

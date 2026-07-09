@@ -71,8 +71,8 @@ defmodule Hermit.Dns.Telemetry do
   end
 
   @impl true
-  def handle_cast({:enqueue_log, log_data, config_id, block_reason}, state) do
-    log_buffer = [{log_data, config_id, block_reason} | state.log_buffer]
+  def handle_cast({:enqueue_log, log_data, config_id, block_reason, blocklist_id}, state) do
+    log_buffer = [{log_data, config_id, block_reason, blocklist_id} | state.log_buffer]
     {:noreply, %{state | log_buffer: log_buffer}}
   end
 
@@ -93,7 +93,7 @@ defmodule Hermit.Dns.Telemetry do
 
       # 1. Bulk insert to ETS
       ets_entries =
-        Enum.flat_map(logs_to_flush, fn {log_data, config_id, _} ->
+        Enum.flat_map(logs_to_flush, fn {log_data, config_id, _, _} ->
           pair_id = log_data["pair_id"]
           counter = System.unique_integer([:monotonic])
           [
@@ -105,7 +105,7 @@ defmodule Hermit.Dns.Telemetry do
       :ets.insert(@dns_log_table, ets_entries)
 
       # 2. Hourly stats metrics
-      Enum.each(logs_to_flush, fn {log_data, config_id, block_reason} ->
+      Enum.each(logs_to_flush, fn {log_data, config_id, block_reason, blocklist_id} ->
         hour_timestamp = div(log_data["timestamp"], 3600) * 3600
         config_id_str = to_string(config_id)
         status = log_data["status"]
@@ -115,9 +115,9 @@ defmodule Hermit.Dns.Telemetry do
 
         is_blocked = if status == "blocked", do: 1, else: 0
         is_ipv6_blocked = if block_reason == "ipv6", do: 1, else: 0
-        is_adguard = if block_reason == "adguard", do: 1, else: 0
-        is_goodbyeads = if block_reason == "goodbyeads", do: 1, else: 0
-        is_adult = if block_reason == "adult", do: 1, else: 0
+        is_adguard = if block_reason == "adguard" or (is_binary(block_reason) and (String.contains?(String.downcase(block_reason), "adguard") or not String.contains?(String.downcase(block_reason), ["goodbye", "adult", "custom_rule"]))), do: 1, else: 0
+        is_goodbyeads = if block_reason == "goodbyeads" or (is_binary(block_reason) and String.contains?(String.downcase(block_reason), "goodbye")), do: 1, else: 0
+        is_adult = if block_reason == "adult" or (is_binary(block_reason) and String.contains?(String.downcase(block_reason), "adult")), do: 1, else: 0
         is_custom = if block_reason == "custom_rule", do: 1, else: 0
 
         updates = [
@@ -132,11 +132,16 @@ defmodule Hermit.Dns.Telemetry do
 
         :ets.update_counter(@dns_metrics_table, {config_id, hour_timestamp}, updates)
         :ets.update_counter(@dns_metrics_table, {config_id_str, hour_timestamp}, updates)
+
+        if is_integer(blocklist_id) and status == "blocked" do
+          :ets.insert_new(@dns_metrics_table, {{:blocklist, config_id, blocklist_id, hour_timestamp}, 0})
+          :ets.update_counter(@dns_metrics_table, {:blocklist, config_id, blocklist_id, hour_timestamp}, {2, 1})
+        end
       end)
 
       # 3. Broadcast
       if :erlang.whereis(Hermit.PubSub) != :undefined do
-        Enum.each(logs_to_flush, fn {log_data, config_id, _} ->
+        Enum.each(logs_to_flush, fn {log_data, config_id, _, _} ->
           pair_id = log_data["pair_id"]
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_log, log_data})
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs_profile:#{config_id}", {:dns_log, log_data})
@@ -161,7 +166,8 @@ defmodule Hermit.Dns.Telemetry do
     # C. Prune in-memory metrics older than 24 hours
     cutoff_ram_time = System.system_time(:second) - 24 * 3600
     :ets.select_delete(@dns_metrics_table, [
-      {{{:"$1", :"$2"}, :_, :_, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]}
+      {{{:"$1", :"$2"}, :_, :_, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]},
+      {{{:blocklist, :"$1", :"$2", :"$3"}, :"$4"}, [{:<, :"$3", cutoff_ram_time}], [true]}
     ])
 
     :erlang.send_after(60_000, self(), :periodic_prune)
@@ -174,6 +180,7 @@ defmodule Hermit.Dns.Telemetry do
     cutoff_db_time = System.system_time(:second) - 30 * 24 * 3600
     try do
       Repo.delete_all(from(s in HourlyStat, where: s.hour_timestamp < ^cutoff_db_time))
+      Repo.delete_all(from(s in Hermit.Dns.BlocklistHourlyStat, where: s.hour_timestamp < ^cutoff_db_time))
       Logger.info("Telemetry: Successfully pruned old SQLite metrics.")
     rescue
       e -> Logger.warning("Telemetry: Failed to prune old SQLite metrics: #{inspect(e)}")
@@ -214,6 +221,7 @@ defmodule Hermit.Dns.Telemetry do
       answer = Map.get(metadata, :answer)
       resolver = Map.get(metadata, :resolver)
       block_reason = Map.get(metadata, :block_reason)
+      blocklist_id = Map.get(metadata, :blocklist_id)
 
       pair_id = to_string(profile_id)
       client_ip_str = ip_to_string(client_ip)
@@ -240,7 +248,7 @@ defmodule Hermit.Dns.Telemetry do
         "timestamp" => System.system_time(:second)
       }
 
-      GenServer.cast(__MODULE__, {:enqueue_log, log_data, config_id, block_reason})
+      GenServer.cast(__MODULE__, {:enqueue_log, log_data, config_id, block_reason, blocklist_id})
     end
 
     :ok
@@ -283,6 +291,12 @@ defmodule Hermit.Dns.Telemetry do
 
         :ets.insert(@dns_metrics_table, record)
         :ets.insert(@dns_metrics_table, record_str)
+      end)
+
+      # Restore blocklist stats
+      blocklist_stats = Repo.all(from(s in Hermit.Dns.BlocklistHourlyStat, where: s.hour_timestamp >= ^cutoff_time))
+      Enum.each(blocklist_stats, fn stat ->
+        :ets.insert(@dns_metrics_table, {{:blocklist, stat.dns_config_id, stat.dns_blocklist_id, stat.hour_timestamp}, stat.blocked_count})
       end)
 
       Logger.info("Telemetry: Successfully restored #{length(stats)} hourly metrics from database.")
@@ -337,6 +351,31 @@ defmodule Hermit.Dns.Telemetry do
                 Logger.warning("Telemetry: Failed to sync hourly metrics to SQLite: #{inspect(changeset.errors)}")
             end
           end
+
+        {{:blocklist, config_id, blocklist_id, hour_timestamp}, count} ->
+          if MapSet.member?(active_ids_set, config_id) do
+            stat_attrs = %{
+              dns_config_id: config_id,
+              dns_blocklist_id: blocklist_id,
+              hour_timestamp: hour_timestamp,
+              blocked_count: count
+            }
+
+            changeset =
+              %Hermit.Dns.BlocklistHourlyStat{}
+              |> Hermit.Dns.BlocklistHourlyStat.changeset(stat_attrs)
+
+            case Repo.insert(
+                   changeset,
+                   on_conflict: {:replace, [:blocked_count, :updated_at]},
+                   conflict_target: [:dns_config_id, :dns_blocklist_id, :hour_timestamp]
+                 ) do
+              {:ok, _} -> :ok
+              {:error, changeset} ->
+                Logger.warning("Telemetry: Failed to sync blocklist hourly metrics to SQLite: #{inspect(changeset.errors)}")
+            end
+          end
+
         _ ->
           :ok
       end)

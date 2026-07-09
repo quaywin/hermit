@@ -12,7 +12,11 @@ defmodule HermitWeb.DnsProfileLiveTest do
         custom_rules: []
       })
 
-    {:ok, default_profile: default_profile}
+    adguard = Hermit.Repo.get_by!(Hermit.Dns.Blocklist, name: "AdGuard DNS Filter")
+    goodbye = Hermit.Repo.get_by!(Hermit.Dns.Blocklist, name: "GoodbyeAds Filter")
+    adult = Hermit.Repo.get_by!(Hermit.Dns.Blocklist, name: "Adult Content Filter")
+
+    {:ok, default_profile: default_profile, adguard: adguard, goodbye: goodbye, adult: adult}
   end
 
   test "renders DNS Profiles page and lists profiles", %{conn: conn, default_profile: _profile} do
@@ -49,23 +53,26 @@ defmodule HermitWeb.DnsProfileLiveTest do
     assert html =~ "DNS Profile: Kids Filter"
   end
 
-  test "toggles filter settings dynamically", %{conn: conn, default_profile: profile} do
+  test "toggles filter settings dynamically", %{conn: conn, default_profile: profile, adguard: adguard, goodbye: goodbye, adult: adult} do
     {:ok, view, _html} = live(conn, ~p"/dns?id=#{profile.id}")
 
-    # Toggle Ads Blocking
-    html = view |> element("button[phx-click=toggle_block_ads]") |> render_click()
-    assert html =~ "Ads/Trackers blocking enabled!"
-    assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:block_ads) == true
+    # Toggle Ads Blocking (AdGuard)
+    html = view |> element("button[phx-value-blocklist-id=\"#{adguard.id}\"]") |> render_click()
+    assert html =~ "Filters updated successfully."
+    db_profile = DnsConfig |> Hermit.Repo.get!(profile.id) |> Hermit.Repo.preload(:blocklists)
+    assert Enum.any?(db_profile.blocklists, &(&1.id == adguard.id))
 
     # Toggle GoodbyeAds
-    html = view |> element("button[phx-click=toggle_block_goodbyeads]") |> render_click()
-    assert html =~ "GoodbyeAds blocking enabled!"
-    assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:block_goodbyeads) == true
+    html = view |> element("button[phx-value-blocklist-id=\"#{goodbye.id}\"]") |> render_click()
+    assert html =~ "Filters updated successfully."
+    db_profile = DnsConfig |> Hermit.Repo.get!(profile.id) |> Hermit.Repo.preload(:blocklists)
+    assert Enum.any?(db_profile.blocklists, &(&1.id == goodbye.id))
 
-    # Toggle Adult Blocking
-    html = view |> element("button[phx-click=toggle_block_adult]") |> render_click()
-    assert html =~ "Adult content blocking enabled!"
-    assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:block_adult) == true
+    # Toggle Adult Blocking (Dynamic)
+    html = view |> element("button[phx-value-blocklist-id=\"#{adult.id}\"]") |> render_click()
+    assert html =~ "Filters updated successfully."
+    db_profile = DnsConfig |> Hermit.Repo.get!(profile.id) |> Hermit.Repo.preload(:blocklists)
+    assert Enum.any?(db_profile.blocklists, &(&1.id == adult.id))
 
     # Toggle IPv6 Blocking
     html = view |> element("button[phx-click=toggle_block_ipv6]") |> render_click()

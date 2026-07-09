@@ -354,6 +354,7 @@ defmodule HermitWeb.DNSController do
       dev = get_header(conn, "x-dns-device") -> dev
       dev = get_header(conn, "x-forwarded-device") -> dev
       dev = get_header(conn, "x-dns-client-id") -> dev
+      dev = get_header(conn, "x-client-id") -> dev
       true -> nil
     end
     |> case do

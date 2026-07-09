@@ -18,6 +18,7 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:inbound_profile_id, :integer, virtual: true)
 
     has_many(:inbound_profiles, Hermit.Vpn.InboundProfile, foreign_key: :dns_profile_id)
+    many_to_many(:blocklists, Hermit.Dns.Blocklist, join_through: "dns_configs_blocklists", join_keys: [dns_config_id: :id, dns_blocklist_id: :id], on_replace: :delete)
 
     timestamps()
   end
@@ -155,7 +156,7 @@ defmodule Hermit.Vpn.DnsConfig do
     cond do
       is_nil(profile) ->
         # Trả về config trống nếu profile không tồn tại
-        %__MODULE__{}
+        %__MODULE__{blocklists: []}
 
       is_nil(profile.dns_profile_id) ->
         # Nếu chưa liên kết DNS Profile nào, tự động tạo một DNS Profile riêng biệt cho Inbound này
@@ -176,10 +177,11 @@ defmodule Hermit.Vpn.DnsConfig do
         |> Hermit.Vpn.InboundProfile.changeset(%{dns_profile_id: new_config.id})
         |> Hermit.Repo.update!()
 
+        new_config = Hermit.Repo.preload(new_config, :blocklists)
         %{new_config | inbound_profile_id: profile_id}
 
       true ->
-        config = Hermit.Repo.get!(__MODULE__, profile.dns_profile_id)
+        config = Hermit.Repo.get!(__MODULE__, profile.dns_profile_id) |> Hermit.Repo.preload(:blocklists)
         %{config | inbound_profile_id: profile_id}
     end
   end
@@ -193,6 +195,7 @@ defmodule Hermit.Vpn.DnsConfig do
 
     case config |> changeset(attrs) |> Hermit.Repo.update() do
       {:ok, updated} ->
+        updated = updated |> Hermit.Repo.preload(:blocklists)
         updated = %{updated | inbound_profile_id: profile_id}
         if :erlang.whereis(Hermit.PubSub) != :undefined do
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config:#{profile_id}", {:dns_config_updated, updated})
@@ -200,5 +203,16 @@ defmodule Hermit.Vpn.DnsConfig do
         {:ok, updated}
       {:error, changeset} -> {:error, changeset}
     end
+  end
+
+  def update_blocklists(config, blocklist_ids) do
+    import Ecto.Query
+    blocklists = Hermit.Repo.all(from b in Hermit.Dns.Blocklist, where: b.id in ^blocklist_ids)
+
+    config
+    |> Hermit.Repo.preload(:blocklists)
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.put_assoc(:blocklists, blocklists)
+    |> Hermit.Repo.update()
   end
 end

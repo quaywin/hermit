@@ -20,12 +20,15 @@ defmodule HermitWeb.DnsProfileLive do
     end
 
     dns_logs = if selected_profile, do: get_recent_logs(selected_profile.id), else: []
+    dns_metrics = if selected_profile, do: get_metrics(selected_profile.id, "24h"), else: nil
 
     {:ok,
      socket
      |> assign(dns_profiles: dns_profiles)
      |> assign(selected_profile: selected_profile)
      |> assign(dns_logs: dns_logs)
+     |> assign(dns_metrics: dns_metrics)
+     |> assign(time_range: "24h")
      |> assign(show_create_modal: false)
      |> assign(custom_rule_action: "block")
      |> assign(editing_name: false)
@@ -58,6 +61,7 @@ defmodule HermitWeb.DnsProfileLive do
      |> assign(selected_profile: profile)
      |> assign(editing_name: false)
      |> assign(dns_logs: get_recent_logs(profile.id))
+     |> assign(dns_metrics: get_metrics(profile.id, socket.assigns[:time_range] || "24h"))
      |> assign_name_form()}
   end
 
@@ -113,6 +117,13 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def handle_event("select_profile", %{"id" => id_str}, socket) do
     {:noreply, push_patch(socket, to: ~p"/dns?id=#{id_str}")}
+  end
+
+  @impl true
+  def handle_event("change_time_range", %{"range" => range}, socket) do
+    profile = socket.assigns.selected_profile
+    metrics = if profile, do: get_metrics(profile.id, range), else: nil
+    {:noreply, assign(socket, time_range: range, dns_metrics: metrics)}
   end
 
   @impl true
@@ -289,7 +300,7 @@ defmodule HermitWeb.DnsProfileLive do
   def handle_event("clear_logs", _params, socket) do
     profile = socket.assigns.selected_profile
     :ets.match_delete(:dns_query_logs, {{profile.id, :_}, :_})
-    {:noreply, assign(socket, dns_logs: [])}
+    {:noreply, assign(socket, dns_logs: [], dns_metrics: get_metrics(profile.id, socket.assigns.time_range))}
   end
 
   # PubSub notifications
@@ -301,7 +312,8 @@ defmodule HermitWeb.DnsProfileLive do
       else
         log_entry = to_log_struct(log)
         updated_logs = [log_entry | socket.assigns.dns_logs] |> Enum.take(50)
-        {:noreply, assign(socket, dns_logs: updated_logs)}
+        metrics = get_metrics(socket.assigns.selected_profile.id, socket.assigns.time_range)
+        {:noreply, assign(socket, dns_logs: updated_logs, dns_metrics: metrics)}
       end
     else
       {:noreply, socket}
@@ -417,5 +429,82 @@ defmodule HermitWeb.DnsProfileLive do
         _ -> false
       end
     end)
+  end
+
+  defp get_metrics(profile_id, time_range) do
+    hours_limit =
+      case time_range do
+        "1h" -> 1
+        "7d" -> 7 * 24
+        _ -> 24
+      end
+    cutoff_time = System.system_time(:second) - hours_limit * 3600
+
+    # Match spec to fetch hourly logs within last cutoff_time
+    # Key format: {{profile_id, hour_timestamp}, total, blocked, ipv6, adguard, goodbyeads, adult, custom}
+    head = {{profile_id, :"$1"}, :"$2", :"$3", :"$4", :"$5", :"$6", :"$7", :"$8"}
+    guard = [{:>=, :"$1", cutoff_time}]
+    result = [{{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6", :"$7", :"$8"}}]
+    pattern = {head, guard, result}
+
+    profile_id_str = to_string(profile_id)
+    head_str = {{profile_id_str, :"$1"}, :"$2", :"$3", :"$4", :"$5", :"$6", :"$7", :"$8"}
+    pattern_str = {head_str, guard, result}
+
+    records =
+      case :ets.whereis(:dns_hourly_metrics) do
+        :undefined -> []
+        _ ->
+          :ets.select(:dns_hourly_metrics, [pattern])
+          ++ :ets.select(:dns_hourly_metrics, [pattern_str])
+      end
+
+    {total_queries, blocked_queries, ipv6_blocked_count, adguard_blocked, goodbyeads_blocked, adult_blocked, custom_blocked} =
+      Enum.reduce(records, {0, 0, 0, 0, 0, 0, 0}, fn {_hour, t, b, i6, adg, gba, adt, cst}, {acc_t, acc_b, acc_i6, acc_adg, acc_gba, acc_adt, acc_cst} ->
+        {acc_t + t, acc_b + b, acc_i6 + i6, acc_adg + adg, acc_gba + gba, acc_adt + adt, acc_cst + cst}
+      end)
+
+    block_rate = if total_queries > 0, do: Float.round(blocked_queries / total_queries * 100, 1), else: 0.0
+    data_saved_kb = blocked_queries * 50
+    data_saved_str =
+      cond do
+        data_saved_kb >= 1024 -> "#{Float.round(data_saved_kb / 1024, 1)} MB"
+        true -> "#{data_saved_kb} KB"
+      end
+
+    # For Top Blocked trackers, scan the raw logs buffer (limit is 200, which is extremely fast)
+    raw_logs = get_raw_logs_from_ets(profile_id)
+    top_blocked =
+      raw_logs
+      |> Enum.filter(fn log -> log.status == "blocked" end)
+      |> Enum.frequencies_by(fn log -> log.domain end)
+      |> Enum.sort_by(fn {_domain, count} -> count end, :desc)
+      |> Enum.take(3)
+      |> Enum.map(fn {domain, count} -> %{domain: domain, count: count} end)
+
+    %{
+      total: total_queries,
+      blocked: blocked_queries,
+      block_rate: block_rate,
+      data_saved: data_saved_str,
+      top_blocked: top_blocked,
+      ipv6_blocked_count: ipv6_blocked_count,
+      adguard_blocked_count: adguard_blocked,
+      goodbyeads_blocked_count: goodbyeads_blocked,
+      adult_blocked_count: adult_blocked,
+      custom_blocked_count: custom_blocked
+    }
+  end
+
+  defp get_raw_logs_from_ets(profile_id) do
+    raw_logs =
+      case :ets.whereis(:dns_query_logs) do
+        :undefined -> []
+        _ ->
+          pattern = {{to_string(profile_id), :_}, :"$1"}
+          :ets.select(:dns_query_logs, [{pattern, [], [:"$1"]}])
+          ++ :ets.select(:dns_query_logs, [{{{profile_id, :_}, :"$1"}, [], [:"$1"]}])
+      end
+    Enum.map(raw_logs, &to_log_struct/1)
   end
 end

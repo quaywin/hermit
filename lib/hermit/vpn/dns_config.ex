@@ -81,9 +81,45 @@ defmodule Hermit.Vpn.DnsConfig do
   end
 
   defp valid_ip_or_url?(val) do
-    case :inet.parse_address(String.to_charlist(val)) do
-      {:ok, _} -> true
-      _ -> String.starts_with?(val, "https://")
+    cond do
+      String.starts_with?(val, "https://") ->
+        true
+
+      true ->
+        case parse_ip_and_port(val) do
+          {:ok, _ip, _port} -> true
+          {:ok, _ip} -> true
+          :error -> false
+        end
+    end
+  end
+
+  defp parse_ip_and_port(val) do
+    case Regex.run(~r/^\[(.*)\]:(\d+)$/, val) do
+      [_, ip_str, port_str] ->
+        with {:ok, ip} <- :inet.parse_address(String.to_charlist(ip_str)),
+             {port, ""} <- Integer.parse(port_str) do
+          {:ok, ip, port}
+        else
+          _ -> :error
+        end
+
+      nil ->
+        case String.split(val, ":") do
+          [ip_str, port_str] ->
+            with {:ok, ip} <- :inet.parse_address(String.to_charlist(ip_str)),
+                 {port, ""} <- Integer.parse(port_str) do
+              {:ok, ip, port}
+            else
+              _ -> :error
+            end
+
+          _ ->
+            case :inet.parse_address(String.to_charlist(val)) do
+              {:ok, ip} -> {:ok, ip}
+              _ -> :error
+            end
+        end
     end
   end
 

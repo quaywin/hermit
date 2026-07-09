@@ -16,7 +16,7 @@ defmodule Hermit.Application do
       {Task.Supervisor, name: Hermit.Dns.TaskSupervisor},
       {Hermit.Vpn.DynamicSupervisor, []},
       {Hermit.Dns.BlocklistLoader, []},
-      {Hermit.Vpn.DnsLogReceiver, []},
+      {Hermit.Dns.Telemetry, []},
       {Hermit.Vpn.DnsDeviceResolver, []},
       {Hermit.Vpn.DnsSupervisor, []},
       HermitWeb.Endpoint

@@ -2,22 +2,10 @@ defmodule Hermit.Dns.Server do
   use GenServer
   require Logger
   alias Hermit.Dns.Packet
+  alias Hermit.Dns.Rules
+  alias Hermit.Dns.Filter
+  alias Hermit.Dns.Cache
 
-  @table :dns_query_logs
-
-  # Lightweight built-in filters
-
-  @adult_domains MapSet.new([
-                   "pornhub.com",
-                   "xvideos.com",
-                   "xnxx.com",
-                   "redtube.com",
-                   "youporn.com",
-                   "chaturbate.com",
-                   "stripchat.com",
-                   "livejasmin.com",
-                   "onlyfans.com"
-                 ])
 
   def start_link(opts) do
     profile_id = opts[:profile_id]
@@ -49,7 +37,7 @@ defmodule Hermit.Dns.Server do
         nil
       end
 
-    custom_rules = precompile_custom_rules(config.custom_rules)
+    custom_rules = Rules.precompile(config.custom_rules)
 
     # Initialize a shared Req client for DoH queries to reuse TLS connections
     doh_client =
@@ -63,7 +51,7 @@ defmodule Hermit.Dns.Server do
     # We open a pool of 4 sockets to prevent Transaction ID collisions under heavy load.
     upstream_sockets =
       Enum.map(1..4, fn _ ->
-        case :gen_udp.open(0, [:binary, active: true]) do
+        case :gen_udp.open(0, [:binary, active: true, recbuf: 1024 * 1024, read_packets: 1000]) do
           {:ok, sock} -> sock
           {:error, _} -> nil
         end
@@ -86,7 +74,8 @@ defmodule Hermit.Dns.Server do
       upstreams_map: upstreams_map,
       active_upstream: active_upstream,
       config: config,
-      custom_rules: custom_rules
+      custom_rules: custom_rules,
+      next_tx_id: 0
     }
 
     # Start periodic timeout cleanup timer (every 1 second)
@@ -105,9 +94,9 @@ defmodule Hermit.Dns.Server do
   defp try_bind_socket(%{profile_id: profile_id, port: port} = state) do
     bind_opts =
       if mock?() do
-        [:binary, active: 100, reuseaddr: true]
+        [:binary, active: 100, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
       else
-        [:binary, active: 100, reuseaddr: true, ip: {10, 251, profile_id, 1}]
+        [:binary, active: 100, reuseaddr: true, ip: {10, 251, profile_id, 1}, recbuf: 1024 * 1024, read_packets: 1000]
       end
 
     case :gen_udp.open(port, bind_opts) do
@@ -130,7 +119,7 @@ defmodule Hermit.Dns.Server do
   def handle_info({:dns_config_updated, updated_config}, state) do
     upstreams = parse_upstreams(updated_config.upstream_dns)
     new_state = sync_upstreams_config(state, upstreams)
-    custom_rules = precompile_custom_rules(updated_config.custom_rules)
+    custom_rules = Rules.precompile(updated_config.custom_rules)
 
     # Flush cache for this profile on configuration changes
     profile_id = state.profile_id
@@ -174,7 +163,7 @@ defmodule Hermit.Dns.Server do
       <<tx_id::16, _::binary>> = packet
 
       case Map.get(state.pending_queries, tx_id) do
-        {client_ip, client_port, original_query, sent_at, target_upstreams, current_index} ->
+        {client_ip, client_port, original_query, sent_at, target_upstreams, current_index, original_tx_id} ->
           upstream = elem(target_upstreams, current_index)
           # Only accept response if it matches the source IP of the current active upstream
           is_valid_source? =
@@ -193,8 +182,12 @@ defmodule Hermit.Dns.Server do
 
             # Offload heavy tasks to Task.Supervisor
             Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+              # Sửa ID của gói tin phản hồi thành ID gốc từ client trước khi gửi đi
+              <<_::binary-size(2), rest_packet::binary>> = packet
+              client_packet = original_tx_id <> rest_packet
+
               # Send response packet back to client immediately
-              :gen_udp.send(client_socket, client_ip, client_port, packet)
+              :gen_udp.send(client_socket, client_ip, client_port, client_packet)
 
               # Calculate resolution duration and cast back to server
               duration = System.monotonic_time(:millisecond) - sent_at
@@ -215,7 +208,7 @@ defmodule Hermit.Dns.Server do
                     {10, "Resolved"}
                 end
 
-              store_cache(
+              Cache.store(
                 profile_id,
                 original_query.domain,
                 original_query.qtype,
@@ -232,16 +225,20 @@ defmodule Hermit.Dns.Server do
                   {:doh, url} -> "DoH (#{extract_host(url)})"
                 end
 
-              log_and_broadcast(
-                profile_id,
-                config_id,
-                client_ip,
-                original_query.domain,
-                original_query.qtype,
-                "resolved",
-                answer_log_info,
-                resolver_tag,
-                enable_query_logging
+              :telemetry.execute(
+                [:hermit, :dns, :query],
+                %{duration: duration},
+                %{
+                  profile_id: profile_id,
+                  config_id: config_id,
+                  client_ip: client_ip,
+                  domain: original_query.domain,
+                  qtype: original_query.qtype,
+                  status: "resolved",
+                  answer: answer_log_info,
+                  resolver: resolver_tag,
+                  enable_query_logging: enable_query_logging
+                }
               )
             end)
 
@@ -265,7 +262,7 @@ defmodule Hermit.Dns.Server do
   @impl true
   def handle_info({:doh_response, tx_id, url, packet, duration}, state) do
     case Map.get(state.pending_queries, tx_id) do
-      {client_ip, client_port, original_query, _sent_at, target_upstreams, current_index} ->
+      {client_ip, client_port, original_query, _sent_at, target_upstreams, current_index, original_tx_id} ->
         upstream = elem(target_upstreams, current_index)
 
         expected_url =
@@ -283,8 +280,12 @@ defmodule Hermit.Dns.Server do
 
           # Offload heavy tasks to Task.Supervisor
           Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+            # Sửa ID của gói tin phản hồi thành ID gốc từ client trước khi gửi đi
+            <<_::binary-size(2), rest_packet::binary>> = packet
+            client_packet = original_tx_id <> rest_packet
+
             # Send response packet back to client
-            :gen_udp.send(client_socket, client_ip, client_port, packet)
+            :gen_udp.send(client_socket, client_ip, client_port, client_packet)
 
             # Log latency update
             GenServer.cast(server_pid, {:update_latency, upstream, duration})
@@ -304,7 +305,7 @@ defmodule Hermit.Dns.Server do
                   {10, "Resolved"}
               end
 
-            store_cache(
+            Cache.store(
               profile_id,
               original_query.domain,
               original_query.qtype,
@@ -316,16 +317,20 @@ defmodule Hermit.Dns.Server do
 
             resolver_tag = "DoH (#{extract_host(url)})"
 
-            log_and_broadcast(
-              profile_id,
-              config_id,
-              client_ip,
-              original_query.domain,
-              original_query.qtype,
-              "resolved",
-              answer_log_info,
-              resolver_tag,
-              enable_query_logging
+            :telemetry.execute(
+              [:hermit, :dns, :query],
+              %{duration: duration},
+              %{
+                profile_id: profile_id,
+                config_id: config_id,
+                client_ip: client_ip,
+                domain: original_query.domain,
+                qtype: original_query.qtype,
+                status: "resolved",
+                answer: answer_log_info,
+                resolver: resolver_tag,
+                enable_query_logging: enable_query_logging
+              }
             )
           end)
 
@@ -348,7 +353,7 @@ defmodule Hermit.Dns.Server do
 
     new_state =
       Enum.reduce(state.pending_queries, state, fn {tx_id, info}, acc_state ->
-        {_client_ip, _client_port, _original_query, sent_at, _target_upstreams, _current_index} = info
+        {_client_ip, _client_port, _original_query, sent_at, _target_upstreams, _current_index, _original_tx_id} = info
 
         # Nếu bị quá hạn 2 giây mà chưa nhận được phản hồi
         if now - sent_at >= 2000 do
@@ -481,22 +486,27 @@ defmodule Hermit.Dns.Server do
       resp = Packet.build_empty_response(query.id, query.query_record)
       :gen_udp.send(socket, ip, port, resp)
 
-      log_and_broadcast(
-        profile_id,
-        config.id,
-        ip,
-        query.domain,
-        query.qtype,
-        "blocked",
-        "Empty (IPv6 Blocked)",
-        "Local Filter",
-        enable_query_logging
+      :telemetry.execute(
+        [:hermit, :dns, :query],
+        %{duration: 0},
+        %{
+          profile_id: profile_id,
+          config_id: config.id,
+          client_ip: ip,
+          domain: query.domain,
+          qtype: query.qtype,
+          status: "blocked",
+          answer: "Empty (IPv6 Blocked)",
+          resolver: "Local Filter",
+          block_reason: "ipv6",
+          enable_query_logging: enable_query_logging
+        }
       )
 
       state
     else
       # 1. Lookup cache first (max optimization)
-      case lookup_cache(profile_id, query.domain, query.qtype) do
+      case Cache.lookup(profile_id, query.domain, query.qtype) do
         {:ok, cached_packet, status, answer_log_info} ->
         <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
         resp_packet = query.id <> rest_packet
@@ -509,62 +519,100 @@ defmodule Hermit.Dns.Server do
             answer_log_info
           end
 
-        log_and_broadcast(
-          profile_id,
-          config.id,
-          ip,
-          query.domain,
-          query.qtype,
-          status,
-          cached_answer,
-          "Cache",
-          enable_query_logging
+        block_reason =
+          if status == "blocked" do
+            cond do
+              String.contains?(answer_log_info, "IPv6") -> "ipv6"
+              String.contains?(answer_log_info, "AdGuard") -> "adguard"
+              String.contains?(answer_log_info, "GoodbyeAds") -> "goodbyeads"
+              String.contains?(answer_log_info, "Adult") -> "adult"
+              String.contains?(answer_log_info, "Custom") -> "custom_rule"
+              true -> nil
+            end
+          else
+            nil
+          end
+
+        :telemetry.execute(
+          [:hermit, :dns, :query],
+          %{duration: 0},
+          %{
+            profile_id: profile_id,
+            config_id: config.id,
+            client_ip: ip,
+            domain: query.domain,
+            qtype: query.qtype,
+            status: status,
+            answer: cached_answer,
+            resolver: "Cache",
+            block_reason: block_reason,
+            enable_query_logging: enable_query_logging
+          }
         )
 
         state
 
       :error ->
         # 2. Match custom rules
-        {action, redirect_val} = match_custom_rules(query.domain, state.custom_rules)
+        {action, redirect_val, block_reason} =
+          case Rules.match(query.domain, state.custom_rules) do
+            {"block", nil} -> {"block", nil, "custom_rule"}
+            {act, val} -> {act, val, nil}
+          end
 
         # 3. Match built-in blocklists if not matched by custom rules
-        {action, redirect_val} =
+        {action, redirect_val, block_reason} =
           if is_nil(action) and config.enabled do
             cond do
-              config.block_ads and match_ets_blocklist?(query.domain, :adguard_blocklist) ->
-                {"block", nil}
+              config.block_ads and Filter.match_ets_blocklist?(query.domain, :adguard_blocklist) ->
+                {"block", nil, "adguard"}
 
               config.block_goodbyeads and
-                  match_ets_blocklist?(query.domain, :goodbyeads_blocklist) ->
-                {"block", nil}
+                  Filter.match_ets_blocklist?(query.domain, :goodbyeads_blocklist) ->
+                {"block", nil, "goodbyeads"}
 
-              config.block_adult and match_domain_set?(query.domain, @adult_domains) ->
-                {"block", nil}
+              config.block_adult and Filter.match_adult?(query.domain) ->
+                {"block", nil, "adult"}
 
               true ->
-                {nil, nil}
+                {nil, nil, nil}
             end
           else
-            {action, redirect_val}
+            {action, redirect_val, block_reason}
           end
 
         case action do
           "block" ->
             resp = Packet.build_nxdomain(query.id, query.query_record)
+
+            answer_log_info =
+              case block_reason do
+                "adguard" -> "NXDOMAIN (AdGuard)"
+                "goodbyeads" -> "NXDOMAIN (GoodbyeAds)"
+                "adult" -> "NXDOMAIN (Adult Filter)"
+                "custom_rule" -> "NXDOMAIN (Custom Rule)"
+                _ -> "NXDOMAIN"
+              end
+
             # Store blocks in cache with 5s TTL
-            store_cache(profile_id, query.domain, query.qtype, resp, "blocked", "NXDOMAIN", 5)
+            Cache.store(profile_id, query.domain, query.qtype, resp, "blocked", answer_log_info, 5)
             :gen_udp.send(socket, ip, port, resp)
 
-            log_and_broadcast(
-              profile_id,
-              config.id,
-              ip,
-              query.domain,
-              query.qtype,
-              "blocked",
-              "NXDOMAIN",
-              "Local Filter",
-              enable_query_logging
+            :telemetry.execute(
+              [:hermit, :dns, :query],
+              %{duration: 0},
+              %{
+                profile_id: profile_id,
+                config_id: config.id,
+                client_ip: ip,
+                domain: query.domain,
+                qtype: query.qtype,
+                status: "blocked",
+                answer: answer_log_info,
+                resolver: "Local Filter",
+                block_reason: block_reason,
+                enable_query_logging: enable_query_logging
+              }
             )
 
             state
@@ -573,7 +621,7 @@ defmodule Hermit.Dns.Server do
             if query.qtype == :A do
               resp = Packet.build_a_response(query.id, query.query_record, redirect_val)
               # Store redirects in cache with 5s TTL
-              store_cache(
+              Cache.store(
                 profile_id,
                 query.domain,
                 query.qtype,
@@ -585,21 +633,25 @@ defmodule Hermit.Dns.Server do
 
               :gen_udp.send(socket, ip, port, resp)
 
-              log_and_broadcast(
-                profile_id,
-                config.id,
-                ip,
-                query.domain,
-                query.qtype,
-                "redirected",
-                redirect_val,
-                "Local Rules",
-                enable_query_logging
+              :telemetry.execute(
+                [:hermit, :dns, :query],
+                %{duration: 0},
+                %{
+                  profile_id: profile_id,
+                  config_id: config.id,
+                  client_ip: ip,
+                  domain: query.domain,
+                  qtype: query.qtype,
+                  status: "redirected",
+                  answer: redirect_val,
+                  resolver: "Local Rules",
+                  enable_query_logging: enable_query_logging
+                }
               )
             else
               resp = Packet.build_nxdomain(query.id, query.query_record)
               # Store redirect failures in cache with 5s TTL
-              store_cache(
+              Cache.store(
                 profile_id,
                 query.domain,
                 query.qtype,
@@ -611,16 +663,20 @@ defmodule Hermit.Dns.Server do
 
               :gen_udp.send(socket, ip, port, resp)
 
-              log_and_broadcast(
-                profile_id,
-                config.id,
-                ip,
-                query.domain,
-                query.qtype,
-                "redirected",
-                "NXDOMAIN",
-                "Local Rules",
-                enable_query_logging
+              :telemetry.execute(
+                [:hermit, :dns, :query],
+                %{duration: 0},
+                %{
+                  profile_id: profile_id,
+                  config_id: config.id,
+                  client_ip: ip,
+                  domain: query.domain,
+                  qtype: query.qtype,
+                  status: "redirected",
+                  answer: "NXDOMAIN",
+                  resolver: "Local Rules",
+                  enable_query_logging: enable_query_logging
+                }
               )
             end
 
@@ -685,21 +741,28 @@ defmodule Hermit.Dns.Server do
       :gen_udp.send(socket, ip, port, servfail)
       state
     else
-      # Extract 16-bit transaction ID
-      <<tx_id::16>> = query.id
+      # Sinh unique upstream transaction ID mới
+      upstream_tx_id = state.next_tx_id
+      next_tx_id = rem(upstream_tx_id + 1, 65536)
+      upstream_tx_id_bin = <<upstream_tx_id::16>>
+
+      # Rewrite Transaction ID trong gói tin gửi đi
+      <<_old_id::binary-size(2), rest_packet::binary>> = packet
+      rewritten_packet = upstream_tx_id_bin <> rest_packet
+
       now = System.monotonic_time(:millisecond)
 
       # Send asynchronously to the first upstream in the sorted list (index 0)
       first_upstream = hd(sorted_upstreams)
-      async_send_to_upstream(state.upstream_sockets, state.doh_client, first_upstream, packet)
+      async_send_to_upstream(state.upstream_sockets, state.doh_client, first_upstream, rewritten_packet)
 
       # Save query context in pending_queries map
-      # Struct: {client_ip, client_port, original_query, sent_at, target_upstreams_tuple, current_index}
+      # Struct: {client_ip, client_port, original_query, sent_at, target_upstreams_tuple, current_index, original_tx_id}
       upstreams_tuple = List.to_tuple(sorted_upstreams)
-      query_info = {ip, port, query, now, upstreams_tuple, 0}
-      new_pending = Map.put(state.pending_queries, tx_id, query_info)
+      query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
+      new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
 
-      %{state | pending_queries: new_pending}
+      %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
     end
   end
 
@@ -795,7 +858,7 @@ defmodule Hermit.Dns.Server do
   # Hàm helper dùng chung xử lý lỗi upstream
   defp handle_upstream_failure(tx_id, state) do
     case Map.get(state.pending_queries, tx_id) do
-      {client_ip, client_port, original_query, _sent_at, target_upstreams, current_index} ->
+      {client_ip, client_port, original_query, sent_at, target_upstreams, current_index, original_tx_id} ->
         failed_upstream = elem(target_upstreams, current_index)
 
         # 1. Phạt độ trễ ngay lập tức trong state của GenServer
@@ -814,43 +877,75 @@ defmodule Hermit.Dns.Server do
         if next_index < tuple_size(target_upstreams) do
           # 2. Có DNS dự phòng: Gửi truy vấn qua DNS tiếp theo ngay lập tức
           next_upstream = elem(target_upstreams, next_index)
+          # Gửi với tx_id (ID mới dùng cho upstream)
           packet = Packet.build_query_packet(tx_id, original_query.query_record)
           async_send_to_upstream(state.upstream_sockets, state.doh_client, next_upstream, packet)
 
           # Cập nhật thông tin truy vấn trong pending_queries
           now = System.monotonic_time(:millisecond)
-          updated_info = {client_ip, client_port, original_query, now, target_upstreams, next_index}
+          updated_info = {client_ip, client_port, original_query, now, target_upstreams, next_index, original_tx_id}
           new_pending = Map.put(state.pending_queries, tx_id, updated_info)
 
           %{state | pending_queries: new_pending}
         else
-          # 3. Hết DNS dự phòng: Trả về SERVFAIL cho client
-          servfail = Packet.build_nxdomain(original_query.id, original_query.query_record)
-          servfail = Packet.patch_rcode(servfail, 2)
-          :gen_udp.send(state.socket, client_ip, client_port, servfail)
+          # 3. Hết DNS dự phòng: Thử tìm trong cache stale trước khi trả SERVFAIL! (Serve-Stale - RFC 8767)
+          case Cache.lookup(state.profile_id, original_query.domain, original_query.qtype, true) do
+            {:stale, stale_packet, status, answer_log_info} ->
+              # Sửa ID của stale packet thành ID gốc của client và gửi đi
+              <<_::binary-size(2), rest_packet::binary>> = stale_packet
+              client_packet = original_tx_id <> rest_packet
+              :gen_udp.send(state.socket, client_ip, client_port, client_packet)
 
-          # Lưu cache lỗi SERVFAIL trong 5 giây (Negative Caching)
-          store_cache(
-            state.profile_id,
-            original_query.domain,
-            original_query.qtype,
-            servfail,
-            "resolved",
-            "SERVFAIL",
-            5
-          )
+              # Bắn telemetry event cho stale response
+              :telemetry.execute(
+                [:hermit, :dns, :query],
+                %{duration: System.monotonic_time(:millisecond) - sent_at},
+                %{
+                  profile_id: state.profile_id,
+                  config_id: state.config.id,
+                  client_ip: client_ip,
+                  domain: original_query.domain,
+                  qtype: original_query.qtype,
+                  status: status,
+                  answer: "#{answer_log_info} (stale)",
+                  resolver: "Stale Cache Fallback",
+                  enable_query_logging: state.config.enable_query_logging
+                }
+              )
 
-          log_and_broadcast(
-            state.profile_id,
-            state.config.id,
-            client_ip,
-            original_query.domain,
-            original_query.qtype,
-            "resolved",
-            "SERVFAIL",
-            "Failover",
-            state.config.enable_query_logging
-          )
+            _ ->
+              # Nếu thực sự không có stale cache, trả SERVFAIL như cũ
+              servfail = Packet.build_nxdomain(original_tx_id, original_query.query_record)
+              servfail = Packet.patch_rcode(servfail, 2)
+              :gen_udp.send(state.socket, client_ip, client_port, servfail)
+
+              # Lưu cache lỗi SERVFAIL trong 5 giây (Negative Caching)
+              Cache.store(
+                state.profile_id,
+                original_query.domain,
+                original_query.qtype,
+                servfail,
+                "resolved",
+                "SERVFAIL",
+                5
+              )
+
+              :telemetry.execute(
+                [:hermit, :dns, :query],
+                %{duration: System.monotonic_time(:millisecond) - sent_at},
+                %{
+                  profile_id: state.profile_id,
+                  config_id: state.config.id,
+                  client_ip: client_ip,
+                  domain: original_query.domain,
+                  qtype: original_query.qtype,
+                  status: "resolved",
+                  answer: "SERVFAIL",
+                  resolver: "Failover Failure",
+                  enable_query_logging: state.config.enable_query_logging
+                }
+              )
+          end
 
           new_pending = Map.delete(state.pending_queries, tx_id)
           %{state | pending_queries: new_pending}
@@ -930,93 +1025,9 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  # --- Cache Functions ---
 
-  defp lookup_cache(profile_id, domain, qtype) do
-    now = System.monotonic_time(:second)
 
-    case :ets.lookup(:dns_cache, {profile_id, domain, qtype}) do
-      [{{^profile_id, ^domain, ^qtype}, resp_packet, status, answer_log_info, expires_at}] ->
-        if now < expires_at do
-          {:ok, resp_packet, status, answer_log_info}
-        else
-          :ets.delete(:dns_cache, {profile_id, domain, qtype})
-          :error
-        end
 
-      _ ->
-        :error
-    end
-  end
-
-  defp store_cache(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl) do
-    expires_at = System.monotonic_time(:second) + ttl
-
-    :ets.insert(
-      :dns_cache,
-      {{profile_id, domain, qtype}, resp_packet, status, answer_log_info, expires_at}
-    )
-  end
-
-  # --- Rules & Filtering Matching Helpers ---
-
-  defp match_custom_rules(_domain, rules_map) when map_size(rules_map) == 0, do: {nil, nil}
-
-  defp match_custom_rules(domain, rules_map) do
-    case Map.get(rules_map, domain) do
-      {_action, _value} = result ->
-        result
-
-      nil ->
-        case :binary.match(domain, ".") do
-          {idx, _} ->
-            parent = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
-            match_custom_rules(parent, rules_map)
-
-          :nomatch ->
-            {nil, nil}
-        end
-    end
-  end
-
-  defp precompile_custom_rules(rules) when is_list(rules) do
-    rules
-    |> Enum.map(fn rule ->
-      domain = Map.get(rule, "domain") || Map.get(rule, :domain)
-      action = Map.get(rule, "action") || Map.get(rule, :action)
-      value = Map.get(rule, "value") || Map.get(rule, :value)
-      {domain, {action, value}}
-    end)
-    |> Enum.reject(fn {domain, _} -> is_nil(domain) end)
-    |> Map.new()
-  end
-
-  defp precompile_custom_rules(rules) when is_map(rules) do
-    precompile_custom_rules(Map.get(rules, "custom_rules", []) || [])
-  end
-
-  defp precompile_custom_rules(_), do: %{}
-
-  defp match_domain_set?(domain, set) do
-    domain = String.downcase(domain)
-    MapSet.member?(set, domain) or match_domain_set_recursive?(domain, set)
-  end
-
-  defp match_domain_set_recursive?(domain, set) do
-    case :binary.match(domain, ".") do
-      :nomatch ->
-        false
-
-      {idx, _len} ->
-        suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
-
-        if MapSet.member?(set, suffix) do
-          true
-        else
-          match_domain_set_recursive?(suffix, set)
-        end
-    end
-  end
 
   # --- Log Recording ---
 
@@ -1027,96 +1038,57 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp log_and_broadcast(profile_id, config_id, client_ip, domain, qtype, status, answer, resolver, true) do
-    Task.start(fn ->
-      pair_id = to_string(profile_id)
-      client_ip_str = ip_to_string(client_ip)
-      client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
-
-      log_data = %{
-        "pair_id" => pair_id,
-        "client_ip" => client_ip_str,
-        "client_name" => client_name || client_ip_str,
-        "domain" => domain,
-        "type" => Packet.qtype_to_string(qtype),
-        "status" => status,
-        "answer" => answer,
-        "resolver" => resolver,
-        "timestamp" => System.system_time(:second)
-      }
-
-      counter = System.unique_integer([:monotonic])
-      :ets.insert(@table, {{pair_id, counter}, log_data})
-      # Đồng bộ lưu thêm vào ETS theo dns_profile_id để phục vụ trang /dns load logs cũ
-      :ets.insert(:dns_query_logs, {{config_id, counter}, log_data})
-
-      # Broadcast tới cả kênh inbound cũ và kênh dns profile mới
-      Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{profile_id}", {:dns_log, log_data})
-      Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs_profile:#{config_id}", {:dns_log, log_data})
-    end)
-    :ok
-  end
-
-  defp log_and_broadcast(
-         _profile_id,
-         _config_id,
-         _client_ip,
-         _domain,
-         _qtype,
-         _status,
-         _answer_or_packet,
-         _resolver,
-         false
-       ) do
-    :ok
-  end
-
   # --- General IP and URL parsing ---
 
   defp parse_upstreams(upstream_str) do
     upstream_str
     |> String.split([",", " "], trim: true)
     |> Enum.map(fn val ->
-      case :inet.parse_address(String.to_charlist(val)) do
-        {:ok, addr} ->
-          {:udp, addr}
+      cond do
+        String.starts_with?(val, "https://") ->
+          {:doh, val}
 
-        _ ->
-          if String.starts_with?(val, "https://") do
-            {:doh, val}
-          else
-            nil
+        true ->
+          case parse_ip_and_port(val) do
+            {:ok, ip, port} -> {:udp, {ip, port}}
+            {:ok, ip} -> {:udp, ip}
+            :error -> nil
           end
       end
     end)
     |> Enum.reject(&is_nil/1)
   end
 
-  def match_ets_blocklist?(domain, table) do
-    domain = String.downcase(domain)
-
-    if :ets.member(table, domain) do
-      true
-    else
-      match_suffix_recursive(domain, table)
-    end
-  end
-
-  defp match_suffix_recursive(domain, table) do
-    case :binary.match(domain, ".") do
-      :nomatch ->
-        false
-
-      {idx, _len} ->
-        suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
-
-        if :ets.member(table, suffix) do
-          true
+  defp parse_ip_and_port(val) do
+    case Regex.run(~r/^\[(.*)\]:(\d+)$/, val) do
+      [_, ip_str, port_str] ->
+        with {:ok, ip} <- :inet.parse_address(String.to_charlist(ip_str)),
+             {port, ""} <- Integer.parse(port_str) do
+          {:ok, ip, port}
         else
-          match_suffix_recursive(suffix, table)
+          _ -> :error
+        end
+
+      nil ->
+        case String.split(val, ":") do
+          [ip_str, port_str] ->
+            with {:ok, ip} <- :inet.parse_address(String.to_charlist(ip_str)),
+                 {port, ""} <- Integer.parse(port_str) do
+              {:ok, ip, port}
+            else
+              _ -> :error
+            end
+
+          _ ->
+            case :inet.parse_address(String.to_charlist(val)) do
+              {:ok, ip} -> {:ok, ip}
+              _ -> :error
+            end
         end
     end
   end
+
+
 
   defp ip_to_string(ip) when is_tuple(ip) do
     case :inet.ntoa(ip) do

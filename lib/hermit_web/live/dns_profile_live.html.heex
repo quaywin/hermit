@@ -117,85 +117,79 @@
         </div>
 
         <!-- Card 2: Blocklists Filters -->
-        <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
-          <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 border-b border-base-300 pb-2 mb-4">
-            Security & Ad-Blocking Filters
-          </h2>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <!-- AdGuard Blocklist -->
-            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
-              <div class="space-y-0.5">
-                <span class="text-xs font-semibold uppercase tracking-wider block">AdGuard Filter</span>
-                <p class="text-[11px] text-base-content/50 leading-normal">
-                  Blocks known ads, analytics, trackers, and telemetry domains.
-                </p>
-              </div>
-              <button
-                phx-click="toggle_block_ads"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
-                  if(@selected_profile.block_ads, do: "btn-primary", else: "btn-outline")
-                ]}
+        <div class="bg-base-100 border border-base-300 rounded-[12px] p-4 shadow-sm">
+          <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 shrink-0">
+              Security & Ad-Blocking Filters
+            </h2>
+            <div class="flex flex-wrap items-center gap-3">
+              <!-- AdGuard Blocklist -->
+              <div
+                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
+                title="Blocks known ads, analytics, trackers, and telemetry domains."
               >
-                {if @selected_profile.block_ads, do: "Blocking", else: "Allowing"}
-              </button>
-            </div>
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">AdGuard</span>
+                <button
+                  phx-click="toggle_block_ads"
+                  class={[
+                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                    if(@selected_profile.block_ads, do: "btn-primary", else: "btn-outline")
+                  ]}
+                >
+                  {if @selected_profile.block_ads, do: "Blocking", else: "Allowing"}
+                </button>
+              </div>
 
-            <!-- GoodbyeAds Blocklist -->
-            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
-              <div class="space-y-0.5">
-                <span class="text-xs font-semibold uppercase tracking-wider block">GoodbyeAds Filter</span>
-                <p class="text-[11px] text-base-content/50 leading-normal">
-                  Blocks aggressive mobile trackers, ads, and telemetry.
-                </p>
-              </div>
-              <button
-                phx-click="toggle_block_goodbyeads"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
-                  if(@selected_profile.block_goodbyeads, do: "btn-primary", else: "btn-outline")
-                ]}
+              <!-- GoodbyeAds Blocklist -->
+              <div
+                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
+                title="Blocks aggressive mobile trackers, ads, and telemetry."
               >
-                {if @selected_profile.block_goodbyeads, do: "Blocking", else: "Allowing"}
-              </button>
-            </div>
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">GoodbyeAds</span>
+                <button
+                  phx-click="toggle_block_goodbyeads"
+                  class={[
+                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                    if(@selected_profile.block_goodbyeads, do: "btn-primary", else: "btn-outline")
+                  ]}
+                >
+                  {if @selected_profile.block_goodbyeads, do: "Blocking", else: "Allowing"}
+                </button>
+              </div>
 
-            <!-- Adult Filter -->
-            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
-              <div class="space-y-0.5">
-                <span class="text-xs font-semibold uppercase tracking-wider block">Adult Filter</span>
-                <p class="text-[11px] text-base-content/50 leading-normal">
-                  Blocks major adult websites and pornography domains.
-                </p>
-              </div>
-              <button
-                phx-click="toggle_block_adult"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
-                  if(@selected_profile.block_adult, do: "btn-primary", else: "btn-outline")
-                ]}
+              <!-- Adult Filter -->
+              <div
+                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
+                title="Blocks major adult websites and pornography domains."
               >
-                {if @selected_profile.block_adult, do: "Blocking", else: "Allowing"}
-              </button>
-            </div>
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">Adult</span>
+                <button
+                  phx-click="toggle_block_adult"
+                  class={[
+                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                    if(@selected_profile.block_adult, do: "btn-primary", else: "btn-outline")
+                  ]}
+                >
+                  {if @selected_profile.block_adult, do: "Blocking", else: "Allowing"}
+                </button>
+              </div>
 
-            <!-- IPv6 (AAAA) Filter -->
-            <div class="p-3 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center justify-between gap-4">
-              <div class="space-y-0.5">
-                <span class="text-xs font-semibold uppercase tracking-wider block">IPv6 (AAAA) Filter</span>
-                <p class="text-[11px] text-base-content/50 leading-normal">
-                  Blocks IPv6 AAAA requests. Improves speed and prevents IPv6 leaks.
-                </p>
-              </div>
-              <button
-                phx-click="toggle_block_ipv6"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider min-w-[85px] shrink-0",
-                  if(@selected_profile.block_ipv6, do: "btn-primary", else: "btn-outline")
-                ]}
+              <!-- IPv6 (AAAA) Filter -->
+              <div
+                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
+                title="Blocks IPv6 AAAA requests. Improves speed and prevents IPv6 leaks."
               >
-                {if @selected_profile.block_ipv6, do: "Blocking", else: "Allowing"}
-              </button>
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/85">IPv6</span>
+                <button
+                  phx-click="toggle_block_ipv6"
+                  class={[
+                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                    if(@selected_profile.block_ipv6, do: "btn-primary", else: "btn-outline")
+                  ]}
+                >
+                  {if @selected_profile.block_ipv6, do: "Blocking", else: "Allowing"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -331,6 +325,187 @@
           </div>
         </div>
 
+        <!-- Card 4: DNS Resolution Metrics -->
+        <%= if @dns_metrics do %>
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
+            <div class="flex items-center justify-between border-b border-base-300 pb-2 mb-4">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                DNS Resolution Analytics
+              </h2>
+              
+              <!-- Tab Chọn Khoảng Thời Gian -->
+              <div class="flex bg-base-200 p-0.5 rounded-[6px] text-[10px] font-semibold border border-base-300/40">
+                <button
+                  phx-click="change_time_range"
+                  phx-value-range="1h"
+                  class={[
+                    "px-2.5 py-1 rounded-[4px] uppercase transition-all duration-200 cursor-pointer",
+                    if(@time_range == "1h", do: "bg-base-100 text-base-content shadow-sm", else: "text-base-content/40 hover:text-base-content/70")
+                  ]}
+                >
+                  1 Hour
+                </button>
+                <button
+                  phx-click="change_time_range"
+                  phx-value-range="24h"
+                  class={[
+                    "px-2.5 py-1 rounded-[4px] uppercase transition-all duration-200 cursor-pointer",
+                    if(@time_range == "24h", do: "bg-base-100 text-base-content shadow-sm", else: "text-base-content/40 hover:text-base-content/70")
+                  ]}
+                >
+                  24 Hours
+                </button>
+                <button
+                  phx-click="change_time_range"
+                  phx-value-range="7d"
+                  class={[
+                    "px-2.5 py-1 rounded-[4px] uppercase transition-all duration-200 cursor-pointer",
+                    if(@time_range == "7d", do: "bg-base-100 text-base-content shadow-sm", else: "text-base-content/40 hover:text-base-content/70")
+                  ]}
+                >
+                  7 Days
+                </button>
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <!-- Box 1: Ad-Block Efficiency -->
+              <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between min-h-[110px]">
+                <div class="flex items-center justify-between border-b border-base-300/30 pb-2">
+                  <span class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">Ad-Block Efficiency</span>
+                  <span class="text-[9px] font-bold uppercase text-emerald-500 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">Active</span>
+                </div>
+                <div class="my-2.5">
+                  <span class="text-2xl font-bold tracking-tight text-emerald-500">{@dns_metrics.block_rate}%</span>
+                  <div class="w-full bg-base-300/50 rounded-full h-1 mt-1.5 overflow-hidden">
+                    <div class="bg-emerald-500 h-full rounded-full" style={"width: #{@dns_metrics.block_rate}%"}></div>
+                  </div>
+                </div>
+                <div class="text-[10px] text-base-content/40">
+                  Est. Data Saved: <strong class="text-emerald-500 font-mono font-semibold">{@dns_metrics.data_saved}</strong>
+                </div>
+              </div>
+
+              <!-- Box 2: Served Queries -->
+              <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between min-h-[110px]">
+                <div class="flex items-center justify-between border-b border-base-300/30 pb-2">
+                  <span class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">Served Queries</span>
+                  <.icon name="hero-bolt" class="size-3.5 text-amber-500" />
+                </div>
+                <div class="my-2">
+                  <span class="text-2xl font-bold tracking-tight text-base-content">{@dns_metrics.total}</span>
+                  <span class="text-[10px] text-base-content/40 ml-1">total requests</span>
+                </div>
+                <div class="text-[10px] text-base-content/40">
+                  Total Blocked: <strong class="text-base-content font-mono font-semibold">{@dns_metrics.blocked}</strong>
+                </div>
+              </div>
+
+              <!-- Box 3: IPv6 Leak Protection -->
+              <div class="p-4 bg-base-200/30 rounded-[8px] border border-base-300/50 flex flex-col justify-between min-h-[110px]">
+                <div class="flex items-center justify-between border-b border-base-300/30 pb-2">
+                  <span class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">IPv6 Leak Protection</span>
+                  <%= if @selected_profile.block_ipv6 do %>
+                    <span class="text-[9px] font-bold uppercase text-indigo-500 bg-indigo-500/10 px-1.5 py-0.2 rounded border border-indigo-500/20">Secure</span>
+                  <% else %>
+                    <span class="text-[9px] font-bold uppercase text-base-content/40 bg-base-300 px-1.5 py-0.2 rounded">Disabled</span>
+                  <% end %>
+                </div>
+                <div class="my-2">
+                  <span class="text-2xl font-bold tracking-tight text-indigo-500">{@dns_metrics.ipv6_blocked_count}</span>
+                  <span class="text-[10px] text-base-content/40 ml-1">leaks blocked</span>
+                </div>
+                <div class="text-[10px] text-base-content/40">
+                  Status: <strong class="text-base-content font-semibold"><%= if @selected_profile.block_ipv6, do: "Blocking AAAA", else: "IPv6 Allowed" %></strong>
+                </div>
+              </div>
+            </div>
+
+            <!-- Divider Line -->
+            <div class="border-t border-base-300/40 my-4.5"></div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <!-- Left: Top Blocked Domains -->
+              <div class="p-4 bg-base-200/20 rounded-[8px] border border-base-300/40 flex flex-col justify-between min-h-[150px]">
+                <div class="flex items-center justify-between border-b border-base-300/20 pb-2 mb-3">
+                  <span class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">Top Blocked Domains</span>
+                  <.icon name="hero-bug-ant" class="size-3.5 text-amber-500/80" />
+                </div>
+                <div class="flex-1 flex flex-col justify-center">
+                  <%= if @dns_metrics.top_blocked == [] do %>
+                    <p class="text-[10px] text-base-content/40 italic text-center py-4">No trackers blocked yet.</p>
+                  <% else %>
+                    <ul class="space-y-2 text-[10px] font-mono leading-normal">
+                      <li :for={tracker <- @dns_metrics.top_blocked} class="flex items-center justify-between py-1 border-b border-base-300/10 last:border-0">
+                        <span class="truncate max-w-[200px] text-base-content/75 font-medium" title={tracker.domain}>{tracker.domain}</span>
+                        <span class="px-1.5 py-0.5 bg-base-200/60 text-base-content/70 rounded-[4px] font-sans font-bold">{tracker.count}</span>
+                      </li>
+                    </ul>
+                  <% end %>
+                </div>
+              </div>
+
+              <!-- Right: Filter Efficiency Breakdown -->
+              <div class="p-4 bg-base-200/20 rounded-[8px] border border-base-300/40 flex flex-col justify-between min-h-[150px]">
+                <div class="flex items-center justify-between border-b border-base-300/20 pb-2 mb-3">
+                  <span class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">Filter Source Efficiency</span>
+                  <.icon name="hero-funnel" class="size-3.5 text-indigo-500/80" />
+                </div>
+                
+                <div class="flex-1 flex flex-col justify-center space-y-2.5">
+                  <%= if @dns_metrics.blocked == 0 do %>
+                    <p class="text-[10px] text-base-content/40 italic text-center py-4">No blocking actions recorded.</p>
+                  <% else %>
+                    <!-- AdGuard Blocklist -->
+                    <div class="space-y-1">
+                      <div class="flex items-center justify-between text-[10px]">
+                        <span class="text-base-content/70 font-medium">AdGuard Blocklist</span>
+                        <span class="font-bold font-mono">{@dns_metrics.adguard_blocked_count}</span>
+                      </div>
+                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                        <div class="bg-emerald-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.adguard_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
+                      </div>
+                    </div>
+
+                    <!-- GoodbyeAds Blocklist -->
+                    <div class="space-y-1">
+                      <div class="flex items-center justify-between text-[10px]">
+                        <span class="text-base-content/70 font-medium">GoodbyeAds List</span>
+                        <span class="font-bold font-mono">{@dns_metrics.goodbyeads_blocked_count}</span>
+                      </div>
+                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                        <div class="bg-amber-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.goodbyeads_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
+                      </div>
+                    </div>
+
+                    <!-- Custom Block Rules -->
+                    <div class="space-y-1">
+                      <div class="flex items-center justify-between text-[10px]">
+                        <span class="text-base-content/70 font-medium">Custom Rules</span>
+                        <span class="font-bold font-mono">{@dns_metrics.custom_blocked_count}</span>
+                      </div>
+                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                        <div class="bg-blue-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.custom_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
+                      </div>
+                    </div>
+
+                    <!-- IPv6 Block Filter -->
+                    <div class="space-y-1">
+                      <div class="flex items-center justify-between text-[10px]">
+                        <span class="text-base-content/70 font-medium">IPv6 Leak Filter</span>
+                        <span class="font-bold font-mono">{@dns_metrics.ipv6_blocked_count}</span>
+                      </div>
+                      <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                        <div class="bg-indigo-500 h-full rounded-full" style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.ipv6_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}></div>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+          </div>
+        <% end %>
+
         <!-- Card 4: Realtime DNS Query Logs -->
         <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
           <div class="flex items-center justify-between border-b border-base-300 pb-2 mb-2">
@@ -402,7 +577,7 @@
                     </td>
                   </tr>
                 <% else %>
-                  <tr :for={log <- @dns_logs} class="hover:bg-base-200/30 transition-all">
+                  <tr :for={{log, idx} <- Enum.with_index(@dns_logs)} class="hover:bg-base-200/30 transition-all">
                     <td class="py-2.5 pr-2 font-mono text-base-content/75">{log.client_ip}</td>
                     <td class="py-2.5 pr-2 text-base-content/65 truncate max-w-[120px]">
                       <%= if log.client_name && log.client_name != log.client_ip do %>
@@ -430,7 +605,12 @@
                       {log.resolver}
                     </td>
                     <td class="py-2.5 pr-2 text-base-content/60 truncate max-w-xs">{log.answer}</td>
-                    <td class="py-2.5 text-right text-base-content/40">
+                    <td
+                      id={"log-time-#{idx}-#{DateTime.to_unix(log.timestamp)}"}
+                      phx-hook="LocalTime"
+                      data-timestamp={DateTime.to_unix(log.timestamp)}
+                      class="py-2.5 text-right text-base-content/40"
+                    >
                       {Calendar.strftime(log.timestamp, "%H:%M:%S")}
                     </td>
                   </tr>

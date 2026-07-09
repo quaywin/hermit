@@ -180,7 +180,7 @@ defmodule HermitWeb.DNSControllerTest do
         |> put_req_header("x-forwarded-for", "192.168.1.100, 10.0.0.1")
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
-      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {192, 168, 1, 100}}}}
+      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {192, 168, 1, 100}, nil}}}
 
       # 2. Test X-Real-IP
       _conn2 =
@@ -189,7 +189,7 @@ defmodule HermitWeb.DNSControllerTest do
         |> put_req_header("x-real-ip", "10.0.0.5")
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
-      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {10, 0, 0, 5}}}}
+      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {10, 0, 0, 5}, nil}}}
 
       # 3. Test CF-Connecting-IP
       _conn3 =
@@ -198,7 +198,16 @@ defmodule HermitWeb.DNSControllerTest do
         |> put_req_header("cf-connecting-ip", "2001:db8::1")
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
-      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {8193, 3512, 0, 0, 0, 0, 0, 1}}}}
+      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {8193, 3512, 0, 0, 0, 0, 0, 1}, nil}}}
+
+      # 4. Test Device Name Header (e.g. x-device-name)
+      _conn4 =
+        conn
+        |> put_req_header("content-type", "application/dns-message")
+        |> put_req_header("x-device-name", "My-Test-Device")
+        |> post(~p"/dns-query/#{doh_token}", query_packet)
+
+      assert_receive {:captured_query_metadata, %{client_ip: {:doh, _ip, "My-Test-Device"}}}
     after
       :telemetry.detach(handler_id)
     end

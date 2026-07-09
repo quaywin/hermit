@@ -201,10 +201,11 @@ defmodule Hermit.Dns.Telemetry do
       profile_id = Map.get(metadata, :profile_id)
       config_id = Map.get(metadata, :config_id)
       client_ip_raw = Map.get(metadata, :client_ip)
-      {client_ip, is_doh} =
+      {client_ip, _is_doh, doh_device_name} =
         case client_ip_raw do
-          {:doh, ip} -> {ip, true}
-          ip -> {ip, false}
+          {:doh, ip, dev_name} -> {ip, true, dev_name}
+          {:doh, ip} -> {ip, true, nil}
+          ip -> {ip, false, nil}
         end
 
       domain = Map.get(metadata, :domain)
@@ -218,10 +219,12 @@ defmodule Hermit.Dns.Telemetry do
       client_ip_str = ip_to_string(client_ip)
 
       client_name =
-        if is_doh do
-          nil
-        else
-          Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
+        cond do
+          doh_device_name && doh_device_name != "" ->
+            doh_device_name
+
+          true ->
+            Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
         end
 
       log_data = %{

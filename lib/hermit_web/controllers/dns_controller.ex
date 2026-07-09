@@ -16,7 +16,8 @@ defmodule HermitWeb.DNSController do
             case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
               [{pid, _}] ->
                 client_ip = get_client_ip(conn)
-                case GenServer.call(pid, {:resolve_query, query_packet, {:doh, client_ip}}, 5000) do
+                device_name = get_device_name(conn)
+                case GenServer.call(pid, {:resolve_query, query_packet, {:doh, client_ip, device_name}}, 5000) do
                   {:ok, response_packet} ->
                     conn
                     |> put_resp_header("content-type", "application/dns-message")
@@ -344,5 +345,20 @@ defmodule HermitWeb.DNSController do
     ip_str
     |> String.to_charlist()
     |> :inet.parse_address()
+  end
+
+  defp get_device_name(conn) do
+    cond do
+      dev = get_header(conn, "x-device-name") -> dev
+      dev = get_header(conn, "x-client-device") -> dev
+      dev = get_header(conn, "x-dns-device") -> dev
+      dev = get_header(conn, "x-forwarded-device") -> dev
+      dev = get_header(conn, "x-dns-client-id") -> dev
+      true -> nil
+    end
+    |> case do
+      nil -> nil
+      str -> String.trim(str)
+    end
   end
 end

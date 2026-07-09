@@ -31,9 +31,9 @@ defmodule HermitWeb.Router do
   #   pipe_through :api
   # end
 
-  scope "/dns-query/:profile_id", HermitWeb do
-    get "/", DNSController, :query
-    post "/", DNSController, :query
+  scope "/dns-query/:doh_token", HermitWeb do
+    get "/", DNSController, :query, log: false
+    post "/", DNSController, :query, log: false
     get "/mobileconfig", DNSController, :mobileconfig
   end
 

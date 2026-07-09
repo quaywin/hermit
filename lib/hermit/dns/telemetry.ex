@@ -22,6 +22,10 @@ defmodule Hermit.Dns.Telemetry do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  def restore_metrics do
+    GenServer.cast(__MODULE__, :restore_metrics)
+  end
+
   # --- GenServer Callbacks ---
 
   @impl true
@@ -48,9 +52,6 @@ defmodule Hermit.Dns.Telemetry do
       ])
     end
 
-    # 3. Restore hourly metrics from SQLite for the last 24 hours
-    restore_metrics_from_db()
-
     # 4. Attach the telemetry handler
     :telemetry.attach(
       "hermit-dns-queries",
@@ -73,6 +74,12 @@ defmodule Hermit.Dns.Telemetry do
   def handle_cast({:enqueue_log, log_data, config_id, block_reason}, state) do
     log_buffer = [{log_data, config_id, block_reason} | state.log_buffer]
     {:noreply, %{state | log_buffer: log_buffer}}
+  end
+
+  @impl true
+  def handle_cast(:restore_metrics, state) do
+    restore_metrics_from_db()
+    {:noreply, state}
   end
 
   @impl true

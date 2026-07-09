@@ -2,14 +2,21 @@ defmodule HermitWeb.DNSController do
   use HermitWeb, :controller
   require Logger
 
-  def query(conn, %{"profile_id" => profile_id_str} = params) do
-    case Integer.parse(profile_id_str) do
-      {profile_id, ""} ->
+  def query(conn, %{"doh_token" => doh_token} = params) do
+    case Hermit.Repo.get_by(Hermit.Vpn.InboundProfile, doh_token: doh_token) do
+      nil ->
+        conn
+        |> put_status(404)
+        |> text("Profile not found")
+
+      profile ->
+        profile_id = profile.id
         case get_dns_packet(conn, params) do
           {:ok, query_packet} ->
             case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
               [{pid, _}] ->
-                case GenServer.call(pid, {:resolve_query, query_packet, {:doh, conn.remote_ip}}, 5000) do
+                client_ip = get_client_ip(conn)
+                case GenServer.call(pid, {:resolve_query, query_packet, {:doh, client_ip}}, 5000) do
                   {:ok, response_packet} ->
                     conn
                     |> put_resp_header("content-type", "application/dns-message")
@@ -30,16 +37,10 @@ defmodule HermitWeb.DNSController do
 
           {:error, :missing_dns_parameter} ->
             # Render a friendly helper page for GET requests without dns parameter (browser visits)
-            case Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id) do
-              nil ->
-                conn |> put_status(404) |> text("Not Found")
-
-              _profile ->
-                config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
-                port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
-                server_url = "https://#{conn.host}#{port_suffix}/dns-query/#{profile_id}"
-                render_mobile_config_page(conn, config, server_url)
-            end
+            config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+            port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
+            server_url = "https://#{conn.host}#{port_suffix}/dns-query/#{doh_token}"
+            render_mobile_config_page(conn, config, server_url)
 
           {:error, reason} ->
             Logger.warning("Failed to get DNS packet from request: #{inspect(reason)}")
@@ -47,80 +48,70 @@ defmodule HermitWeb.DNSController do
             |> put_status(400)
             |> text("Bad Request")
         end
-
-      _ ->
-        conn
-        |> put_status(400)
-        |> text("Invalid profile ID")
     end
   end
 
-  def mobileconfig(conn, %{"profile_id" => profile_id_str}) do
-    case Integer.parse(profile_id_str) do
-      {profile_id, ""} ->
-        case Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id) do
-          nil ->
-            conn |> put_status(404) |> text("Not Found")
+  def mobileconfig(conn, %{"doh_token" => doh_token}) do
+    case Hermit.Repo.get_by(Hermit.Vpn.InboundProfile, doh_token: doh_token) do
+      nil ->
+        conn |> put_status(404) |> text("Not Found")
 
-          _profile ->
-            config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
-            port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
-            server_url = "https://#{conn.host}#{port_suffix}/dns-query/#{profile_id}"
+      profile ->
+        profile_id = profile.id
+        config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+        port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
+        server_url = "https://#{conn.host}#{port_suffix}/dns-query/#{doh_token}"
 
-            payload_uuid = generate_uuid()
-            profile_uuid = generate_uuid()
+        payload_uuid = generate_uuid()
+        profile_uuid = generate_uuid()
 
-            xml = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>PayloadContent</key>
-                <array>
+        xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>PayloadContent</key>
+            <array>
+                <dict>
+                    <key>DNSSettings</key>
                     <dict>
-                        <key>DNSSettings</key>
-                        <dict>
-                            <key>DNSProtocol</key>
-                            <string>HTTPS</string>
-                            <key>ServerURL</key>
-                            <string>#{server_url}</string>
-                        </dict>
-                        <key>PayloadDescription</key>
-                        <string>Configure DNS over HTTPS for Hermit Profile #{config.name}</string>
-                        <key>PayloadDisplayName</key>
-                        <string>Hermit DoH - #{config.name}</string>
-                        <key>PayloadIdentifier</key>
-                        <string>com.hermit.dns.#{profile_id}</string>
-                        <key>PayloadType</key>
-                        <string>com.apple.dnsSettings.managed</string>
-                        <key>PayloadUUID</key>
-                        <string>#{payload_uuid}</string>
-                        <key>PayloadVersion</key>
-                        <integer>1</integer>
+                        <key>DNSProtocol</key>
+                        <string>HTTPS</string>
+                        <key>ServerURL</key>
+                        <string>#{server_url}</string>
                     </dict>
-                </array>
-                <key>PayloadDisplayName</key>
-                <string>Hermit DNS - #{config.name}</string>
-                <key>PayloadIdentifier</key>
-                <string>com.hermit.profile.dns.#{profile_id}</string>
-                <key>PayloadType</key>
-                <string>Configuration</string>
-                <key>PayloadUUID</key>
-                <string>#{profile_uuid}</string>
-                <key>PayloadVersion</key>
-                <integer>1</integer>
-            </dict>
-            </plist>
-            """
+                    <key>PayloadDescription</key>
+                    <string>Configure DNS over HTTPS for Hermit Profile #{config.name}</string>
+                    <key>PayloadDisplayName</key>
+                    <string>Hermit DoH - #{config.name}</string>
+                    <key>PayloadIdentifier</key>
+                    <string>com.hermit.dns.#{profile_id}</string>
+                    <key>PayloadType</key>
+                    <string>com.apple.dnsSettings.managed</string>
+                    <key>PayloadUUID</key>
+                    <string>#{payload_uuid}</string>
+                    <key>PayloadVersion</key>
+                    <integer>1</integer>
+                </dict>
+            </array>
+            <key>PayloadDisplayName</key>
+            <string>Hermit DNS - #{config.name}</string>
+            <key>PayloadIdentifier</key>
+            <string>com.hermit.profile.dns.#{profile_id}</string>
+            <key>PayloadType</key>
+            <string>Configuration</string>
+            <key>PayloadUUID</key>
+            <string>#{profile_uuid}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+        </dict>
+        </plist>
+        """
 
-            conn
-            |> put_resp_header("content-type", "application/x-apple-aspen-config")
-            |> put_resp_header("content-disposition", "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\"")
-            |> send_resp(200, xml)
-        end
-
-      _ ->
-        conn |> put_status(400) |> text("Invalid profile ID")
+        conn
+        |> put_resp_header("content-type", "application/x-apple-aspen-config")
+        |> put_resp_header("content-disposition", "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\"")
+        |> send_resp(200, xml)
     end
   end
 
@@ -310,5 +301,48 @@ defmodule HermitWeb.DNSController do
       [a, b, c, d, e]
     )
     |> List.to_string()
+  end
+
+  defp get_client_ip(conn) do
+    cond do
+      cf_ip = get_header(conn, "cf-connecting-ip") ->
+        cf_ip
+
+      forwarded_for = get_header(conn, "x-forwarded-for") ->
+        forwarded_for
+        |> String.split(",")
+        |> List.first()
+        |> String.trim()
+
+      real_ip = get_header(conn, "x-real-ip") ->
+        real_ip
+        |> String.trim()
+
+      true ->
+        nil
+    end
+    |> case do
+      nil ->
+        conn.remote_ip
+
+      ip_str ->
+        case parse_ip(ip_str) do
+          {:ok, ip} -> ip
+          _ -> conn.remote_ip
+        end
+    end
+  end
+
+  defp get_header(conn, name) do
+    case get_req_header(conn, name) do
+      [value | _] -> value
+      _ -> nil
+    end
+  end
+
+  defp parse_ip(ip_str) do
+    ip_str
+    |> String.to_charlist()
+    |> :inet.parse_address()
   end
 end

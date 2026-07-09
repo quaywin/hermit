@@ -6,6 +6,7 @@ defmodule Hermit.Vpn.InboundProfile do
     field(:name, :string)
     field(:type, :string)
     field(:config, :map, default: %{})
+    field(:doh_token, :string)
 
     belongs_to(:dns_profile, Hermit.Vpn.DnsConfig, foreign_key: :dns_profile_id)
 
@@ -17,10 +18,22 @@ defmodule Hermit.Vpn.InboundProfile do
     attrs = stringify_config_keys(attrs)
 
     inbound_profile
-    |> cast(attrs, [:name, :type, :config, :dns_profile_id])
-    |> validate_required([:name, :type])
+    |> cast(attrs, [:name, :type, :config, :dns_profile_id, :doh_token])
+    |> put_doh_token()
+    |> validate_required([:name, :type, :doh_token])
     |> validate_inclusion(:type, ["tailscale", "proxy"])
     |> validate_config()
+    |> unique_constraint(:doh_token)
+  end
+
+  defp put_doh_token(changeset) do
+    case get_field(changeset, :doh_token) do
+      nil ->
+        token = :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+        put_change(changeset, :doh_token, token)
+      _ ->
+        changeset
+    end
   end
 
   defp stringify_config_keys(attrs) do

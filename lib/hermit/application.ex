@@ -29,6 +29,7 @@ defmodule Hermit.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
         run_migrations()
+        Hermit.Dns.Telemetry.restore_metrics()
         seed_default_local_profile()
         boot_vpn_pairs()
         boot_dns_nodes()

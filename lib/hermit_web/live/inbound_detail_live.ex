@@ -730,7 +730,7 @@ defmodule HermitWeb.InboundDetailLive do
           "https://#{host}:#{port}"
         end
 
-      assign(socket, doh_url: "#{base_url}/dns-query/#{profile.id}")
+      assign(socket, doh_url: "#{base_url}/dns-query/#{profile.doh_token}")
     else
       assign(socket, doh_url: nil)
     end

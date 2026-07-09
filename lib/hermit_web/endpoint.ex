@@ -36,7 +36,9 @@ defmodule HermitWeb.Endpoint do
   end
 
   plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+  plug Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {__MODULE__, :log_level, []}
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
@@ -47,4 +49,11 @@ defmodule HermitWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug HermitWeb.Router
+
+  def log_level(conn) do
+    case conn.path_info do
+      ["dns-query" | _] -> false
+      _ -> :info
+    end
+  end
 end

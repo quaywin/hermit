@@ -128,6 +128,31 @@ HERMIT_PORT=8080 docker compose up -d
 HERMIT_PORT=8080 docker compose -f docker-compose.dev.yml up -d
 ```
 
+### Enforcing Web Dashboard Authentication (Basic Auth)
+
+By default, the web dashboard has no authentication enabled. If you are deploying Hermit on a public VPS or a shared network, you can enforce Basic Authentication by setting the following environment variables in your `.env` file:
+
+```bash
+HERMIT_BASIC_AUTH_USER=admin
+HERMIT_BASIC_AUTH_PASS=your_secure_password
+```
+
+If these environment variables are unset or commented out, authentication will be bypassed.
+
+### Customizing the Tailscale Port & Port Conflicts
+
+By default, the container attempts to bind port `41641/udp` on the host machine. If you run Tailscale directly on the host machine (e.g., via the Tailscale macOS app or `tailscaled` daemon on Linux), Docker will fail to bind this port and return an error: `failed to bind host port 0.0.0.0:41641/udp: address already in use`.
+
+To resolve this conflict:
+1. Open `docker-compose.yml` (and/or `docker-compose.dev.yml`).
+2. Change the host-side port mapping to a free port (e.g., `41642`):
+   ```yaml
+   ports:
+     - "${HERMIT_PORT:-3000}:3000"
+     - "41642:41641/udp"
+   ```
+3. *(Optional but recommended)* Open port `41642/udp` in your VPS firewall to allow Tailscale to establish direct, peer-to-peer (P2P) connections for optimal speed and lowest latency.
+
 ## Why Docker?
 
 Running real-world VPN pairs requires operating-system level root privileges to create network namespaces (`netns`), configure virtual network interfaces, and route traffic via `iptables`.

@@ -9,7 +9,7 @@ defmodule HermitWeb.DNSController do
           {:ok, query_packet} ->
             case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
               [{pid, _}] ->
-                case GenServer.call(pid, {:resolve_query, query_packet, conn.remote_ip}, 5000) do
+                case GenServer.call(pid, {:resolve_query, query_packet, {:doh, conn.remote_ip}}, 5000) do
                   {:ok, response_packet} ->
                     conn
                     |> put_resp_header("content-type", "application/dns-message")

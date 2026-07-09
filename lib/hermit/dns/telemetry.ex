@@ -59,10 +59,85 @@ defmodule Hermit.Dns.Telemetry do
       nil
     )
 
-    # 5. Schedule periodic sync and prune every 10 seconds
-    :erlang.send_after(10_000, self(), :periodic_prune)
+    # 5. Schedule periodic sync and prune every 60 seconds
+    :erlang.send_after(60_000, self(), :periodic_prune)
+    # 6. Schedule periodic log flushing every 1 second
+    :erlang.send_after(1000, self(), :flush_logs)
+    # 7. Schedule daily DB cleanup (once on boot after 5s, then every 24h)
+    :erlang.send_after(5000, self(), :daily_db_cleanup)
 
-    {:ok, %{}}
+    {:ok, %{log_buffer: []}}
+  end
+
+  @impl true
+  def handle_cast({:enqueue_log, log_data, config_id, block_reason}, state) do
+    log_buffer = [{log_data, config_id, block_reason} | state.log_buffer]
+    {:noreply, %{state | log_buffer: log_buffer}}
+  end
+
+  @impl true
+  def handle_info(:flush_logs, state) do
+    :erlang.send_after(1000, self(), :flush_logs)
+
+    if state.log_buffer == [] do
+      {:noreply, state}
+    else
+      logs_to_flush = Enum.reverse(state.log_buffer)
+
+      # 1. Bulk insert to ETS
+      ets_entries =
+        Enum.flat_map(logs_to_flush, fn {log_data, config_id, _} ->
+          pair_id = log_data["pair_id"]
+          counter = System.unique_integer([:monotonic])
+          [
+            {{pair_id, counter}, log_data},
+            {{config_id, counter}, log_data}
+          ]
+        end)
+
+      :ets.insert(@dns_log_table, ets_entries)
+
+      # 2. Hourly stats metrics
+      Enum.each(logs_to_flush, fn {log_data, config_id, block_reason} ->
+        hour_timestamp = div(log_data["timestamp"], 3600) * 3600
+        config_id_str = to_string(config_id)
+        status = log_data["status"]
+
+        :ets.insert_new(@dns_metrics_table, {{config_id, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
+        :ets.insert_new(@dns_metrics_table, {{config_id_str, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
+
+        is_blocked = if status == "blocked", do: 1, else: 0
+        is_ipv6_blocked = if block_reason == "ipv6", do: 1, else: 0
+        is_adguard = if block_reason == "adguard", do: 1, else: 0
+        is_goodbyeads = if block_reason == "goodbyeads", do: 1, else: 0
+        is_adult = if block_reason == "adult", do: 1, else: 0
+        is_custom = if block_reason == "custom_rule", do: 1, else: 0
+
+        updates = [
+          {2, 1},
+          {3, is_blocked},
+          {4, is_ipv6_blocked},
+          {5, is_adguard},
+          {6, is_goodbyeads},
+          {7, is_adult},
+          {8, is_custom}
+        ]
+
+        :ets.update_counter(@dns_metrics_table, {config_id, hour_timestamp}, updates)
+        :ets.update_counter(@dns_metrics_table, {config_id_str, hour_timestamp}, updates)
+      end)
+
+      # 3. Broadcast
+      if :erlang.whereis(Hermit.PubSub) != :undefined do
+        Enum.each(logs_to_flush, fn {log_data, config_id, _} ->
+          pair_id = log_data["pair_id"]
+          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_log, log_data})
+          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs_profile:#{config_id}", {:dns_log, log_data})
+        end)
+      end
+
+      {:noreply, %{state | log_buffer: []}}
+    end
   end
 
   @impl true
@@ -82,15 +157,23 @@ defmodule Hermit.Dns.Telemetry do
       {{{:"$1", :"$2"}, :_, :_, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]}
     ])
 
-    # D. Prune SQLite database metrics older than 30 days
+    :erlang.send_after(60_000, self(), :periodic_prune)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:daily_db_cleanup, state) do
+    # Prune SQLite database metrics older than 30 days
     cutoff_db_time = System.system_time(:second) - 30 * 24 * 3600
     try do
       Repo.delete_all(from(s in HourlyStat, where: s.hour_timestamp < ^cutoff_db_time))
+      Logger.info("Telemetry: Successfully pruned old SQLite metrics.")
     rescue
       e -> Logger.warning("Telemetry: Failed to prune old SQLite metrics: #{inspect(e)}")
     end
 
-    :erlang.send_after(10_000, self(), :periodic_prune)
+    # Schedule next run in 24 hours
+    :erlang.send_after(24 * 3600 * 1000, self(), :daily_db_cleanup)
     {:noreply, state}
   end
 
@@ -110,7 +193,13 @@ defmodule Hermit.Dns.Telemetry do
       duration = Map.get(measurements, :duration)
       profile_id = Map.get(metadata, :profile_id)
       config_id = Map.get(metadata, :config_id)
-      client_ip = Map.get(metadata, :client_ip)
+      client_ip_raw = Map.get(metadata, :client_ip)
+      {client_ip, is_doh} =
+        case client_ip_raw do
+          {:doh, ip} -> {ip, true}
+          ip -> {ip, false}
+        end
+
       domain = Map.get(metadata, :domain)
       qtype = Map.get(metadata, :qtype)
       status = Map.get(metadata, :status)
@@ -118,62 +207,30 @@ defmodule Hermit.Dns.Telemetry do
       resolver = Map.get(metadata, :resolver)
       block_reason = Map.get(metadata, :block_reason)
 
-      Task.start(fn ->
-        pair_id = to_string(profile_id)
-        client_ip_str = ip_to_string(client_ip)
-        client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
+      pair_id = to_string(profile_id)
+      client_ip_str = ip_to_string(client_ip)
 
-        log_data = %{
-          "pair_id" => pair_id,
-          "client_ip" => client_ip_str,
-          "client_name" => client_name || client_ip_str,
-          "domain" => domain,
-          "type" => Packet.qtype_to_string(qtype),
-          "status" => status,
-          "answer" => answer,
-          "resolver" => resolver,
-          "duration_ms" => duration,
-          "timestamp" => System.system_time(:second)
-        }
-
-        counter = System.unique_integer([:monotonic])
-        :ets.insert(@dns_log_table, {{pair_id, counter}, log_data})
-        :ets.insert(@dns_log_table, {{config_id, counter}, log_data})
-
-        # --- Aggregate Hourly Time-Series Metrics ---
-        hour_timestamp = div(log_data["timestamp"], 3600) * 3600
-
-        # Save metrics under config_id (integer and string) to match 100% with the DnsConfig on Web UI
-        config_id_str = to_string(config_id)
-        :ets.insert_new(@dns_metrics_table, {{config_id, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
-        :ets.insert_new(@dns_metrics_table, {{config_id_str, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
-
-        is_blocked = if status == "blocked", do: 1, else: 0
-        is_ipv6_blocked = if block_reason == "ipv6", do: 1, else: 0
-        is_adguard = if block_reason == "adguard", do: 1, else: 0
-        is_goodbyeads = if block_reason == "goodbyeads", do: 1, else: 0
-        is_adult = if block_reason == "adult", do: 1, else: 0
-        is_custom = if block_reason == "custom_rule", do: 1, else: 0
-
-        # Atomically increment values
-        updates = [
-          {2, 1},               # total_queries
-          {3, is_blocked},       # blocked_queries
-          {4, is_ipv6_blocked},  # ipv6_blocked_count
-          {5, is_adguard},       # adguard
-          {6, is_goodbyeads},    # goodbyeads
-          {7, is_adult},         # adult
-          {8, is_custom}         # custom
-        ]
-        :ets.update_counter(@dns_metrics_table, {config_id, hour_timestamp}, updates)
-        :ets.update_counter(@dns_metrics_table, {config_id_str, hour_timestamp}, updates)
-
-        # Broadcast over Phoenix.PubSub channels
-        if :erlang.whereis(Hermit.PubSub) != :undefined do
-          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{profile_id}", {:dns_log, log_data})
-          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs_profile:#{config_id}", {:dns_log, log_data})
+      client_name =
+        if is_doh do
+          nil
+        else
+          Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
         end
-      end)
+
+      log_data = %{
+        "pair_id" => pair_id,
+        "client_ip" => client_ip_str,
+        "client_name" => client_name || client_ip_str,
+        "domain" => domain,
+        "type" => Packet.qtype_to_string(qtype),
+        "status" => status,
+        "answer" => answer,
+        "resolver" => resolver,
+        "duration_ms" => duration,
+        "timestamp" => System.system_time(:second)
+      }
+
+      GenServer.cast(__MODULE__, {:enqueue_log, log_data, config_id, block_reason})
     end
 
     :ok

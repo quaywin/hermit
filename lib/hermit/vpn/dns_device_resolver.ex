@@ -3,7 +3,6 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
   require Logger
 
   @table :dns_device_cache
-  @cache_expiry_seconds 300
 
   # --- Client API ---
 
@@ -12,18 +11,14 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
   end
 
   def resolve_device(profile_id, client_ip) do
-    now = System.system_time(:second)
-
     case :ets.lookup(@table, {profile_id, client_ip}) do
-      [{_, name, inserted_at}] ->
-        if now - inserted_at > @cache_expiry_seconds do
-          trigger_update(profile_id)
-        end
+      [{_, :not_found, _inserted_at}] ->
+        nil
 
+      [{_, name, _inserted_at}] ->
         name
 
       [] ->
-        trigger_update(profile_id)
         nil
     end
   end
@@ -52,8 +47,8 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
       trigger_update(profile_id)
     end)
 
-    # Schedule next update in 60 seconds
-    Process.send_after(self(), :periodic_update, 60_000)
+    # Schedule next update in 5 minutes (300,000 ms)
+    Process.send_after(self(), :periodic_update, 300_000)
     {:noreply, state}
   end
 

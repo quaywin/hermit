@@ -34,6 +34,9 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+ 
+    # Force flush batch buffer
+    send(Hermit.Dns.Telemetry, :flush_logs)
 
     # Assert PubSub broadcast
     assert_receive {:dns_log, received_log}, 1000
@@ -57,6 +60,10 @@ defmodule Hermit.Vpn.DnsTest do
     config_id = 888
     topic = "dns_logs:#{profile_id}"
     Phoenix.PubSub.subscribe(Hermit.PubSub, topic)
+ 
+    # Trigger cache update manually since resolve_device is a pure cache lookup now
+    GenServer.cast(Hermit.Vpn.DnsDeviceResolver, {:trigger_update, profile_id})
+    Process.sleep(150)
 
     # 1. Trigger with mock IP {127, 0, 0, 1} first time (triggers cache update in DnsDeviceResolver)
     :telemetry.execute(
@@ -74,6 +81,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+    send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log1}, 1000
     assert received_log1["client_ip"] == "127.0.0.1"
@@ -97,6 +105,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+    send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log1_cached}, 1000
     assert received_log1_cached["client_name"] == "localhost"
@@ -117,6 +126,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+    send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log2}, 1000
     assert received_log2["client_ip"] == "100.64.0.5"
@@ -140,6 +150,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+    send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log2_cached}, 1000
     assert received_log2_cached["client_name"] == "mock-client"

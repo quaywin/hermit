@@ -235,6 +235,7 @@
                             "block" -> "bg-red-500/10 text-red-500 border-red-500/20"
                             "bypass" -> "bg-blue-500/10 text-blue-500 border-blue-500/20"
                             "redirect" -> "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                            "forward_proxy" -> "bg-purple-500/10 text-purple-500 border-purple-500/20"
                           end
                         ]}>
                           {rule["action"]}
@@ -279,6 +280,7 @@
                   <option value="block" selected={@custom_rule_action == "block"}>Block</option>
                   <option value="bypass" selected={@custom_rule_action == "bypass"}>Bypass Filter</option>
                   <option value="redirect" selected={@custom_rule_action == "redirect"}>Redirect IP</option>
+                  <option value="forward_proxy" selected={@custom_rule_action == "forward_proxy"}>Forward Proxy</option>
                 </select>
               </div>
 
@@ -292,6 +294,28 @@
                     required
                     class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
                   />
+                </div>
+              <% end %>
+
+              <%= if @custom_rule_action == "forward_proxy" do %>
+                <div class="w-full md:w-48">
+                  <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Target Tunnel</label>
+                  <select
+                    name="value"
+                    required
+                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs focus:outline-none cursor-pointer"
+                  >
+                    <option value="">Select Tunnel...</option>
+                    <%= for pair <- @vpn_pairs do %>
+                      <option value={pair.pair_id}>
+                        <%= if Ecto.assoc_loaded?(pair.inbound_profile) && pair.inbound_profile && Ecto.assoc_loaded?(pair.outbound_profile) && pair.outbound_profile do %>
+                          {pair.pair_id} ({pair.inbound_profile.name} -> {pair.outbound_profile.name})
+                        <% else %>
+                          {pair.pair_id} ({pair.inbound_type} -> {pair.outbound_type})
+                        <% end %>
+                      </option>
+                    <% end %>
+                  </select>
                 </div>
               <% end %>
 

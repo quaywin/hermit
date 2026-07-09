@@ -35,4 +35,5 @@ config :hermit, :storage, base_path: Path.expand("storage", File.cwd!())
 config :hermit, Hermit.Repo,
   database: Path.expand("storage/hermit_test.db", File.cwd!()),
   pool: Ecto.Adapters.SQL.Sandbox,
+  journal_mode: :delete,
   pool_size: 5

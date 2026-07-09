@@ -144,7 +144,7 @@ defmodule Hermit.Vpn.DnsConfig do
   defp valid_rule?(rule) when is_map(rule) do
     domain = Map.get(rule, "domain") || Map.get(rule, :domain)
     action = Map.get(rule, "action") || Map.get(rule, :action)
-    action in ["block", "bypass", "redirect"] and is_binary(domain) and domain != ""
+    action in ["block", "bypass", "redirect", "forward_proxy"] and is_binary(domain) and domain != ""
   end
 
   defp valid_rule?(_), do: false

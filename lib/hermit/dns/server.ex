@@ -286,6 +286,7 @@ defmodule Hermit.Dns.Server do
         expected_url =
           case upstream do
             {:doh, u} -> u
+            {:doh_proxy, u, _pair_id} -> u
             _ -> nil
           end
 
@@ -333,7 +334,11 @@ defmodule Hermit.Dns.Server do
               ttl
             )
 
-            resolver_tag = "DoH (#{extract_host(url)})"
+            resolver_tag =
+              case upstream do
+                {:doh_proxy, _url, pair_id} -> "Proxy: #{pair_id}"
+                _ -> "DoH (#{extract_host(url)})"
+              end
 
             :telemetry.execute(
               [:hermit, :dns, :query],
@@ -371,10 +376,17 @@ defmodule Hermit.Dns.Server do
 
     new_state =
       Enum.reduce(state.pending_queries, state, fn {tx_id, info}, acc_state ->
-        {_client_ip, _client_port, _original_query, sent_at, _target_upstreams, _current_index, _original_tx_id} = info
+        {_client_ip, _client_port, _original_query, sent_at, target_upstreams, current_index, _original_tx_id} = info
 
-        # Nếu bị quá hạn 2 giây mà chưa nhận được phản hồi
-        if now - sent_at >= 2000 do
+        current_upstream = elem(target_upstreams, current_index)
+        timeout_limit =
+          case current_upstream do
+            {:doh, _} -> 4000
+            {:doh_proxy, _, _} -> 4000
+            _ -> 2000
+          end
+
+        if now - sent_at >= timeout_limit do
           handle_upstream_failure(tx_id, acc_state)
         else
           acc_state
@@ -715,6 +727,23 @@ defmodule Hermit.Dns.Server do
             end
 
             state
+
+          "forward_proxy" when not is_nil(redirect_val) ->
+            doh_url =
+              case Enum.find(upstreams, fn target -> match?({:doh, _}, target) end) do
+                {:doh, url} -> url
+                _ -> "https://cloudflare-dns.com/dns-query"
+              end
+
+            case get_proxy_port_for_pair(redirect_val) do
+              {:ok, proxy_port} ->
+                async_forward_to_proxy(socket, ip, port, packet, query, doh_url, proxy_port, redirect_val, state)
+
+              {:error, reason} ->
+                Logger.error("DNS Server: Failed to get proxy port for pair #{redirect_val}: #{inspect(reason)}")
+                target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
+                async_forward_to_upstream(socket, ip, port, packet, query, target_upstreams, state)
+            end
 
           _ ->
             # Split routing based on domain
@@ -1140,6 +1169,115 @@ defmodule Hermit.Dns.Server do
   end
 
   defp ip_to_string(other), do: to_string(other)
+
+  defp get_proxy_port_for_pair(pair_id) do
+    if mock?() do
+      {:ok, 8080}
+    else
+      storage_base =
+        case Application.get_env(:hermit, :storage, []) |> Keyword.get(:base_path) do
+          nil -> "/app/storage"
+          path -> path
+        end
+
+      storage_dir = Path.join(storage_base, to_string(pair_id))
+      proxy_info_path = Path.join(storage_dir, "proxy_info.json")
+
+      case File.read(proxy_info_path) do
+        {:ok, content} ->
+          case Jason.decode(content) do
+            {:ok, %{"http_port" => port}} -> {:ok, port}
+            _ -> {:error, :invalid_proxy_info}
+          end
+
+        {:error, _} ->
+          {:error, :no_proxy_info}
+      end
+    end
+  end
+
+  defp get_or_make_proxy_client(proxy_port, state) do
+    proxy_clients = Map.get(state, :proxy_clients, %{})
+
+    case Map.get(proxy_clients, proxy_port) do
+      nil ->
+        client =
+          Req.new(
+            connect_options: [
+              protocols: [:http2, :http1],
+              proxy: {:http, "127.0.0.1", proxy_port, []}
+            ],
+            retry: false,
+            receive_timeout: 4000
+          )
+
+        new_proxy_clients = Map.put(proxy_clients, proxy_port, client)
+        {client, Map.put(state, :proxy_clients, new_proxy_clients)}
+
+      client ->
+        {client, state}
+    end
+  end
+
+  defp async_forward_to_proxy(_socket, ip, port, packet, query, doh_url, proxy_port, pair_id, state) do
+    {doh_client, state} = get_or_make_proxy_client(proxy_port, state)
+    proxy_url = "http://127.0.0.1:#{proxy_port}"
+
+    server_pid = self()
+    <<_tx_id::16, _::binary>> = packet
+
+    upstream_tx_id = state.next_tx_id
+    next_tx_id = rem(upstream_tx_id + 1, 65536)
+    upstream_tx_id_bin = <<upstream_tx_id::16>>
+
+    <<_old_id::binary-size(2), rest_packet::binary>> = packet
+    rewritten_packet = upstream_tx_id_bin <> rest_packet
+
+    now = System.monotonic_time(:millisecond)
+
+    Task.start(fn ->
+      start = System.monotonic_time()
+
+      case Req.post(doh_client,
+             url: doh_url,
+             headers: [
+               {"content-type", "application/dns-message"},
+               {"accept", "application/dns-message"}
+             ],
+             body: rewritten_packet
+           ) do
+        {:ok, %{status: 200, body: resp_packet}} ->
+          <<upstream_tx_id_resp::16, _::binary>> = resp_packet
+
+          final_packet =
+            if upstream_tx_id_resp != upstream_tx_id do
+              <<_::16, rest::binary>> = resp_packet
+              upstream_tx_id_bin <> rest
+            else
+              resp_packet
+            end
+
+          duration =
+            System.convert_time_unit(
+              System.monotonic_time() - start,
+              :native,
+              :millisecond
+            )
+
+          send(server_pid, {:doh_response, upstream_tx_id, doh_url, final_packet, duration})
+
+        other ->
+          Logger.warning("DNS Server: DoH proxy query to #{doh_url} via #{proxy_url} failed: #{inspect(other)}")
+          send(server_pid, {:doh_failure, upstream_tx_id, doh_url})
+      end
+    end)
+
+    upstreams_tuple = {{:doh_proxy, doh_url, pair_id}}
+    query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
+    new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
+
+    %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
+  end
 
   defp mock? do
     config = Application.get_env(:hermit, :docker, [])

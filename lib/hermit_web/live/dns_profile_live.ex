@@ -7,6 +7,7 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def mount(_params, _session, socket) do
     dns_profiles = Hermit.Repo.all(from(d in DnsConfig, order_by: d.name)) |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+    vpn_pairs = Hermit.Repo.all(from(p in Hermit.Vpn.VpnPair, order_by: p.pair_id)) |> Hermit.Repo.preload([:inbound_profile, :outbound_profile])
 
     # Chọn profile đầu tiên làm mặc định nếu có, hoặc nil
     selected_profile = List.first(dns_profiles)
@@ -30,6 +31,7 @@ defmodule HermitWeb.DnsProfileLive do
      socket
      |> assign(dns_profiles: dns_profiles)
      |> assign(selected_profile: selected_profile)
+     |> assign(vpn_pairs: vpn_pairs)
      |> assign(available_blocklists: fetch_available_blocklists())
      |> assign(dns_logs: dns_logs)
      |> assign(dns_metrics: dns_metrics)
@@ -291,14 +293,14 @@ defmodule HermitWeb.DnsProfileLive do
     custom_rules = profile.custom_rules || []
 
     domain = String.trim(domain) |> String.downcase()
-    value = if action == "redirect", do: String.trim(Map.get(params, "value", "")), else: nil
+    value = if action in ["redirect", "forward_proxy"], do: String.trim(Map.get(params, "value", "")), else: nil
 
     cond do
       domain == "" ->
         {:noreply, put_flash(socket, :error, "Domain cannot be empty.")}
 
-      action == "redirect" and (is_nil(value) or value == "") ->
-        {:noreply, put_flash(socket, :error, "Redirect IP value cannot be empty.")}
+      action in ["redirect", "forward_proxy"] and (is_nil(value) or value == "") ->
+        {:noreply, put_flash(socket, :error, "Target value cannot be empty.")}
 
       true ->
         new_rule = %{"domain" => domain, "action" => action, "value" => value}

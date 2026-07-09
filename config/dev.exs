@@ -88,4 +88,5 @@ config :hermit, :storage, base_path: Path.expand("storage", File.cwd!())
 config :hermit, Hermit.Repo,
   database: Path.expand("storage/hermit_dev.db", File.cwd!()),
   pool_size: 5,
+  journal_mode: :delete,
   show_sensitive_data_on_connection_error: true

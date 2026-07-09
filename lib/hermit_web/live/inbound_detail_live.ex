@@ -46,12 +46,13 @@ defmodule HermitWeb.InboundDetailLive do
          |> assign(dns_error: dns_error)
          |> assign(custom_rule_action: "block")
          |> assign(vpn_pairs: [])
+         |> assign(doh_url: nil)
          |> assign(editing_inbound_form: to_form(changeset))}
     end
   end
 
   @impl true
-  def handle_params(params, _url, socket) do
+  def handle_params(params, url, socket) do
     active_tab =
       case Map.get(params, "tab", "config") do
         "dns" when socket.assigns.profile.type == "tailscale" -> :dns
@@ -65,6 +66,8 @@ defmodule HermitWeb.InboundDetailLive do
       else
         socket
       end
+
+    socket = assign_doh_url(socket, url)
 
     {:noreply, assign(socket, active_tab: active_tab)}
   end
@@ -711,6 +714,25 @@ defmodule HermitWeb.InboundDetailLive do
       Map.put(params, "config", updated_config)
     else
       params
+    end
+  end
+
+  defp assign_doh_url(socket, uri) do
+    profile = socket.assigns.profile
+
+    if profile do
+      %URI{host: host, port: port} = URI.parse(uri)
+
+      base_url =
+        if port in [80, 443, nil] do
+          "https://#{host}"
+        else
+          "https://#{host}:#{port}"
+        end
+
+      assign(socket, doh_url: "#{base_url}/dns-query/#{profile.id}")
+    else
+      assign(socket, doh_url: nil)
     end
   end
 end

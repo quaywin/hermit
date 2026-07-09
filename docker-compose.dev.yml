@@ -19,4 +19,6 @@ services:
       - PORT=3000
       - PHX_HOST=localhost
       - STORAGE_BASE_PATH=/app/storage
+      - HERMIT_BASIC_AUTH_USER
+      - HERMIT_BASIC_AUTH_PASS
     restart: unless-stopped

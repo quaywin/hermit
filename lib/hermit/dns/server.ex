@@ -116,6 +116,24 @@ defmodule Hermit.Dns.Server do
   end
 
   @impl true
+  def handle_call({:resolve_query, packet, client_ip}, from, state) do
+    case Packet.parse(packet) do
+      {:ok, query} ->
+        new_state = process_query_fast_path(nil, client_ip, from, packet, query, state)
+        {:noreply, new_state}
+
+      {:error, _reason} ->
+        if byte_size(packet) >= 12 do
+          <<id::binary-size(2), _::binary>> = packet
+          err_resp = <<id::binary, 0x81, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+          {:reply, {:ok, err_resp}, state}
+        else
+          {:reply, {:error, :bad_packet}, state}
+        end
+    end
+  end
+
+  @impl true
   def handle_info({:dns_config_updated, updated_config}, state) do
     upstreams = parse_upstreams(updated_config.upstream_dns)
     new_state = sync_upstreams_config(state, upstreams)
@@ -187,7 +205,7 @@ defmodule Hermit.Dns.Server do
               client_packet = original_tx_id <> rest_packet
 
               # Send response packet back to client immediately
-              :gen_udp.send(client_socket, client_ip, client_port, client_packet)
+              send_client_response(client_socket, client_ip, client_port, client_packet)
 
               # Calculate resolution duration and cast back to server
               duration = System.monotonic_time(:millisecond) - sent_at
@@ -285,7 +303,7 @@ defmodule Hermit.Dns.Server do
             client_packet = original_tx_id <> rest_packet
 
             # Send response packet back to client
-            :gen_udp.send(client_socket, client_ip, client_port, client_packet)
+            send_client_response(client_socket, client_ip, client_port, client_packet)
 
             # Log latency update
             GenServer.cast(server_pid, {:update_latency, upstream, duration})
@@ -484,7 +502,7 @@ defmodule Hermit.Dns.Server do
     # 0. AAAA Blocking (Filter IPv6)
     if query.qtype == :AAAA and Map.get(config, :block_ipv6, false) do
       resp = Packet.build_empty_response(query.id, query.query_record)
-      :gen_udp.send(socket, ip, port, resp)
+      send_client_response(socket, ip, port, resp)
 
       :telemetry.execute(
         [:hermit, :dns, :query],
@@ -510,7 +528,7 @@ defmodule Hermit.Dns.Server do
         {:ok, cached_packet, status, answer_log_info} ->
         <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
         resp_packet = query.id <> rest_packet
-        :gen_udp.send(socket, ip, port, resp_packet)
+        send_client_response(socket, ip, port, resp_packet)
 
         cached_answer =
           if status == "resolved" do
@@ -596,7 +614,7 @@ defmodule Hermit.Dns.Server do
 
             # Store blocks in cache with 5s TTL
             Cache.store(profile_id, query.domain, query.qtype, resp, "blocked", answer_log_info, 5)
-            :gen_udp.send(socket, ip, port, resp)
+            send_client_response(socket, ip, port, resp)
 
             :telemetry.execute(
               [:hermit, :dns, :query],
@@ -631,7 +649,7 @@ defmodule Hermit.Dns.Server do
                 5
               )
 
-              :gen_udp.send(socket, ip, port, resp)
+              send_client_response(socket, ip, port, resp)
 
               :telemetry.execute(
                 [:hermit, :dns, :query],
@@ -661,7 +679,7 @@ defmodule Hermit.Dns.Server do
                 5
               )
 
-              :gen_udp.send(socket, ip, port, resp)
+              send_client_response(socket, ip, port, resp)
 
               :telemetry.execute(
                 [:hermit, :dns, :query],
@@ -738,7 +756,7 @@ defmodule Hermit.Dns.Server do
       # Return SERVFAIL if no upstreams configured
       servfail = Packet.build_nxdomain(query.id, query.query_record)
       servfail = Packet.patch_rcode(servfail, 2)
-      :gen_udp.send(socket, ip, port, servfail)
+      send_client_response(socket, ip, port, servfail)
       state
     else
       # Sinh unique upstream transaction ID mới
@@ -894,7 +912,7 @@ defmodule Hermit.Dns.Server do
               # Sửa ID của stale packet thành ID gốc của client và gửi đi
               <<_::binary-size(2), rest_packet::binary>> = stale_packet
               client_packet = original_tx_id <> rest_packet
-              :gen_udp.send(state.socket, client_ip, client_port, client_packet)
+              send_client_response(state.socket, client_ip, client_port, client_packet)
 
               # Bắn telemetry event cho stale response
               :telemetry.execute(
@@ -917,7 +935,7 @@ defmodule Hermit.Dns.Server do
               # Nếu thực sự không có stale cache, trả SERVFAIL như cũ
               servfail = Packet.build_nxdomain(original_tx_id, original_query.query_record)
               servfail = Packet.patch_rcode(servfail, 2)
-              :gen_udp.send(state.socket, client_ip, client_port, servfail)
+              send_client_response(state.socket, client_ip, client_port, servfail)
 
               # Lưu cache lỗi SERVFAIL trong 5 giây (Negative Caching)
               Cache.store(
@@ -953,6 +971,14 @@ defmodule Hermit.Dns.Server do
 
       nil ->
         state
+    end
+  end
+
+  defp send_client_response(socket, ip, port, resp) do
+    if is_tuple(port) do
+      GenServer.reply(port, {:ok, resp})
+    else
+      :gen_udp.send(socket, ip, port, resp)
     end
   end
 

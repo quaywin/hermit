@@ -507,4 +507,6 @@ defmodule HermitWeb.DnsProfileLive do
       end
     Enum.map(raw_logs, &to_log_struct/1)
   end
+
+
 end

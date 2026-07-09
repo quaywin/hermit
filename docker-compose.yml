@@ -5,7 +5,7 @@ services:
     # network_mode: host # Sửa thành ports mapping để chạy chế độ cô lập (Bridge Mode)
     ports:
       - "${HERMIT_PORT:-3000}:3000" # Web dashboard
-      - "41641:41641/udp" # Tailscale UDP port
+      - "41642:41641/udp" # Tailscale UDP port
     privileged: true
     volumes:
       # Mount storage directory for Sandboxed configurations

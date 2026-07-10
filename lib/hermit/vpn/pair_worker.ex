@@ -12,7 +12,8 @@ defmodule Hermit.Vpn.PairWorker do
     ts_user: "Unknown",
     ts_magic_dns: "",
     ts_exit_node: false,
-    wg_port: nil
+    wg_port: nil,
+    latency: nil
   }
 
   defstruct [
@@ -41,7 +42,9 @@ defmodule Hermit.Vpn.PairWorker do
     inbound_type: "tailscale",
     metrics_timer: nil,
     outbound_if: "wg0",
-    bootstrap_task: nil
+    bootstrap_task: nil,
+    current_ping_task: nil,
+    latency_last_checked_at: 0
   ]
 
   # --- Client API ---
@@ -310,16 +313,7 @@ defmodule Hermit.Vpn.PairWorker do
             ts_status: String.to_atom((pair && pair.ts_status) || "stopped"),
             wg_error_reason: pair && pair.wg_error_reason,
             ts_error_reason: pair && pair.ts_error_reason,
-            metrics: %{
-              bytes_received: 0,
-              bytes_sent: 0,
-              ts_ips: [],
-              ts_backend_state: "Offline",
-              ts_user: "Unknown",
-              ts_magic_dns: "",
-              ts_exit_node: false,
-              wg_port: nil
-            },
+            metrics: @default_metrics,
             storage_dir: Path.join(get_storage_base_path(), id),
             started_at: pair && pair.started_at,
             ts_port: nil,
@@ -392,16 +386,7 @@ defmodule Hermit.Vpn.PairWorker do
                 ts_status: String.to_atom((pair && pair.ts_status) || "stopped"),
                 wg_error_reason: pair && pair.wg_error_reason,
                 ts_error_reason: pair && pair.ts_error_reason,
-                metrics: %{
-                  bytes_received: 0,
-                  bytes_sent: 0,
-                  ts_ips: [],
-                  ts_backend_state: "Offline",
-                  ts_user: "Unknown",
-                  ts_magic_dns: "",
-                  ts_exit_node: false,
-                  wg_port: nil
-                },
+                metrics: @default_metrics,
                 storage_dir: Path.join(get_storage_base_path(), id),
                 started_at: pair && pair.started_at,
                 ts_port: nil,
@@ -560,16 +545,7 @@ defmodule Hermit.Vpn.PairWorker do
       ts_status: ts_status,
       wg_error_reason: nil,
       ts_error_reason: nil,
-      metrics: %{
-        bytes_received: 0,
-        bytes_sent: 0,
-        ts_ips: [],
-        ts_backend_state: "Offline",
-        ts_user: "Unknown",
-        ts_magic_dns: "",
-        ts_exit_node: false,
-        wg_port: nil
-      },
+      metrics: @default_metrics,
       storage_dir: storage_dir,
       started_at: started_at,
       ts_port: nil,
@@ -928,6 +904,7 @@ defmodule Hermit.Vpn.PairWorker do
       | outbound_config: new_config,
         wg_config_content: new_wg_config
     }
+
     updated_state = maybe_shutdown_bootstrap_task(updated_state)
 
     try do
@@ -1025,10 +1002,13 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:start_ts}, _from, state) do
     cond do
       state.wg_status != :running ->
-        {:reply, {:error, "WireGuard is not running. Outbound connection must be established first."}, state}
+        {:reply,
+         {:error, "WireGuard is not running. Outbound connection must be established first."},
+         state}
 
       not netns_exists?(state.wg_container_name) ->
-        {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."}, state}
+        {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."},
+         state}
 
       true ->
         updated_state = %{state | ts_status: :starting, ts_error_reason: nil}
@@ -1065,10 +1045,13 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call({:restart_ts}, _from, state) do
     cond do
       state.wg_status != :running ->
-        {:reply, {:error, "WireGuard is not running. Outbound connection must be established first."}, state}
+        {:reply,
+         {:error, "WireGuard is not running. Outbound connection must be established first."},
+         state}
 
       not netns_exists?(state.wg_container_name) ->
-        {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."}, state}
+        {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."},
+         state}
 
       true ->
         Logger.info("Restarting Tailscale for pair: #{state.id}")
@@ -1188,15 +1171,36 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:DOWN, ref, :process, _task_pid, reason}, state) do
-    if state.bootstrap_task && state.bootstrap_task.ref == ref do
-      Logger.error(
-        "Bootstrap task for pair #{state.id} crashed or exited prematurely: #{inspect(reason)}"
-      )
+    cond do
+      state.bootstrap_task && state.bootstrap_task.ref == ref ->
+        Logger.error(
+          "Bootstrap task for pair #{state.id} crashed or exited prematurely: #{inspect(reason)}"
+        )
 
-      handle_bootstrap_result(
-        {:error, {:bootstrap_crashed, reason}},
-        %{state | bootstrap_task: nil}
-      )
+        handle_bootstrap_result(
+          {:error, {:bootstrap_crashed, reason}},
+          %{state | bootstrap_task: nil}
+        )
+
+      state.current_ping_task && state.current_ping_task.ref == ref ->
+        metrics = Map.put(state.metrics || %{}, :latency, :error)
+        updated_state = %{state | metrics: metrics, current_ping_task: nil}
+        updated_state = broadcast_update(updated_state)
+        {:noreply, updated_state}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({ref, latency}, state) do
+    if state.current_ping_task && state.current_ping_task.ref == ref do
+      Process.demonitor(ref, [:flush])
+      metrics = Map.put(state.metrics || %{}, :latency, latency)
+      updated_state = %{state | metrics: metrics, current_ping_task: nil}
+      updated_state = broadcast_update(updated_state)
+      {:noreply, updated_state}
     else
       {:noreply, state}
     end
@@ -1227,6 +1231,24 @@ defmodule Hermit.Vpn.PairWorker do
             end
 
           metrics = Map.merge(outbound_metrics, inbound_info)
+
+          # Preserve existing latency in the new metrics map
+          existing_latency = Map.get(state.metrics || %{}, :latency)
+          metrics = Map.put(metrics, :latency, existing_latency)
+
+          now = System.system_time(:second)
+
+          state =
+            if is_nil(state.current_ping_task) and now - state.latency_last_checked_at >= 30 do
+              task =
+                Task.async(fn ->
+                  measure_ping(state.outbound_module, state.id)
+                end)
+
+              %{state | current_ping_task: task, latency_last_checked_at: now}
+            else
+              state
+            end
 
           updated_state = %{state | metrics: metrics, wg_retry_count: 0}
           updated_state = broadcast_update(updated_state)
@@ -1527,6 +1549,7 @@ defmodule Hermit.Vpn.PairWorker do
 
   defp retry_health_check(0, state) do
     Logger.error("WireGuard tunnel handshake timeout for pair: #{state.id}")
+
     error_state = %{
       state
       | wg_status: :error,
@@ -1534,6 +1557,7 @@ defmodule Hermit.Vpn.PairWorker do
         ts_status: if(state.ts_status == :starting, do: :stopped, else: state.ts_status),
         ts_error_reason: nil
     }
+
     updated_state = broadcast_update(error_state)
     maybe_schedule_wg_recovery(updated_state)
     updated_state = schedule_metrics_poll(updated_state)
@@ -1559,7 +1583,17 @@ defmodule Hermit.Vpn.PairWorker do
       Process.cancel_timer(state.metrics_timer)
     end
 
-    %{state | metrics_timer: nil}
+    state = %{state | metrics_timer: nil}
+    cancel_ping_task(state)
+  end
+
+  defp cancel_ping_task(state) do
+    if state.current_ping_task do
+      Process.demonitor(state.current_ping_task.ref, [:flush])
+      Task.shutdown(state.current_ping_task, :brutal_kill)
+    end
+
+    %{state | current_ping_task: nil}
   end
 
   defp maybe_schedule_wg_recovery(state) do
@@ -1811,7 +1845,6 @@ defmodule Hermit.Vpn.PairWorker do
     end
   end
 
-
   defp maybe_shutdown_bootstrap_task(state) do
     if state.bootstrap_task do
       Logger.info("Shutting down active bootstrap task for pair #{state.id}")
@@ -1858,6 +1891,44 @@ defmodule Hermit.Vpn.PairWorker do
         maybe_schedule_ts_recovery(updated_state)
         updated_state = schedule_metrics_poll(updated_state)
         {:noreply, updated_state}
+    end
+  end
+
+  defp measure_ping(outbound_module, pair_id) do
+    cond do
+      mock?() ->
+        :rand.uniform(60) + 20
+
+      outbound_module == Hermit.Vpn.Outbound.Local ->
+        :n_a
+
+      true ->
+        wg_name = "hermit_wg_#{pair_id}"
+
+        case System.cmd(
+               "ip",
+               [
+                 "netns",
+                 "exec",
+                 wg_name,
+                 "curl",
+                 "-o",
+                 "/dev/null",
+                 "-s",
+                 "-w",
+                 "%{time_connect}",
+                 "--connect-timeout",
+                 "2",
+                 "http://1.1.1.1"
+               ],
+               stderr_to_stdout: false
+             ) do
+          {output, _exit_code} ->
+            case Float.parse(String.trim(output)) do
+              {val, _} when val > 0.0 -> round(val * 1000)
+              _ -> :error
+            end
+        end
     end
   end
 end

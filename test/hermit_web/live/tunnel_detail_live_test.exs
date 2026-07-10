@@ -73,8 +73,8 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     assert html =~ "Tunnel Detail: detail_test"
     assert html =~ "Stopped"
 
-    # 1. Trigger start Wireguard
-    html = view |> element("button", "Start Wireguard") |> render_click()
+    # 1. Trigger start Wireguard (unified button "Start Tunnel")
+    html = view |> element("button", "Start Tunnel") |> render_click()
     assert html =~ "Starting"
 
     # Simulate state updates to running
@@ -98,8 +98,8 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     assert html =~ "Listening Port:"
     assert html =~ "51820"
 
-    # 2. Trigger stop Wireguard
-    html = view |> element("button", "Stop Wireguard") |> render_click()
+    # 2. Trigger stop Wireguard (unified button "Stop Tunnel")
+    html = view |> element("button", "Stop Tunnel") |> render_click()
     assert html =~ "Stopped"
 
     # 3. Trigger delete tunnel
@@ -237,11 +237,11 @@ defmodule HermitWeb.TunnelDetailLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/tunnels/target_t")
 
-    # Click "Start Wireguard" button
-    html = view |> element("button", "Start Wireguard") |> render_click()
+    # Click "Start Tunnel" button
+    html = view |> element("button", "Start Tunnel") |> render_click()
 
     assert html =~
-             "Failed to start Wireguard: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
+             "Failed to start Tunnel: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
   end
 
   test "toggles exit node and app connector dynamically", %{conn: conn} do

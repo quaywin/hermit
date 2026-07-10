@@ -919,6 +919,43 @@ defmodule Hermit.Vpn.PairWorkerTest do
     GenServer.stop(pid1)
   end
 
+  test "measures latency periodically during metrics poll" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+    end)
+
+    args = %{
+      id: "test_pair",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, pid} = PairWorker.start_link(args)
+    # Wait for bootstrap to complete and transition to running
+    wait_until_status(pid, :running)
+
+    # Force a metrics poll
+    send(pid, :poll_metrics)
+
+    # Wait for the async task to spawn and send result
+    Process.sleep(100)
+
+    state = GenServer.call(pid, :get_state)
+    assert is_integer(state.metrics.latency)
+    assert state.metrics.latency >= 20 and state.metrics.latency <= 80
+
+    GenServer.stop(pid)
+  end
+
   defp wait_until_status(pid, target_status, attempts \\ 300)
 
   defp wait_until_status(_pid, target_status, 0) do

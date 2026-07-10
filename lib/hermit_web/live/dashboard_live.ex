@@ -99,6 +99,67 @@ defmodule HermitWeb.DashboardLive do
   end
 
   @impl true
+  def handle_event("start_tunnel", %{"id" => id}, socket) do
+    vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
+
+    case Hermit.Vpn.VpnPair.check_outbound_conflict(vpn_pair.outbound_profile_id, id) do
+      {:error, conflicting_id} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Failed to start Tunnel '#{id}': Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+         )}
+
+      :ok ->
+        case PairWorker.resume_pair(id) do
+          {:ok, _pair} ->
+            {:noreply, put_flash(socket, :info, "Tunnel '#{id}' starting...")}
+
+          {:error, reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Failed to start Tunnel '#{id}': #{inspect(reason)}")}
+        end
+    end
+  end
+
+  @impl true
+  def handle_event("stop_tunnel", %{"id" => id}, socket) do
+    case PairWorker.pause_pair(id) do
+      {:ok, _pair} ->
+        {:noreply, put_flash(socket, :info, "Tunnel '#{id}' stopped.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to stop Tunnel '#{id}': #{inspect(reason)}")}
+    end
+  end
+
+  @impl true
+  def handle_event("restart_tunnel", %{"id" => id}, socket) do
+    vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
+
+    case Hermit.Vpn.VpnPair.check_outbound_conflict(vpn_pair.outbound_profile_id, id) do
+      {:error, conflicting_id} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Failed to restart Tunnel '#{id}': Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+         )}
+
+      :ok ->
+        case PairWorker.restart_pair(id) do
+          {:ok, _pair} ->
+            {:noreply, put_flash(socket, :info, "Tunnel '#{id}' restarting...")}
+
+          {:error, reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Failed to restart Tunnel '#{id}': #{inspect(reason)}")}
+        end
+    end
+  end
+
+  @impl true
   def handle_event("delete", %{"id" => id}, socket) do
     case DynamicSupervisor.stop_pair(id) do
       :ok ->

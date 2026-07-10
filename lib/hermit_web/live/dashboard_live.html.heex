@@ -29,6 +29,7 @@
             <th class="py-3 px-4">Inbound State</th>
             <th class="py-3 px-4">Outbound State</th>
             <th class="py-3 px-4">Traffic (Rx/Tx)</th>
+            <th class="py-3 px-4">Ping</th>
             <th class="py-3 px-4 text-right">Actions</th>
           </tr>
         </thead>
@@ -50,9 +51,14 @@
                       class="inline-flex items-center justify-center p-1 rounded bg-[#ff7e47]/10 text-[#ff7e47] border border-[#ff7e47]/20"
                       title="Tailscale Inbound"
                     >
-                      <svg class="size-4 fill-current" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <svg
+                        class="size-4 fill-current"
+                        role="img"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
                         <title>Tailscale</title>
-                        <path d="M24 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm-9 9a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm0-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6-6a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 24a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zm18 .5a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM6 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm9-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm-3 2.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM6 3a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM3 5.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/>
+                        <path d="M24 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm-9 9a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm0-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6-6a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 24a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zm18 .5a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM6 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm9-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm-3 2.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM6 3a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM3 5.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" />
                       </svg>
                     </span>
                   <% "proxy" -> %>
@@ -89,8 +95,7 @@
                   </span>
                 <% :stopped -> %>
                   <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span>
-                    Stopped
+                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
                   </span>
                 <% :error -> %>
                   <span
@@ -115,8 +120,7 @@
                   </span>
                 <% :stopped -> %>
                   <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span>
-                    Stopped
+                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
                   </span>
                 <% :error -> %>
                   <span
@@ -129,14 +133,185 @@
             </td>
             <td class="py-4 px-4 text-xs font-mono text-base-content/60">
               <div class="flex items-center gap-1">
-                <span class="text-emerald-500 font-semibold">↓</span> {format_bytes(pair.metrics.bytes_received)}
+                <span class="text-emerald-500 font-semibold">↓</span> {format_bytes(
+                  pair.metrics.bytes_received
+                )}
               </div>
               <div class="flex items-center gap-1 mt-0.5">
-                <span class="text-base-content/50 font-semibold">↑</span> {format_bytes(pair.metrics.bytes_sent)}
+                <span class="text-base-content/50 font-semibold">↑</span> {format_bytes(
+                  pair.metrics.bytes_sent
+                )}
               </div>
+            </td>
+            <td class="py-4 px-4 font-mono text-xs">
+              <%= case Map.get(pair.metrics || %{}, :latency) do %>
+                <% nil -> %>
+                  <span class="text-base-content/40">-</span>
+                <% :error -> %>
+                  <span class="text-red-500 font-semibold">Err</span>
+                <% :n_a -> %>
+                  <span class="text-base-content/40">N/A</span>
+                <% ms when is_integer(ms) -> %>
+                  <span class="text-[#3ecf8e] font-semibold">{"#{ms} ms"}</span>
+                <% _ -> %>
+                  <span class="text-base-content/40">-</span>
+              <% end %>
             </td>
             <td class="py-4 px-4 text-right">
               <div class="inline-flex items-center space-x-2 whitespace-nowrap">
+                <%= case pair.status do %>
+                  <% :running -> %>
+                    <button
+                      phx-click="stop_tunnel"
+                      phx-value-id={pair.id}
+                      title="Stop Tunnel"
+                      class="btn btn-xs btn-outline btn-error rounded-[4px] cursor-pointer"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      phx-click="restart_tunnel"
+                      phx-value-id={pair.id}
+                      title="Restart Tunnel"
+                      class="btn btn-xs btn-outline btn-warning rounded-[4px] cursor-pointer"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+                        />
+                      </svg>
+                    </button>
+                  <% status when status in [:starting_wg, :starting_ts] -> %>
+                    <button
+                      disabled
+                      title="Starting..."
+                      class="btn btn-xs btn-outline btn-warning rounded-[4px] opacity-50 flex items-center justify-center"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4 animate-spin"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      phx-click="stop_tunnel"
+                      phx-value-id={pair.id}
+                      title="Stop Tunnel"
+                      class="btn btn-xs btn-outline btn-error rounded-[4px] cursor-pointer"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z"
+                        />
+                      </svg>
+                    </button>
+                  <% :error -> %>
+                    <button
+                      phx-click="start_tunnel"
+                      phx-value-id={pair.id}
+                      title="Start Tunnel"
+                      class="btn btn-xs btn-outline btn-success rounded-[4px] cursor-pointer"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      phx-click="stop_tunnel"
+                      phx-value-id={pair.id}
+                      title="Stop Tunnel"
+                      class="btn btn-xs btn-outline btn-error rounded-[4px] cursor-pointer"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z"
+                        />
+                      </svg>
+                    </button>
+                  <% _ -> %>
+                    <button
+                      phx-click="start_tunnel"
+                      phx-value-id={pair.id}
+                      title="Start Tunnel"
+                      class="btn btn-xs btn-outline btn-success rounded-[4px] cursor-pointer"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="size-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"
+                        />
+                      </svg>
+                    </button>
+                <% end %>
+
                 <.link
                   navigate={~p"/tunnels/#{pair.id}"}
                   class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs px-2.5"

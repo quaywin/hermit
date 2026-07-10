@@ -163,8 +163,6 @@ defmodule HermitWeb.DashboardLiveTest do
     refute html =~ "prod_eu"
   end
 
-
-
   test "cannot deploy a pair if the outbound profile is already in use by an active tunnel", %{
     conn: conn
   } do
@@ -215,5 +213,85 @@ defmodule HermitWeb.DashboardLiveTest do
 
     assert html =~
              "Cannot start VPN Pair: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
+  end
+
+  test "performs start, stop, and restart tunnel actions via dashboard icon buttons", %{
+    conn: conn
+  } do
+    args = %{
+      id: "action_test",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts3",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_wg3",
+        type: "wireguard",
+        config: %{"wg_config" => args.wg_config}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      status: "stopped",
+      wg_status: "stopped",
+      ts_status: "stopped"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair)
+
+    {:ok, view, html} = live(conn, ~p"/")
+    assert html =~ "action_test"
+
+    # Since it is stopped, it should have the "Start Tunnel" button
+    html =
+      view
+      |> element("button[phx-click=start_tunnel][phx-value-id=action_test]")
+      |> render_click()
+
+    assert html =~ "Tunnel &#39;action_test&#39; starting..."
+
+    # Simulates status changing to :running
+    pid = GenServer.whereis({:via, Registry, {Hermit.Vpn.Registry, "action_test"}})
+    assert is_pid(pid)
+    state = GenServer.call(pid, :get_state)
+
+    running_state = %{
+      state
+      | status: :running,
+        wg_status: :running,
+        ts_status: :running
+    }
+
+    Phoenix.PubSub.broadcast(Hermit.PubSub, "vpn_pairs", {:vpn_pair_updated, running_state})
+    Process.sleep(100)
+
+    # Re-render view to verify state updated and "Stop Tunnel" & "Restart Tunnel" buttons are visible
+    html = render(view)
+    assert html =~ "Stop Tunnel"
+    assert html =~ "Restart Tunnel"
+
+    # Click Restart Tunnel
+    html =
+      view
+      |> element("button[phx-click=restart_tunnel][phx-value-id=action_test]")
+      |> render_click()
+
+    assert html =~ "Tunnel &#39;action_test&#39; restarting..."
+
+    # Click Stop Tunnel
+    html =
+      view |> element("button[phx-click=stop_tunnel][phx-value-id=action_test]") |> render_click()
+
+    assert html =~ "Tunnel &#39;action_test&#39; stopped."
   end
 end

@@ -32,7 +32,7 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   @impl true
-  def handle_event("start_wg", _params, socket) do
+  def handle_event("start_tunnel", _params, socket) do
     id = socket.assigns.id
     vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
 
@@ -42,43 +42,43 @@ defmodule HermitWeb.TunnelDetailLive do
          put_flash(
            socket,
            :error,
-           "Failed to start Wireguard: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+           "Failed to start Tunnel: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
          )}
 
       :ok ->
-        case PairWorker.start_wg(id) do
+        case PairWorker.resume_pair(id) do
           {:ok, pair} ->
             {:noreply,
              socket
              |> assign_pair(pair)
              |> assign(uptime: format_uptime(pair.started_at))
-             |> put_flash(:info, "Wireguard starting...")}
+             |> put_flash(:info, "Tunnel starting...")}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Failed to start Wireguard: #{inspect(reason)}")}
+            {:noreply, put_flash(socket, :error, "Failed to start Tunnel: #{inspect(reason)}")}
         end
     end
   end
 
   @impl true
-  def handle_event("stop_wg", _params, socket) do
+  def handle_event("stop_tunnel", _params, socket) do
     id = socket.assigns.id
 
-    case PairWorker.stop_wg(id) do
+    case PairWorker.pause_pair(id) do
       {:ok, pair} ->
         {:noreply,
          socket
          |> assign_pair(pair)
          |> assign(uptime: format_uptime(pair.started_at))
-         |> put_flash(:info, "Wireguard stopped.")}
+         |> put_flash(:info, "Tunnel stopped.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to stop Wireguard: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to stop Tunnel: #{inspect(reason)}")}
     end
   end
 
   @impl true
-  def handle_event("restart_wg", _params, socket) do
+  def handle_event("restart_tunnel", _params, socket) do
     id = socket.assigns.id
     vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
 
@@ -88,73 +88,21 @@ defmodule HermitWeb.TunnelDetailLive do
          put_flash(
            socket,
            :error,
-           "Failed to restart Wireguard: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
+           "Failed to restart Tunnel: Outbound profile is already in use by active tunnel '#{conflicting_id}'."
          )}
 
       :ok ->
-        case PairWorker.restart_wg(id) do
+        case PairWorker.restart_pair(id) do
           {:ok, pair} ->
             {:noreply,
              socket
              |> assign_pair(pair)
              |> assign(uptime: format_uptime(pair.started_at))
-             |> put_flash(:info, "Wireguard restarting...")}
+             |> put_flash(:info, "Tunnel restarting...")}
 
           {:error, reason} ->
-            {:noreply,
-             put_flash(socket, :error, "Failed to restart Wireguard: #{inspect(reason)}")}
+            {:noreply, put_flash(socket, :error, "Failed to restart Tunnel: #{inspect(reason)}")}
         end
-    end
-  end
-
-  @impl true
-  def handle_event("start_ts", _params, socket) do
-    id = socket.assigns.id
-
-    case PairWorker.start_ts(id) do
-      {:ok, pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(pair)
-         |> assign(uptime: format_uptime(pair.started_at))
-         |> put_flash(:info, "Tailscale starting...")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to start Tailscale: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("stop_ts", _params, socket) do
-    id = socket.assigns.id
-
-    case PairWorker.stop_ts(id) do
-      {:ok, pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(pair)
-         |> assign(uptime: format_uptime(pair.started_at))
-         |> put_flash(:info, "Tailscale stopped.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to stop Tailscale: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("restart_ts", _params, socket) do
-    id = socket.assigns.id
-
-    case PairWorker.restart_ts(id) do
-      {:ok, pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(pair)
-         |> assign(uptime: format_uptime(pair.started_at))
-         |> put_flash(:info, "Tailscale restarting...")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to restart Tailscale: #{inspect(reason)}")}
     end
   end
 

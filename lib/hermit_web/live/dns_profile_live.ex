@@ -38,6 +38,8 @@ defmodule HermitWeb.DnsProfileLive do
      |> assign(time_range: "24h")
      |> assign(show_create_modal: false)
      |> assign(custom_rule_action: "block")
+     |> assign(custom_rule_domain: "")
+     |> assign(custom_rule_value: "")
      |> assign(editing_name: false)
      |> assign(pause_logs: false)
      |> assign_create_form()
@@ -70,6 +72,9 @@ defmodule HermitWeb.DnsProfileLive do
      |> assign(editing_name: false)
      |> assign(dns_logs: get_recent_logs(profile.id))
      |> assign(dns_metrics: get_metrics(profile.id, socket.assigns[:time_range] || "24h"))
+     |> assign(custom_rule_action: "block")
+     |> assign(custom_rule_domain: "")
+     |> assign(custom_rule_value: "")
      |> assign_name_form()}
   end
 
@@ -283,8 +288,16 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   @impl true
-  def handle_event("custom_rule_action_changed", %{"action" => action}, socket) do
-    {:noreply, assign(socket, custom_rule_action: action)}
+  def handle_event("custom_rule_form_changed", params, socket) do
+    action = Map.get(params, "action", "block")
+    domain = Map.get(params, "domain", "")
+    value = Map.get(params, "value", "")
+
+    {:noreply,
+     socket
+     |> assign(custom_rule_action: action)
+     |> assign(custom_rule_domain: domain)
+     |> assign(custom_rule_value: value)}
   end
 
   @impl true
@@ -305,7 +318,17 @@ defmodule HermitWeb.DnsProfileLive do
       true ->
         new_rule = %{"domain" => domain, "action" => action, "value" => value}
         updated_rules = Enum.reject(custom_rules, &(&1["domain"] == domain)) ++ [new_rule]
-        update_profile(socket, profile, %{custom_rules: updated_rules}, "Custom rule for #{domain} added.")
+        
+        case update_profile(socket, profile, %{custom_rules: updated_rules}, "Custom rule for #{domain} added.") do
+          {:noreply, new_socket} ->
+            {:noreply,
+             new_socket
+             |> assign(custom_rule_domain: "")
+             |> assign(custom_rule_action: "block")
+             |> assign(custom_rule_value: "")}
+          other ->
+            other
+        end
     end
   end
 

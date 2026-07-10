@@ -21,9 +21,14 @@ defmodule Hermit.Dns.Server do
     profile_id = opts[:profile_id]
     config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
 
+    # Flush cache on startup to ensure we start with a clean slate
+    Cache.clear(profile_id)
+
     if :erlang.whereis(Hermit.PubSub) != :undefined do
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config:#{profile_id}")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_blocklist")
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "vpn_pairs")
     end
 
     upstreams = parse_upstreams(config.upstream_dns)
@@ -63,6 +68,8 @@ defmodule Hermit.Dns.Server do
       Logger.error("DNS Server: Failed to bind any upstream client sockets")
     end
 
+    proxy_ports_cache = pre_populate_proxy_ports_cache()
+
     state = %{
       socket: nil,
       upstream_sockets: upstream_sockets,
@@ -75,7 +82,8 @@ defmodule Hermit.Dns.Server do
       active_upstream: active_upstream,
       config: config,
       custom_rules: custom_rules,
-      next_tx_id: 0
+      next_tx_id: 0,
+      proxy_ports_cache: proxy_ports_cache
     }
 
     # Start periodic timeout cleanup timer (every 1 second)
@@ -135,19 +143,60 @@ defmodule Hermit.Dns.Server do
 
   @impl true
   def handle_info({:dns_config_updated, updated_config}, state) do
+    updated_config = Hermit.Repo.preload(updated_config, :blocklists)
     upstreams = parse_upstreams(updated_config.upstream_dns)
     new_state = sync_upstreams_config(state, upstreams)
     custom_rules = Rules.precompile(updated_config.custom_rules)
 
     # Flush cache for this profile on configuration changes
-    profile_id = state.profile_id
-
-    :ets.select_delete(:dns_cache, [
-      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]},
-      {{{profile_id, :_, :_}, :_, :_}, [], [true]}
-    ])
+    Cache.clear(state.profile_id)
 
     {:noreply, %{new_state | config: updated_config, custom_rules: custom_rules}}
+  end
+
+  @impl true
+  def handle_info({:blocklist_updated, blocklist_id}, state) do
+    blocklists =
+      case state.config.blocklists do
+        %Ecto.Association.NotLoaded{} -> []
+        nil -> []
+        list -> list
+      end
+
+    has_blocklist? = Enum.any?(blocklists, fn b -> b.id == blocklist_id end)
+
+    if has_blocklist? do
+      Logger.info("DNS Server (profile #{state.profile_id}): Blocklist #{blocklist_id} updated. Clearing cache.")
+      Cache.clear(state.profile_id)
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:vpn_pair_updated, %{id: pair_id, status: status}}, state) do
+    status_str = to_string(status) |> String.downcase()
+
+    new_cache =
+      if status_str == "running" do
+        case read_proxy_ports_from_disk(pair_id) do
+          {:ok, http_port, socks5_port} ->
+            Map.put(state.proxy_ports_cache, pair_id, {http_port, socks5_port})
+
+          _ ->
+            state.proxy_ports_cache
+        end
+      else
+        Map.delete(state.proxy_ports_cache, pair_id)
+      end
+
+    {:noreply, %{state | proxy_ports_cache: new_cache}}
+  end
+
+  @impl true
+  def handle_info({:vpn_pair_deleted, pair_id}, state) do
+    new_cache = Map.delete(state.proxy_ports_cache, pair_id)
+    {:noreply, %{state | proxy_ports_cache: new_cache}}
   end
 
   @impl true
@@ -729,20 +778,98 @@ defmodule Hermit.Dns.Server do
             state
 
           "forward_proxy" when not is_nil(redirect_val) ->
-            doh_url =
-              case Enum.find(upstreams, fn target -> match?({:doh, _}, target) end) do
-                {:doh, url} -> url
-                _ -> "https://cloudflare-dns.com/dns-query"
-              end
+            target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
+            first_upstream = List.first(target_upstreams)
 
-            case get_proxy_port_for_pair(redirect_val) do
-              {:ok, proxy_port} ->
-                async_forward_to_proxy(socket, ip, port, packet, query, doh_url, proxy_port, redirect_val, state)
+            case first_upstream do
+              {:udp, _} ->
+                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                case proxy_ports do
+                  {:ok, _http_port, socks5_port} when not is_nil(socks5_port) ->
+                    async_forward_to_udp_proxy(socket, ip, port, packet, query, first_upstream, socks5_port, redirect_val, state)
 
-              {:error, reason} ->
-                Logger.error("DNS Server: Failed to get proxy port for pair #{redirect_val}: #{inspect(reason)}")
-                target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
-                async_forward_to_upstream(socket, ip, port, packet, query, target_upstreams, state)
+                  _ ->
+                    Logger.error("DNS Server: Failed to get SOCKS5 proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak")
+                    servfail = Packet.build_nxdomain(query.id, query.query_record) |> Packet.patch_rcode(2)
+                    send_client_response(socket, ip, port, servfail)
+
+                    :telemetry.execute(
+                      [:hermit, :dns, :query],
+                      %{duration: 0},
+                      %{
+                        profile_id: state.profile_id,
+                        config_id: state.config.id,
+                        client_ip: ip,
+                        domain: query.domain,
+                        qtype: query.qtype,
+                        status: "resolved",
+                        answer: "SERVFAIL",
+                        resolver: "Proxy Failure (UDP)",
+                        enable_query_logging: state.config.enable_query_logging
+                      }
+                    )
+                    state
+                end
+
+              {:doh, url} ->
+                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                case proxy_ports do
+                  {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
+                    async_forward_to_proxy(socket, ip, port, packet, query, url, http_port, redirect_val, state)
+
+                  _ ->
+                    Logger.error("DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak")
+                    servfail = Packet.build_nxdomain(query.id, query.query_record) |> Packet.patch_rcode(2)
+                    send_client_response(socket, ip, port, servfail)
+
+                    :telemetry.execute(
+                      [:hermit, :dns, :query],
+                      %{duration: 0},
+                      %{
+                        profile_id: state.profile_id,
+                        config_id: state.config.id,
+                        client_ip: ip,
+                        domain: query.domain,
+                        qtype: query.qtype,
+                        status: "resolved",
+                        answer: "SERVFAIL",
+                        resolver: "Proxy Failure (DoH)",
+                        enable_query_logging: state.config.enable_query_logging
+                      }
+                    )
+                    state
+                end
+
+              _ ->
+                doh_url = "https://cloudflare-dns.com/dns-query"
+
+                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                case proxy_ports do
+                  {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
+                    async_forward_to_proxy(socket, ip, port, packet, query, doh_url, http_port, redirect_val, state)
+
+                  _ ->
+                    Logger.error("DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak")
+                    servfail = Packet.build_nxdomain(query.id, query.query_record) |> Packet.patch_rcode(2)
+                    send_client_response(socket, ip, port, servfail)
+
+                    :telemetry.execute(
+                      [:hermit, :dns, :query],
+                      %{duration: 0},
+                      %{
+                        profile_id: state.profile_id,
+                        config_id: state.config.id,
+                        client_ip: ip,
+                        domain: query.domain,
+                        qtype: query.qtype,
+                        status: "resolved",
+                        answer: "SERVFAIL",
+                        resolver: "Proxy Failure (DoH Fallback)",
+                        enable_query_logging: state.config.enable_query_logging
+                      }
+                    )
+                    state
+                end
             end
 
           _ ->
@@ -925,7 +1052,11 @@ defmodule Hermit.Dns.Server do
         failed_upstream = elem(target_upstreams, current_index)
 
         # 1. Phạt độ trễ ngay lập tức trong state của GenServer
-        new_upstreams_map = Map.put(state.upstreams_map, failed_upstream, 2000)
+        new_upstreams_map =
+          case failed_upstream do
+            {:doh_proxy, _, _} -> state.upstreams_map
+            _ -> Map.put(state.upstreams_map, failed_upstream, 2000)
+          end
         active_upstream =
           if map_size(new_upstreams_map) > 0 do
             {best_ip, _best_latency} = Enum.min_by(new_upstreams_map, fn {_ip, lat} -> lat end)
@@ -1096,6 +1227,15 @@ defmodule Hermit.Dns.Server do
     end
   end
 
+  defp query_upstream({:doh_proxy, _url, _pair_id}, _packet) do
+    {:error, :probing_disabled}
+  end
+
+  defp query_upstream(other, _packet) do
+    Logger.warning("DNS Server: query_upstream called with unsupported type: #{inspect(other)}")
+    {:error, :unsupported_upstream_type}
+  end
+
 
 
 
@@ -1170,29 +1310,67 @@ defmodule Hermit.Dns.Server do
 
   defp ip_to_string(other), do: to_string(other)
 
-  defp get_proxy_port_for_pair(pair_id) do
+  defp get_proxy_ports_for_pair(pair_id, state) do
     if mock?() do
-      {:ok, 8080}
+      {{:ok, 8080, 1080}, state}
     else
-      storage_base =
-        case Application.get_env(:hermit, :storage, []) |> Keyword.get(:base_path) do
-          nil -> "/app/storage"
-          path -> path
+      case Map.get(state.proxy_ports_cache, pair_id) do
+        {http_port, socks5_port} ->
+          {{:ok, http_port, socks5_port}, state}
+
+        nil ->
+          # Fallback: if not in cache yet, read from disk and update cache
+          case read_proxy_ports_from_disk(pair_id) do
+            {:ok, http_port, socks5_port} ->
+              new_cache = Map.put(state.proxy_ports_cache, pair_id, {http_port, socks5_port})
+              {{:ok, http_port, socks5_port}, %{state | proxy_ports_cache: new_cache}}
+
+            {:error, reason} ->
+              {{:error, reason}, state}
+          end
+      end
+    end
+  end
+
+  defp pre_populate_proxy_ports_cache do
+    try do
+      import Ecto.Query
+      pairs = Hermit.Repo.all(from(p in Hermit.Vpn.VpnPair, where: p.status == "running"))
+
+      Enum.reduce(pairs, %{}, fn pair, acc ->
+        case read_proxy_ports_from_disk(pair.pair_id) do
+          {:ok, http_port, socks5_port} ->
+            Map.put(acc, pair.pair_id, {http_port, socks5_port})
+
+          _ ->
+            acc
+        end
+      end)
+    rescue
+      _ -> %{}
+    end
+  end
+
+  defp read_proxy_ports_from_disk(pair_id) do
+    storage_base =
+      case Application.get_env(:hermit, :storage, []) |> Keyword.get(:base_path) do
+        nil -> "/app/storage"
+        path -> path
+      end
+
+    storage_dir = Path.join(storage_base, to_string(pair_id))
+    proxy_info_path = Path.join(storage_dir, "proxy_info.json")
+
+    case File.read(proxy_info_path) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, %{"http_port" => http_port, "socks5_port" => socks5_port}} -> {:ok, http_port, socks5_port}
+          {:ok, %{"http_port" => http_port}} -> {:ok, http_port, nil}
+          _ -> {:error, :invalid_proxy_info}
         end
 
-      storage_dir = Path.join(storage_base, to_string(pair_id))
-      proxy_info_path = Path.join(storage_dir, "proxy_info.json")
-
-      case File.read(proxy_info_path) do
-        {:ok, content} ->
-          case Jason.decode(content) do
-            {:ok, %{"http_port" => port}} -> {:ok, port}
-            _ -> {:error, :invalid_proxy_info}
-          end
-
-        {:error, _} ->
-          {:error, :no_proxy_info}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1277,6 +1455,165 @@ defmodule Hermit.Dns.Server do
     new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
 
     %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
+  end
+
+  defp async_forward_to_udp_proxy(_socket, ip, port, packet, query, udp_upstream, socks5_port, pair_id, state) do
+    socks5_ip = "127.0.0.1"
+    server_pid = self()
+    <<_tx_id::16, _::binary>> = packet
+
+    upstream_tx_id = state.next_tx_id
+    next_tx_id = rem(upstream_tx_id + 1, 65536)
+    upstream_tx_id_bin = <<upstream_tx_id::16>>
+
+    <<_old_id::binary-size(2), rest_packet::binary>> = packet
+    rewritten_packet = upstream_tx_id_bin <> rest_packet
+
+    now = System.monotonic_time(:millisecond)
+
+    {target_ip, target_port} =
+      case udp_upstream do
+        {:udp, {tip, tport}} -> {tip, tport}
+        {:udp, tip} -> {tip, 53}
+      end
+
+    target_ip_str = ip_to_string(target_ip)
+    udp_proxy_url = "udp://#{target_ip_str}:#{target_port}"
+
+    Task.start(fn ->
+      start = System.monotonic_time()
+
+      case socks5_udp_resolve(socks5_ip, socks5_port, target_ip, target_port, rewritten_packet) do
+        {:ok, resp_packet} ->
+          <<upstream_tx_id_resp::16, _::binary>> = resp_packet
+
+          final_packet =
+            if upstream_tx_id_resp != upstream_tx_id do
+              <<_::16, rest::binary>> = resp_packet
+              upstream_tx_id_bin <> rest
+            else
+              resp_packet
+            end
+
+          duration =
+            System.convert_time_unit(
+              System.monotonic_time() - start,
+              :native,
+              :millisecond
+            )
+
+          send(server_pid, {:doh_response, upstream_tx_id, udp_proxy_url, final_packet, duration})
+
+        other ->
+          Logger.warning("DNS Server: UDP proxy query to #{udp_proxy_url} via SOCKS5 port #{socks5_port} failed: #{inspect(other)}")
+          send(server_pid, {:doh_failure, upstream_tx_id, udp_proxy_url})
+      end
+    end)
+
+    upstreams_tuple = {{:doh_proxy, udp_proxy_url, pair_id}}
+    query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
+    new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
+
+    %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
+  end
+
+  defp socks5_udp_resolve(socks5_ip, socks5_port, target_ip, target_port, packet) do
+    if mock?() do
+      # Mock SOCKS5 resolution for testing
+      case Packet.parse(packet) do
+        {:ok, %{id: id_bin, query_record: query_rec}} ->
+          Process.sleep(50)
+          {:ok, Packet.build_a_response(id_bin, query_rec, "127.0.0.9")}
+        _ ->
+          {:error, :mock_parse_failed}
+      end
+    else
+      # Real SOCKS5 resolution via DNS-over-TCP to port 53 of the upstream DNS
+      tcp_opts = [:binary, active: false, packet: 0]
+      case :gen_tcp.connect(String.to_charlist(socks5_ip), socks5_port, tcp_opts, 3000) do
+        {:ok, tcp_socket} ->
+          try do
+            do_socks5_tcp_dns_resolve(tcp_socket, target_ip, target_port, packet)
+          after
+            :gen_tcp.close(tcp_socket)
+          end
+        {:error, reason} -> {:error, {:tcp_connect_failed, reason}}
+      end
+    end
+  end
+
+  defp do_socks5_tcp_dns_resolve(tcp_socket, target_ip, target_port, packet) do
+    # 1. Handshake
+    with :ok <- :gen_tcp.send(tcp_socket, <<5, 1, 0>>),
+         {:ok, <<5, 0>>} <- :gen_tcp.recv(tcp_socket, 2, 3000) do
+      
+      # 2. Build SOCKS5 CONNECT request
+      {atyp, addr_bin} =
+        case target_ip do
+          {ip1, ip2, ip3, ip4} ->
+            {1, <<ip1, ip2, ip3, ip4>>}
+          {ip1, ip2, ip3, ip4, ip5, ip6, ip7, ip8} ->
+            {4, <<ip1::16, ip2::16, ip3::16, ip4::16, ip5::16, ip6::16, ip7::16, ip8::16>>}
+        end
+      
+      connect_req = <<5, 1, 0, atyp>> <> addr_bin <> <<target_port::16>>
+      
+      # 3. Send CONNECT and receive CONNECT response
+      with :ok <- :gen_tcp.send(tcp_socket, connect_req),
+           {:ok, <<5, 0, 0, atyp_resp>>} <- :gen_tcp.recv(tcp_socket, 4, 3000),
+           {:ok, _bnd_addr, _bnd_port} <- read_socks5_addr_port(tcp_socket, atyp_resp) do
+        
+        # 4. Connection is established! Send DNS query over TCP
+        # DNS-over-TCP packet is prefixed with 16-bit length
+        len = byte_size(packet)
+        tcp_packet = <<len::16>> <> packet
+        
+        with :ok <- :gen_tcp.send(tcp_socket, tcp_packet),
+             {:ok, <<resp_len::16>>} <- :gen_tcp.recv(tcp_socket, 2, 4000),
+             {:ok, resp_packet} <- :gen_tcp.recv(tcp_socket, resp_len, 4000) do
+          {:ok, resp_packet}
+        else
+          {:error, reason} -> {:error, {:dns_tcp_io_failed, reason}}
+        end
+      else
+        {:ok, <<5, status, 0, _atyp_resp>>} -> {:error, {:socks_connect_failed, status}}
+        {:error, reason} -> {:error, {:socks_handshake_failed, reason}}
+        other -> {:error, {:socks_handshake_invalid_resp, other}}
+      end
+    else
+      {:error, reason} -> {:error, {:socks_greeting_failed, reason}}
+      other -> {:error, {:socks_greeting_invalid_resp, other}}
+    end
+  end
+
+  defp read_socks5_addr_port(socket, 1) do
+    case :gen_tcp.recv(socket, 6, 2000) do
+      {:ok, <<ip1, ip2, ip3, ip4, port::16>>} ->
+        {:ok, {ip1, ip2, ip3, ip4}, port}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+  defp read_socks5_addr_port(socket, 3) do
+    case :gen_tcp.recv(socket, 1, 2000) do
+      {:ok, <<len>>} ->
+        case :gen_tcp.recv(socket, len + 2, 2000) do
+          {:ok, <<domain::binary-size(len), port::16>>} ->
+            {:ok, String.to_charlist(domain), port}
+          {:error, reason} -> {:error, reason}
+        end
+      {:error, reason} -> {:error, reason}
+    end
+  end
+  defp read_socks5_addr_port(socket, 4) do
+    case :gen_tcp.recv(socket, 18, 2000) do
+      {:ok, <<ip_bin::binary-size(16), port::16>>} ->
+        <<ip1::16, ip2::16, ip3::16, ip4::16, ip5::16, ip6::16, ip7::16, ip8::16>> = ip_bin
+        {:ok, {ip1, ip2, ip3, ip4, ip5, ip6, ip7, ip8}, port}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+  defp read_socks5_addr_port(_socket, other) do
+    {:error, {:unknown_atyp, other}}
   end
 
   defp mock? do

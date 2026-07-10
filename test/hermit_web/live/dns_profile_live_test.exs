@@ -110,8 +110,11 @@ defmodule HermitWeb.DnsProfileLiveTest do
     assert html =~ "ad.example.com"
     assert html =~ "block"
 
-    # Add custom rule: redirect
-    view |> element("select[name=action]") |> render_change(%{"action" => "redirect"})
+    view
+    |> form("form[phx-submit=add_custom_rule]", %{
+      "action" => "redirect"
+    })
+    |> render_change()
     html =
       view
       |> form("form[phx-submit=add_custom_rule]", %{

@@ -37,4 +37,21 @@ defmodule Hermit.Dns.Cache do
 
     :ok
   end
+
+  @spec clear(integer()) :: :ok
+  def clear(profile_id) do
+    :ets.select_delete(@dns_cache_table, [
+      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]},
+      {{{profile_id, :_, :_}, :_, :_}, [], [true]}
+    ])
+
+    :ok
+  end
+
+  @spec clear_all() :: :ok
+  def clear_all do
+    :ets.delete_all_objects(@dns_cache_table)
+    :ok
+  end
 end
+

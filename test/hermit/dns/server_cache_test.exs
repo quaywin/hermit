@@ -399,6 +399,165 @@ defmodule Hermit.Dns.ServerCacheTest do
     end
   end
 
+  test "DNS Server forwards UDP DNS query via SOCKS5 proxy when forward_proxy is matched and upstream is UDP" do
+    # Create an inbound profile
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_UDP_Proxy",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_udp_proxy"}
+      })
+
+    profile_id = profile.id
+    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
+    # We map a forward_proxy rule to pair_id "test_socks5_pair"
+    custom_rules = [
+      %{"domain" => "proxied-udp.com", "action" => "forward_proxy", "value" => "test_socks5_pair"}
+    ]
+
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+        enabled: true,
+        upstream_dns: "8.8.8.8",
+        custom_rules: custom_rules
+      })
+
+    # Start DNS server
+    port = 35359
+    {:ok, server_pid} = Server.start_link(profile_id: profile_id, port: port)
+
+    try do
+      _domain = "proxied-udp.com"
+      qname = <<11>> <> "proxied-udp" <> <<3>> <> "com" <> <<0>>
+      question = qname <> <<0, 1, 0, 1>>
+
+      {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
+      query_id = <<0xCC, 0xCC>>
+      query_packet =
+        query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
+
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, port, query_packet)
+
+      assert {:ok, {{127, 0, 0, 1}, ^port, response}} = :gen_udp.recv(client_sock, 0, 1000)
+
+      # Under mock mode, socks5_udp_resolve returns "127.0.0.9" as response
+      assert binary_part(response, 0, 2) == query_id
+      assert binary_part(response, byte_size(response) - 4, 4) == <<127, 0, 0, 9>>
+
+      :gen_udp.close(client_sock)
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
+
+  test "DNS cache is cleared on Cache.clear/1" do
+    profile_id = 9999
+    domain = "clear-test.com"
+    mock_response = <<1, 2, 3, 4>>
+    expires_at = System.monotonic_time(:second) + 100
+
+    :ets.insert(
+      :dns_cache,
+      {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
+    )
+
+    assert {:ok, ^mock_response, "resolved", "1.1.1.1"} = Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+
+    Hermit.Dns.Cache.clear(profile_id)
+
+    assert Hermit.Dns.Cache.lookup(profile_id, domain, :A) == :error
+  end
+
+  test "DNS cache is cleared when Server starts up" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_Start_Cache",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_start"}
+      })
+
+    profile_id = profile.id
+    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
+    domain = "start-clear-test.com"
+    mock_response = <<1, 2, 3, 4>>
+    expires_at = System.monotonic_time(:second) + 100
+
+    :ets.insert(
+      :dns_cache,
+      {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
+    )
+
+    assert {:ok, ^mock_response, "resolved", "1.1.1.1"} = Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+
+    # Starting server should clear the cache
+    port = 35360
+    {:ok, server_pid} = Server.start_link(profile_id: profile_id, port: port)
+
+    try do
+      assert Hermit.Dns.Cache.lookup(profile_id, domain, :A) == :error
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
+
+  test "DNS cache is cleared when an associated blocklist is updated" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_Blocklist_Cache",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_blocklist"}
+      })
+
+    profile_id = profile.id
+    config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
+    # Create a blocklist and associate it
+    {:ok, blocklist} = Hermit.Repo.insert(%Hermit.Dns.Blocklist{
+      name: "Test List",
+      url: "priv/test_list.txt",
+      format: "domains",
+      enabled: true
+    })
+
+    # Associate blocklist
+    {:ok, _config} = Hermit.Vpn.DnsConfig.update_blocklists(config, [blocklist.id])
+
+    # Start DNS server
+    port = 35361
+    {:ok, server_pid} = Server.start_link(profile_id: profile_id, port: port)
+
+    try do
+      domain = "blocklist-clear-test.com"
+      mock_response = <<1, 2, 3, 4>>
+      expires_at = System.monotonic_time(:second) + 100
+
+      :ets.insert(
+        :dns_cache,
+        {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
+      )
+
+      assert {:ok, ^mock_response, "resolved", "1.1.1.1"} = Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+
+      # Trigger blocklist updated broadcast
+      Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_blocklist", {:blocklist_updated, blocklist.id})
+
+      # Wait a tiny bit for GenServer to process PubSub message
+      Process.sleep(50)
+
+      assert Hermit.Dns.Cache.lookup(profile_id, domain, :A) == :error
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
+
   defp mock_timeout_loop(sock, parent_pid) do
     case :gen_udp.recv(sock, 0, 100) do
       {:ok, _} -> mock_timeout_loop(sock, parent_pid)

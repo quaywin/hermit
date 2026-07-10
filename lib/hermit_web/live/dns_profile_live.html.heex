@@ -258,14 +258,16 @@
             </div>
 
             <!-- Form thêm Custom Rule -->
-            <form id="add-custom-rule-form" phx-submit="add_custom_rule" class="border-t border-base-300/50 pt-4 flex flex-col md:flex-row gap-3 items-end">
+            <form id="add-custom-rule-form" phx-change="custom_rule_form_changed" phx-submit="add_custom_rule" class="border-t border-base-300/50 pt-4 flex flex-col md:flex-row gap-3 items-end">
               <div class="flex-1 w-full">
                 <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Domain</label>
                 <input
                   type="text"
                   name="domain"
+                  value={@custom_rule_domain}
                   placeholder="e.g. ad.doubleclick.net, *.dev"
                   required
+                  phx-debounce="200"
                   class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
                 />
               </div>
@@ -274,7 +276,6 @@
                 <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Action</label>
                 <select
                   name="action"
-                  phx-change="custom_rule_action_changed"
                   class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs focus:outline-none cursor-pointer"
                 >
                   <option value="block" selected={@custom_rule_action == "block"}>Block</option>
@@ -290,8 +291,10 @@
                   <input
                     type="text"
                     name="value"
+                    value={@custom_rule_value}
                     placeholder="e.g. 192.168.1.10"
                     required
+                    phx-debounce="200"
                     class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
                   />
                 </div>
@@ -307,7 +310,7 @@
                   >
                     <option value="">Select Tunnel...</option>
                     <%= for pair <- @vpn_pairs do %>
-                      <option value={pair.pair_id}>
+                      <option value={pair.pair_id} selected={@custom_rule_value == pair.pair_id}>
                         <%= if Ecto.assoc_loaded?(pair.inbound_profile) && pair.inbound_profile && Ecto.assoc_loaded?(pair.outbound_profile) && pair.outbound_profile do %>
                           {pair.pair_id} ({pair.inbound_profile.name} -> {pair.outbound_profile.name})
                         <% else %>

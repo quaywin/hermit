@@ -163,6 +163,9 @@ defmodule Hermit.Dns.BlocklistLoader do
   def unload_blocklist(blocklist_id) do
     :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist_id}, [], [true]}])
     :ets.delete(:dns_blocklist_entries, {:metadata, blocklist_id})
+
+    # Clear DNS caches for all profiles using this blocklist
+    clear_cache_for_blocklist(blocklist_id)
   end
 
   defp update_rules_count(blocklist_id, count) do
@@ -173,9 +176,33 @@ defmodule Hermit.Dns.BlocklistLoader do
       set: [rules_count: count, last_fetched_at: now, updated_at: now]
     )
 
+    # Clear DNS caches for all profiles using this blocklist
+    clear_cache_for_blocklist(blocklist_id)
+
     if :erlang.whereis(Hermit.PubSub) != :undefined do
       Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_blocklist", {:blocklist_updated, blocklist_id})
     end
+  end
+
+  defp clear_cache_for_blocklist(blocklist_id) do
+    import Ecto.Query
+    # Find all inbound profiles using a DNS config that contains this blocklist
+    inbound_profile_ids =
+      Repo.all(
+        from ip in Hermit.Vpn.InboundProfile,
+          join: dc in assoc(ip, :dns_profile),
+          join: b in assoc(dc, :blocklists),
+          where: b.id == ^blocklist_id,
+          select: ip.id
+      )
+
+    Enum.each(inbound_profile_ids, fn ip_id ->
+      Logger.info("Blocklist #{blocklist_id} updated/unloaded. Clearing DNS cache for inbound profile #{ip_id}.")
+      Hermit.Dns.Cache.clear(ip_id)
+    end)
+  rescue
+    e ->
+      Logger.error("Failed to clear DNS cache for blocklist #{blocklist_id}: #{inspect(e)}")
   end
 
   defp fetch_content(url) do

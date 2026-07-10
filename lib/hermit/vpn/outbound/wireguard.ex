@@ -83,6 +83,8 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
             _ -> "1360"
           end
 
+        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
+
         # Create a unique temporary interface name on the host (max 15 chars)
         # using md5 hash of ID to prevent collisions on host
         unique_suffix =
@@ -161,7 +163,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    wg_name,
                    "sysctl",
                    "-w",
-                   "net.ipv6.conf.all.forwarding=1"
+                   "net.ipv6.conf.all.forwarding=#{if block_ipv6, do: 0, else: 1}"
                  ]),
                {:ok, _} <-
                  run_cmd("ip", [
@@ -240,7 +242,39 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    "1",
                    "-j",
                    "ACCEPT"
-                 ]) do
+                 ]),
+               {:block_ipv6, {:ok, _}} <-
+                 {:block_ipv6,
+                  if block_ipv6 do
+                    run_cmd("ip", [
+                      "netns",
+                      "exec",
+                      wg_name,
+                      "ip6tables",
+                      "-I",
+                      "FORWARD",
+                      "1",
+                      "-j",
+                      "REJECT",
+                      "--reject-with",
+                      "icmp6-port-unreachable"
+                    ])
+                  else
+                    run_cmd("ip", [
+                      "netns",
+                      "exec",
+                      wg_name,
+                      "ip6tables",
+                      "-t",
+                      "nat",
+                      "-A",
+                      "POSTROUTING",
+                      "-o",
+                      "wg0",
+                      "-j",
+                      "MASQUERADE"
+                    ])
+                  end} do
             # Setup network namespace specific DNS
             if dns_servers != [] do
               File.mkdir_p!(netns_dns_dir)
@@ -324,7 +358,9 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         File.rm_rf("/etc/netns/#{wg_name}")
       rescue
         e ->
-          Logger.warning("Error encountered during WireGuard outbound cleanup for pair #{pair_id}: #{inspect(e)}")
+          Logger.warning(
+            "Error encountered during WireGuard outbound cleanup for pair #{pair_id}: #{inspect(e)}"
+          )
       end
 
       :ok

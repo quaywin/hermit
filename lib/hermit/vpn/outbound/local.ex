@@ -53,6 +53,8 @@ defmodule Hermit.Vpn.Outbound.Local do
 
         netns_dns_dir = "/etc/netns/#{wg_name}"
 
+        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
+
         # Execute network setup steps sequentially
         result =
           with {:ok, _} <- run_cmd("ip", ["netns", "add", wg_name]),
@@ -133,7 +135,7 @@ defmodule Hermit.Vpn.Outbound.Local do
                    wg_name,
                    "sysctl",
                    "-w",
-                   "net.ipv6.conf.all.forwarding=1"
+                   "net.ipv6.conf.all.forwarding=#{if block_ipv6, do: 0, else: 1}"
                  ]),
                {:ok, _} <-
                  run_cmd("ip", [
@@ -176,6 +178,38 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "-j",
                    "ACCEPT"
                  ]),
+               {:block_ipv6, {:ok, _}} <-
+                 {:block_ipv6,
+                  if block_ipv6 do
+                    run_cmd("ip", [
+                      "netns",
+                      "exec",
+                      wg_name,
+                      "ip6tables",
+                      "-I",
+                      "FORWARD",
+                      "1",
+                      "-j",
+                      "REJECT",
+                      "--reject-with",
+                      "icmp6-port-unreachable"
+                    ])
+                  else
+                    run_cmd("ip", [
+                      "netns",
+                      "exec",
+                      wg_name,
+                      "ip6tables",
+                      "-t",
+                      "nat",
+                      "-A",
+                      "POSTROUTING",
+                      "-o",
+                      "eth0",
+                      "-j",
+                      "MASQUERADE"
+                    ])
+                  end},
                {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
@@ -245,9 +279,14 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "off"
                  ]) do
               {:ok, _} ->
-                Logger.info("Successfully enabled UDP GRO forwarding on eth0 in namespace #{wg_name}")
+                Logger.info(
+                  "Successfully enabled UDP GRO forwarding on eth0 in namespace #{wg_name}"
+                )
+
               {:error, reason} ->
-                Logger.warning("Could not enable UDP GRO forwarding on eth0 in namespace #{wg_name}: #{inspect(reason)}. Continuing without GRO optimization.")
+                Logger.warning(
+                  "Could not enable UDP GRO forwarding on eth0 in namespace #{wg_name}: #{inspect(reason)}. Continuing without GRO optimization."
+                )
             end
 
             {:ok, "eth0"}
@@ -343,7 +382,17 @@ defmodule Hermit.Vpn.Outbound.Local do
         File.rm_rf("/etc/netns/#{wg_name}")
 
         # Clean up iptables rules
-        System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
+        System.cmd("iptables", [
+          "-t",
+          "nat",
+          "-D",
+          "POSTROUTING",
+          "-s",
+          subnet,
+          "-j",
+          "MASQUERADE"
+        ])
+
         System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
 
         System.cmd("iptables", [
@@ -356,7 +405,9 @@ defmodule Hermit.Vpn.Outbound.Local do
         ])
       rescue
         e ->
-          Logger.warning("Error encountered during Local outbound cleanup for pair #{pair_id}: #{inspect(e)}")
+          Logger.warning(
+            "Error encountered during Local outbound cleanup for pair #{pair_id}: #{inspect(e)}"
+          )
       end
 
       :ok

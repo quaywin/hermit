@@ -172,6 +172,29 @@
                     class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
                   ><%= Phoenix.HTML.Form.input_value(f, :config)["wg_config"] %></textarea>
                 </div>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
+                  <input
+                    type="checkbox"
+                    id="create_block_ipv6_wg"
+                    name="outbound_profile[config][block_ipv6]"
+                    value="true"
+                    checked={
+                      Map.get(
+                        Phoenix.HTML.Form.input_value(f, :config) || %{},
+                        "block_ipv6",
+                        "true"
+                      ) in [true, "true"]
+                    }
+                    class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle rounded-[4px]"
+                  />
+                  <label
+                    for="create_block_ipv6_wg"
+                    class="text-xs font-medium text-base-content/70 cursor-pointer"
+                  >
+                    Block/Reject IPv6 Forwarding (Recommended for IPv4-only VPNs)
+                  </label>
+                </div>
               </div>
             <% "local" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
@@ -194,6 +217,29 @@
                     value={Phoenix.HTML.Form.input_value(f, :config)["host_ip"]}
                     class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] text-sm rounded-[4px] p-2.5"
                   />
+                </div>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
+                  <input
+                    type="checkbox"
+                    id="create_block_ipv6_local"
+                    name="outbound_profile[config][block_ipv6]"
+                    value="true"
+                    checked={
+                      Map.get(
+                        Phoenix.HTML.Form.input_value(f, :config) || %{},
+                        "block_ipv6",
+                        "true"
+                      ) in [true, "true"]
+                    }
+                    class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle rounded-[4px]"
+                  />
+                  <label
+                    for="create_block_ipv6_local"
+                    class="text-xs font-medium text-base-content/70 cursor-pointer"
+                  >
+                    Block/Reject IPv6 Forwarding (Recommended for IPv4-only VPNs)
+                  </label>
                 </div>
               </div>
             <% _ -> %>
@@ -304,6 +350,29 @@
                     class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
                   ><%= (Phoenix.HTML.Form.input_value(f, :config) || %{})["wg_config"] %></textarea>
                 </div>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
+                  <input
+                    type="checkbox"
+                    id="edit_block_ipv6_wg"
+                    name="outbound_profile[config][block_ipv6]"
+                    value="true"
+                    checked={
+                      Map.get(
+                        Phoenix.HTML.Form.input_value(f, :config) || %{},
+                        "block_ipv6",
+                        "true"
+                      ) in [true, "true"]
+                    }
+                    class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle rounded-[4px]"
+                  />
+                  <label
+                    for="edit_block_ipv6_wg"
+                    class="text-xs font-medium text-base-content/70 cursor-pointer"
+                  >
+                    Block/Reject IPv6 Forwarding (Recommended for IPv4-only VPNs)
+                  </label>
+                </div>
                 <%= if error_msg = f[:config].errors |> List.first() do %>
                   <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
                     <.icon name="hero-exclamation-circle" class="size-4 text-error" />
@@ -332,6 +401,29 @@
                     value={(Phoenix.HTML.Form.input_value(f, :config) || %{})["host_ip"]}
                     class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] text-sm rounded-[4px] p-2.5"
                   />
+                </div>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
+                  <input
+                    type="checkbox"
+                    id="edit_block_ipv6_local"
+                    name="outbound_profile[config][block_ipv6]"
+                    value="true"
+                    checked={
+                      Map.get(
+                        Phoenix.HTML.Form.input_value(f, :config) || %{},
+                        "block_ipv6",
+                        "true"
+                      ) in [true, "true"]
+                    }
+                    class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle rounded-[4px]"
+                  />
+                  <label
+                    for="edit_block_ipv6_local"
+                    class="text-xs font-medium text-base-content/70 cursor-pointer"
+                  >
+                    Block/Reject IPv6 Forwarding (Recommended for IPv4-only VPNs)
+                  </label>
                 </div>
                 <%= if error_msg = f[:config].errors |> List.first() do %>
                   <p class="mt-1.5 flex gap-2 items-center text-xs text-error">

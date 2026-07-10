@@ -605,6 +605,7 @@ defmodule Hermit.Vpn.DnsWorker do
             "tailscale",
             "--socket=#{socket_path}",
             "up",
+            "--reset",
             "--authkey=#{auth_key}",
             "--accept-dns=false",
             "--accept-routes=false",
@@ -894,8 +895,6 @@ defmodule Hermit.Vpn.DnsWorker do
       _ -> false
     end
   end
-
-
 
   defp stop_tailscaled_by_pid(pid_path) do
     if File.exists?(pid_path) do

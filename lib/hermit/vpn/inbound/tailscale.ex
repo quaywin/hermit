@@ -161,7 +161,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
                 Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
 
-            if api_key != "" and tailnet != "" do
+            if ((api_key && api_key != "") and tailnet) && tailnet != "" do
               Logger.info(
                 "Pre-updating Tailscale App Connector ACL for domains: #{inspect(domains)}"
               )
@@ -360,14 +360,21 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       Logger.info("Mock: Stopping Tailscale for pair #{pair_id}")
       :ok
     else
+      # 1. Attempt to delete the device from Tailscale tailnet via API
+      try_delete_via_api(pair_id)
+
       pid_path = Path.join([storage_dir, "tailscale", "tailscaled.pid"])
       Logger.info("Stopping Tailscale daemon for pair: hermit_ts_#{pair_id}")
 
       socket_path = "/run/tailscaled.#{pair_id}.socket"
 
-      # 1. Attempt graceful shutdown of tailscaled via tailscale client using its unique socket
+      # 2. Attempt to logout from Tailscale to remove the node from tailnet (if ephemeral), then shutdown
       if File.exists?(socket_path) do
         try do
+          Logger.info("Logging out Tailscale node for pair: hermit_ts_#{pair_id}")
+          System.cmd("tailscale", ["--socket=#{socket_path}", "logout"])
+          Process.sleep(1000)
+
           System.cmd("tailscale", ["--socket=#{socket_path}", "shutdown"])
           Process.sleep(200)
         rescue
@@ -375,21 +382,112 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         end
       end
 
-      # 2. Forcefully kill only this specific tailscaled process using its unique socket argument (avoids killing other pairs)
+      # 3. Forcefully kill only this specific tailscaled process using its unique socket argument (avoids killing other pairs)
       try do
         System.cmd("pkill", ["-9", "-f", "tailscaled.*#{pair_id}.socket"])
       rescue
         _ -> :ok
       end
 
-      # 3. Stop tailscaled daemon process via stored PID (kills the ip wrapper process if still alive)
+      # 4. Stop tailscaled daemon process via stored PID (kills the ip wrapper process if still alive)
       stop_tailscaled_by_pid(pid_path)
 
-      # 4. Clean up Unix domain socket from the container filesystem
+      # 5. Clean up Unix domain socket from the container filesystem
       File.rm(socket_path)
 
       :ok
     end
+  end
+
+  defp try_delete_via_api(pair_id) do
+    case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id) do
+      nil ->
+        Logger.info("VpnPair #{pair_id} not found in DB during cleanup. Skipping API delete.")
+        :ok
+
+      pair ->
+        pair = Hermit.Repo.preload(pair, [:inbound_profile])
+        config = pair.inbound_config || %{}
+        profile_config = (pair.inbound_profile && pair.inbound_profile.config) || %{}
+
+        api_key =
+          Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
+            Map.get(profile_config, "ts_api_key") || Map.get(profile_config, :ts_api_key) ||
+            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+        tailnet =
+          Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+            Map.get(profile_config, "ts_tailnet") || Map.get(profile_config, :ts_tailnet) ||
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+        if ((api_key && api_key != "") and tailnet) && tailnet != "" do
+          expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
+          devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
+
+          Logger.info("Attempting to delete Tailscale device #{expected_hostname} via API...")
+
+          case Req.get(devices_url, auth: {:basic, "#{api_key}:"}) do
+            {:ok, %{status: 200, body: %{"devices" => devices}}} ->
+              device =
+                Enum.find(devices, fn dev ->
+                  dev["hostname"] == expected_hostname or
+                    String.starts_with?(dev["name"] || "", expected_hostname <> ".")
+                end)
+
+              if device do
+                device_id = device["id"]
+                delete_url = "https://api.tailscale.com/api/v2/device/#{device_id}"
+
+                case Req.delete(delete_url, auth: {:basic, "#{api_key}:"}) do
+                  {:ok, %{status: 200}} ->
+                    Logger.info(
+                      "Successfully deleted Tailscale device #{expected_hostname} from tailnet."
+                    )
+
+                    :ok
+
+                  {:ok, %{status: status, body: body}} ->
+                    Logger.error(
+                      "Failed to delete Tailscale device (HTTP #{status}): #{inspect(body)}"
+                    )
+
+                    {:error, :api_delete_failed}
+
+                  {:error, reason} ->
+                    Logger.error("Failed to call Tailscale delete API: #{inspect(reason)}")
+                    {:error, reason}
+                end
+              else
+                Logger.info(
+                  "Tailscale device #{expected_hostname} not found in tailnet, skipping API delete."
+                )
+
+                :ok
+              end
+
+            {:ok, %{status: status, body: body}} ->
+              Logger.error(
+                "Failed to fetch Tailscale devices for deletion (HTTP #{status}): #{inspect(body)}"
+              )
+
+              {:error, :api_fetch_failed}
+
+            {:error, reason} ->
+              Logger.error(
+                "Failed to call Tailscale devices API for deletion: #{inspect(reason)}"
+              )
+
+              {:error, reason}
+          end
+        else
+          Logger.info("Tailscale API credentials not configured. Skipping API device deletion.")
+          :ok
+        end
+    end
+  rescue
+    e ->
+      Logger.error("Error during try_delete_via_api: #{inspect(e)}")
+      :ok
   end
 
   @impl true

@@ -52,7 +52,10 @@
               <td class="py-4 px-4 font-mono text-xs text-base-content/60">
                 <%= case profile.type do %>
                   <% "tailscale" -> %>
-                    <span>Key: {if(profile.config["ts_auth_key"], do: "Configured (tskey-...)", else: "Default")}, Server: {profile.config["login_server"] || "Official"}</span>
+                    <span>Key: {if(profile.config["ts_auth_key"],
+                      do: "Configured (tskey-...)",
+                      else: "Default"
+                    )}, Server: {profile.config["login_server"] || "Official"}</span>
                   <% "proxy" -> %>
                     <span>Port: {profile.config["port"] || "Auto-allocate"} (Dual SOCKS5/HTTP)</span>
                   <% _ -> %>
@@ -143,16 +146,18 @@
             />
           </div>
 
-          <div class="space-y-1.5">
-            <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">DNS Server Profile</label>
-            <.input
-              field={f[:dns_profile_id]}
-              type="select"
-              prompt="Auto-create separate DNS Profile"
-              options={Enum.map(@dns_profiles, &{&1.name, &1.id})}
-              class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-            />
-          </div>
+          <%= if Phoenix.HTML.Form.input_value(f, :type) == "tailscale" do %>
+            <div class="space-y-1.5">
+              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">DNS Server Profile</label>
+              <.input
+                field={f[:dns_profile_id]}
+                type="select"
+                prompt="Auto-create separate DNS Profile"
+                options={Enum.map(@dns_profiles, &{&1.name, &1.id})}
+                class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+              />
+            </div>
+          <% end %>
 
           <!-- Dynamic Input Fields based on Type -->
           <%= case Phoenix.HTML.Form.input_value(f, :type) do %>

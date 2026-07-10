@@ -6,9 +6,11 @@ defmodule Hermit.Vpn.DnsTest do
     if :ets.info(:dns_query_logs) != :undefined do
       :ets.match_delete(:dns_query_logs, {:_, :_})
     end
+
     if :ets.info(:dns_hourly_metrics) != :undefined do
       :ets.match_delete(:dns_hourly_metrics, {:_, :_})
     end
+
     :ok
   end
 
@@ -34,7 +36,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
- 
+
     # Force flush batch buffer
     send(Hermit.Dns.Telemetry, :flush_logs)
 
@@ -60,7 +62,7 @@ defmodule Hermit.Vpn.DnsTest do
     config_id = 888
     topic = "dns_logs:#{profile_id}"
     Phoenix.PubSub.subscribe(Hermit.PubSub, topic)
- 
+
     # Trigger cache update manually since resolve_device is a pure cache lookup now
     GenServer.cast(Hermit.Vpn.DnsDeviceResolver, {:trigger_update, profile_id})
     Process.sleep(150)
@@ -81,6 +83,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+
     send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log1}, 1000
@@ -105,6 +108,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+
     send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log1_cached}, 1000
@@ -126,6 +130,7 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+
     send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log2}, 1000
@@ -150,9 +155,36 @@ defmodule Hermit.Vpn.DnsTest do
         enable_query_logging: true
       }
     )
+
     send(Hermit.Dns.Telemetry, :flush_logs)
 
     assert_receive {:dns_log, received_log2_cached}, 1000
     assert received_log2_cached["client_name"] == "mock-client"
+  end
+
+  test "changeset for proxy inbound profile clears dns_profile_id" do
+    attrs = %{
+      name: "Proxy Inbound Test",
+      type: "proxy",
+      config: %{"port" => 1080},
+      dns_profile_id: 123
+    }
+
+    changeset = Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{}, attrs)
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :dns_profile_id) == nil
+  end
+
+  test "changeset for tailscale inbound profile preserves dns_profile_id" do
+    attrs = %{
+      name: "Tailscale Inbound Test",
+      type: "tailscale",
+      config: %{"ts_auth_key" => "tskey-auth"},
+      dns_profile_id: 123
+    }
+
+    changeset = Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{}, attrs)
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :dns_profile_id) == 123
   end
 end

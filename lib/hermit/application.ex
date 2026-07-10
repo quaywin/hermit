@@ -71,10 +71,11 @@ defmodule Hermit.Application do
     if Application.get_env(:hermit, :boot_persisted_pairs, true) do
       Task.start(fn ->
         try do
-          inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile) |> Hermit.Repo.preload(:dns_profile)
+          inbound_profiles =
+            Hermit.Repo.all(Hermit.Vpn.InboundProfile) |> Hermit.Repo.preload(:dns_profile)
 
           Enum.each(inbound_profiles, fn profile ->
-            if profile.dns_profile && profile.dns_profile.enabled do
+            if profile.type == "tailscale" && profile.dns_profile && profile.dns_profile.enabled do
               case Hermit.Vpn.DnsSupervisor.start_dns(profile.id) do
                 {:ok, _} -> :ok
                 _ -> :error

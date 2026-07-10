@@ -23,7 +23,18 @@ defmodule Hermit.Vpn.InboundProfile do
     |> validate_required([:name, :type, :doh_token])
     |> validate_inclusion(:type, ["tailscale", "proxy"])
     |> validate_config()
+    |> maybe_clear_dns_profile_id()
     |> unique_constraint(:doh_token)
+  end
+
+  defp maybe_clear_dns_profile_id(changeset) do
+    case get_field(changeset, :type) do
+      "proxy" ->
+        put_change(changeset, :dns_profile_id, nil)
+
+      _ ->
+        changeset
+    end
   end
 
   defp put_doh_token(changeset) do
@@ -31,6 +42,7 @@ defmodule Hermit.Vpn.InboundProfile do
       nil ->
         token = :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
         put_change(changeset, :doh_token, token)
+
       _ ->
         changeset
     end

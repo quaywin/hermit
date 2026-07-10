@@ -609,6 +609,7 @@ defmodule Hermit.Vpn.DnsWorker do
             "--authkey=#{auth_key}",
             "--accept-dns=false",
             "--accept-routes=false",
+            "--stateful-filtering=false",
             "--hostname=hermit-dns-#{profile_id}",
             "--timeout=30s"
           ]

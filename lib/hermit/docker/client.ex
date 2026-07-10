@@ -313,6 +313,7 @@ defmodule Hermit.Docker.Client do
             "up",
             "--authkey=#{ts_auth_key}",
             "--advertise-exit-node",
+            "--stateful-filtering=false",
             "--hostname=hermit-node-#{String.replace(id, "_", "-")}",
             "--timeout=30s"
           ]

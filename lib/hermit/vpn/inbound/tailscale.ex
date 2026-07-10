@@ -91,6 +91,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             else
               ["controlplane.tailscale.com"]
             end
+
           wait_for_dns_resolve(wg_name, hosts)
 
           # Authenticate Tailscale and set exit node options
@@ -105,6 +106,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "--authkey=#{ts_auth_key}",
             "--accept-dns=#{dns_mode == "default"}",
             "--accept-routes=false",
+            "--stateful-filtering=false",
             "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
             "--timeout=30s"
           ]
@@ -271,6 +273,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "--reset",
           "--accept-dns=#{dns_mode == "default"}",
           "--accept-routes=false",
+          "--stateful-filtering=false",
           "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
           "--timeout=30s"
         ]
@@ -951,7 +954,10 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             domains = Enum.map(domains, &String.trim/1) |> Enum.reject(&(&1 == ""))
 
             if domains == [] and not has_connector_tag?(acl_map, tag) do
-              Logger.info("Connector tag #{tag} not present in Tailscale ACL and no domains provided. Skipping ACL update.")
+              Logger.info(
+                "Connector tag #{tag} not present in Tailscale ACL and no domains provided. Skipping ACL update."
+              )
+
               {:ok, :skipped_no_change}
             else
               updated_acl_map = update_acl_for_app_connector(acl_map, tag, domains)
@@ -985,7 +991,10 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                   {:ok, :updated}
 
                 {:ok, %{status: status, body: body}} ->
-                  Logger.error("Failed to update Tailscale ACL (HTTP #{status}): #{inspect(body)}")
+                  Logger.error(
+                    "Failed to update Tailscale ACL (HTTP #{status}): #{inspect(body)}"
+                  )
+
                   {:error, {:acl_update_failed, status, body}}
 
                 {:error, reason} ->
@@ -1083,10 +1092,12 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     has_tag_owner? = Map.has_key?(tag_owners, tag)
 
     node_attrs = Map.get(acl_map, "nodeAttrs", [])
+
     has_node_attr? =
       Enum.any?(node_attrs, fn attr ->
         app = Map.get(attr, "app", %{})
         connectors_list = Map.get(app, "tailscale.com/app-connectors", [])
+
         Enum.any?(connectors_list, fn conn ->
           tag in Map.get(conn, "connectors", [])
         end)
@@ -1094,12 +1105,14 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
     auto_approvers = Map.get(acl_map, "autoApprovers", %{})
     routes = Map.get(auto_approvers, "routes", %{})
+
     has_auto_approve? =
       Enum.any?(routes, fn {_route, tags} ->
         is_list(tags) and tag in tags
       end)
 
     grants = Map.get(acl_map, "grants", [])
+
     has_grant? =
       Enum.any?(grants, fn grant ->
         tag in Map.get(grant, "dst", [])
@@ -1340,6 +1353,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         {:ok, pid_str} ->
           pid = String.trim(pid_str)
           Logger.info("Killing tailscaled process: #{pid}")
+
           try do
             System.cmd("kill", [pid])
             Process.sleep(200)
@@ -1425,10 +1439,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
   defp get_mock_error do
     config = Application.get_env(:hermit, :docker, [])
+
     Keyword.get(config, :mock_error)
   end
+
   defp wait_for_dns_resolve(wg_name, hosts, retries \\ 10)
   defp wait_for_dns_resolve(_wg_name, _hosts, 0), do: :ok
+
   defp wait_for_dns_resolve(wg_name, hosts, retries) do
     resolved? =
       Enum.any?(hosts, fn host ->

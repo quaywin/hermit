@@ -11,7 +11,7 @@ defmodule Hermit.Vpn.Provider do
   If the API call fails, it falls back to a list of common countries.
   """
   def list_nordvpn_countries do
-    if Mix.env() == :test do
+    if mock?() do
       [
         %{id: 228, name: "United States", code: "US"},
         %{id: 194, name: "Singapore", code: "SG"}
@@ -43,7 +43,7 @@ defmodule Hermit.Vpn.Provider do
   Exchanges a NordVPN Access Token for the account's NordLynx private key.
   """
   def fetch_nordvpn_private_key(access_token) do
-    if Mix.env() == :test do
+    if mock?() do
       if access_token == "invalid_token" do
         {:error, "Invalid Access Token or API error"}
       else
@@ -72,7 +72,7 @@ defmodule Hermit.Vpn.Provider do
   Fetches recommended WireGuard servers for a specific country from NordVPN API.
   """
   def fetch_nordvpn_servers(country_id, limit \\ 15) do
-    if Mix.env() == :test do
+    if mock?() do
       [
         %{
           id: 1,
@@ -155,7 +155,7 @@ defmodule Hermit.Vpn.Provider do
   Returns a list of servers with country/city metadata.
   """
   def fetch_mullvad_servers do
-    if Mix.env() == :test do
+    if mock?() do
       [
         %{
           hostname: "us-mia-wg-001",
@@ -259,5 +259,10 @@ defmodule Hermit.Vpn.Provider do
       %{id: 97, name: "Hong Kong", code: "HK"},
       %{id: 208, name: "South Korea", code: "KR"}
     ]
+  end
+
+  defp mock? do
+    config = Application.get_env(:hermit, :vpn, [])
+    Keyword.get(config, :mock, false)
   end
 end

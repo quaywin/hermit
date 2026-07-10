@@ -67,6 +67,13 @@ defmodule HermitWeb.Layouts do
               Outbound Profiles
             </.sidebar_link>
             <.sidebar_link
+              navigate={~p"/providers"}
+              active={@active == :providers}
+              icon="hero-cloud-arrow-down"
+            >
+              VPN Providers
+            </.sidebar_link>
+            <.sidebar_link
               navigate={~p"/dns"}
               active={@active == :dns_profiles}
               icon="hero-globe-alt"
@@ -102,11 +109,34 @@ defmodule HermitWeb.Layouts do
             </.link>
             <!-- Mobile Menu Links -->
             <nav class="flex gap-3 text-[11px] font-semibold uppercase tracking-wider">
-              <.link navigate={~p"/"} class={if @active == :tunnels, do: "text-emerald-500", else: "text-base-content/60"}>Tunnels</.link>
-              <.link navigate={~p"/inbounds"} class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}>Inbounds</.link>
-              <.link navigate={~p"/outbounds"} class={if @active == :outbounds, do: "text-emerald-500", else: "text-base-content/60"}>Outbounds</.link>
-              <.link navigate={~p"/dns"} class={if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"}>DNS</.link>
-              <.link navigate={~p"/dns/blocklists"} class={if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"}>Filters</.link>
+              <.link
+                navigate={~p"/"}
+                class={if @active == :tunnels, do: "text-emerald-500", else: "text-base-content/60"}
+              >Tunnels</.link>
+              <.link
+                navigate={~p"/inbounds"}
+                class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}
+              >Inbounds</.link>
+              <.link
+                navigate={~p"/outbounds"}
+                class={if @active == :outbounds, do: "text-emerald-500", else: "text-base-content/60"}
+              >Outbounds</.link>
+              <.link
+                navigate={~p"/providers"}
+                class={if @active == :providers, do: "text-emerald-500", else: "text-base-content/60"}
+              >Providers</.link>
+              <.link
+                navigate={~p"/dns"}
+                class={
+                  if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"
+                }
+              >DNS</.link>
+              <.link
+                navigate={~p"/dns/blocklists"}
+                class={
+                  if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"
+                }
+              >Filters</.link>
             </nav>
           </div>
           <.theme_toggle />
@@ -148,7 +178,9 @@ defmodule HermitWeb.Layouts do
 
   defp active_route(assigns) do
     case assigns[:socket] do
-      nil -> :tunnels
+      nil ->
+        :tunnels
+
       socket ->
         case socket.view do
           HermitWeb.DashboardLive -> :tunnels
@@ -156,6 +188,7 @@ defmodule HermitWeb.Layouts do
           HermitWeb.InboundLive -> :inbounds
           HermitWeb.InboundDetailLive -> :inbounds
           HermitWeb.OutboundLive -> :outbounds
+          HermitWeb.ProviderImportLive -> :providers
           HermitWeb.DnsProfileLive -> :dns_profiles
           HermitWeb.BlocklistLive -> :dns_blocklists
           _ -> :tunnels

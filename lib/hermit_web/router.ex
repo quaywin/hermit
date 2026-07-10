@@ -21,6 +21,7 @@ defmodule HermitWeb.Router do
     live "/", DashboardLive
     live "/inbounds", InboundLive
     live "/outbounds", OutboundLive
+    live "/providers", ProviderImportLive
     live "/tunnels/:id", TunnelDetailLive
     live "/inbounds/:id", InboundDetailLive
     live "/dns", DnsProfileLive

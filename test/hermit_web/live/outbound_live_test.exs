@@ -46,7 +46,8 @@ defmodule HermitWeb.OutboundLiveTest do
     assert html =~ "Mullvad WG US"
 
     # Get profile ID
-    profile = Hermit.Repo.one!(from(p in Hermit.Vpn.OutboundProfile, where: p.name == "Mullvad WG US"))
+    profile =
+      Hermit.Repo.one!(from(p in Hermit.Vpn.OutboundProfile, where: p.name == "Mullvad WG US"))
 
     # Edit the profile
     html =
@@ -83,5 +84,55 @@ defmodule HermitWeb.OutboundLiveTest do
 
     assert html =~ "Outbound Profile deleted"
     refute html =~ "Mullvad WG US Updated"
+  end
+
+  test "auto-fills WireGuard form when selecting from saved provider configs", %{conn: conn} do
+    # Create a dummy ProviderConfig
+    config =
+      Hermit.Repo.insert!(%Hermit.Vpn.ProviderConfig{
+        name: "Mock NordVPN SG #1",
+        provider: "nordvpn",
+        config: %{
+          "wg_config" => "[Interface]\nPrivateKey = outbound_test_key\nAddress = 10.5.0.2/32\n"
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/outbounds")
+
+    # Open Modal
+    view |> element("button[phx-click=open_create_modal]") |> render_click()
+
+    # Select the saved provider config from dropdown
+    html =
+      view
+      |> element("#outbound-profile-form select[name=provider_config_id]")
+      |> render_change(%{"provider_config_id" => to_string(config.id)})
+
+    # Verify that the form has been auto-filled
+    assert html =~ "Mock NordVPN SG #1"
+    assert html =~ "outbound_test_key"
+    assert html =~ "10.5.0.2/32"
+
+    # Submit the form
+    html =
+      view
+      |> form("#outbound-profile-form", %{
+        "outbound_profile" => %{
+          "name" => "Mock NordVPN SG #1",
+          "type" => "wireguard",
+          "config" => %{
+            "wg_config" => "[Interface]\nPrivateKey = outbound_test_key\nAddress = 10.5.0.2/32\n"
+          }
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Outbound Profile created successfully"
+    assert html =~ "Mock NordVPN SG #1"
+
+    # Verify in DB
+    profile = Hermit.Repo.get_by!(Hermit.Vpn.OutboundProfile, name: "Mock NordVPN SG #1")
+    assert profile.type == "wireguard"
+    assert profile.config["wg_config"] =~ "PrivateKey = outbound_test_key"
   end
 end

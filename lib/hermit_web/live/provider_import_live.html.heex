@@ -1,0 +1,423 @@
+<div class="space-y-6">
+  <!-- Header Section -->
+  <header class="border-b border-base-300 pb-6">
+    <div>
+      <h1 class="text-2xl font-medium tracking-display-lg text-base-content uppercase">
+        VPN Providers Import
+      </h1>
+      <p class="text-base-content/60 mt-1 text-sm">
+        Quickly import multiple WireGuard configurations from popular VPN providers (NordVPN, Mullvad) or custom configuration files.
+      </p>
+    </div>
+  </header>
+
+  <!-- Provider Tabs -->
+  <div class="flex border-b border-base-300 gap-2">
+    <button
+      type="button"
+      phx-click="switch_tab"
+      phx-value-tab="nordvpn"
+      class={[
+        "px-4 py-2 text-sm font-semibold border-b-2 transition-all duration-200 cursor-pointer",
+        @current_tab == "nordvpn" && "border-emerald-500 text-emerald-500",
+        @current_tab != "nordvpn" &&
+          "border-transparent text-base-content/60 hover:text-base-content"
+      ]}
+    >
+      🛡️ NordVPN (NordLynx)
+    </button>
+    <button
+      type="button"
+      phx-click="switch_tab"
+      phx-value-tab="bulk_import"
+      class={[
+        "px-4 py-2 text-sm font-semibold border-b-2 transition-all duration-200 cursor-pointer",
+        @current_tab == "bulk_import" && "border-emerald-500 text-emerald-500",
+        @current_tab != "bulk_import" &&
+          "border-transparent text-base-content/60 hover:text-base-content"
+      ]}
+    >
+      📂 Custom Conf Import
+    </button>
+  </div>
+
+  <!-- Content Panels -->
+  <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
+    <%= case @current_tab do %>
+      <% "nordvpn" -> %>
+        <div class="space-y-6">
+          <h2 class="text-lg font-semibold flex items-center gap-2">
+            Import recommended WireGuard configurations from NordVPN
+          </h2>
+
+          <form
+            id="nordvpn-form"
+            phx-change="change_nord_fields"
+            class="grid grid-cols-1 md:grid-cols-2 gap-4"
+          >
+            <div class="space-y-1.5 md:col-span-2">
+              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">NordVPN Access Token</label>
+              <input
+                type="text"
+                name="access_token"
+                value={@nord_access_token}
+                placeholder="Paste your NordVPN Access Token"
+                class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px] font-mono"
+              />
+              <p class="text-xs text-base-content/40">
+                You can generate an Access Token at <a
+                  href="https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/"
+                  target="_blank"
+                  class="text-emerald-500 hover:underline font-semibold"
+                >NordAccount Dashboard > Manual configuration</a>.
+              </p>
+            </div>
+
+            <div class="space-y-1.5 relative" phx-click-away="close_nord_dropdown">
+              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Target Country</label>
+              <input
+                type="text"
+                name="nord_country_name"
+                value={@nord_selected_country_name}
+                phx-focus="open_nord_dropdown"
+                phx-keyup="search_nord_country"
+                placeholder="Type to search and select country..."
+                autocomplete="off"
+                class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+              />
+              <%= if @show_nord_dropdown do %>
+                <ul
+                  style="max-height: 240px; overflow-y: auto;"
+                  class="absolute z-50 w-full bg-base-100 border border-base-300 rounded-[8px] shadow-lg mt-1 text-sm text-base-content divide-y divide-base-300/40"
+                >
+                  <% filtered = filter_countries(@nord_countries, @nord_country_search) %>
+                  <%= if filtered == [] do %>
+                    <li class="px-4 py-2.5 text-base-content/50 italic">No countries found</li>
+                  <% else %>
+                    <li
+                      :for={c <- filtered}
+                      phx-click="select_nord_country_item"
+                      phx-value-id={c.id}
+                      class="px-4 py-2.5 hover:bg-emerald-500/10 hover:text-emerald-500 cursor-pointer transition-colors"
+                    >
+                      {c.name} ({c.code})
+                    </li>
+                  <% end %>
+                </ul>
+              <% end %>
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Outbound Name Prefix</label>
+              <input
+                type="text"
+                name="prefix"
+                value={@nord_prefix}
+                placeholder="Prefix for created profiles"
+                class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Fetch Limit</label>
+              <select
+                name="limit"
+                class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+              >
+                <option value="15" selected={@nord_limit == 15}>15 Servers</option>
+                <option value="30" selected={@nord_limit == 30}>30 Servers</option>
+                <option value="50" selected={@nord_limit == 50}>50 Servers</option>
+                <option value="100" selected={@nord_limit == 100}>100 Servers</option>
+              </select>
+            </div>
+          </form>
+
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              phx-click="fetch_nord_servers"
+              disabled={@nord_loading}
+              class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-6 py-2 cursor-pointer flex items-center gap-2"
+            >
+              <%= if @nord_loading do %>
+                <span class="loading loading-spinner loading-xs"></span> Fetching...
+              <% else %>
+                <.icon name="hero-magnifying-glass" class="size-4" /> Fetch Servers
+              <% end %>
+            </button>
+            <button
+              type="button"
+              phx-click="save_nord_credentials"
+              class="btn btn-outline-custom rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer flex items-center gap-2"
+            >
+              <.icon name="hero-check" class="size-4" /> Save Credentials
+            </button>
+          </div>
+
+          <!-- Server recommendations list -->
+          <%= if @nord_servers != [] do %>
+            <div class="space-y-4 pt-4 border-t border-base-300">
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-base-content/70">
+                  Recommended servers found: {length(@nord_servers)}
+                </span>
+                <span class="text-xs text-base-content/50">
+                  Selected: {MapSet.size(@selected_nord_servers)}
+                </span>
+              </div>
+
+              <div class="overflow-x-auto max-h-96 border border-base-300 rounded-[8px]">
+                <table class="w-full text-left border-collapse">
+                  <thead>
+                    <tr class="border-b border-base-300 bg-base-200/50 text-base-content/60 text-xs font-medium uppercase tracking-wider">
+                      <th class="py-2.5 px-4 w-12 text-center">
+                        <input
+                          type="checkbox"
+                          class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle"
+                          checked={MapSet.size(@selected_nord_servers) == length(@nord_servers)}
+                          phx-click="toggle_all_nord_servers"
+                        />
+                      </th>
+                      <th class="py-2.5 px-4">Server Name</th>
+                      <th class="py-2.5 px-4">Endpoint IP</th>
+                      <th class="py-2.5 px-4">Load Status</th>
+                      <th class="py-2.5 px-4">Public Key</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-base-300 text-xs font-mono">
+                    <tr
+                      :for={server <- @nord_servers}
+                      class="hover:bg-base-200/30 transition-colors"
+                    >
+                      <td class="py-3 px-4 text-center">
+                        <input
+                          type="checkbox"
+                          class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle"
+                          checked={MapSet.member?(@selected_nord_servers, server.id)}
+                          phx-click="toggle_nord_server"
+                          phx-value-id={server.id}
+                        />
+                      </td>
+                      <td class="py-3 px-4 font-semibold font-sans text-base-content">
+                        {server.name}
+                      </td>
+                      <td class="py-3 px-4 text-base-content/60">{server.endpoint}</td>
+                      <td class="py-3 px-4 font-sans font-semibold">
+                        <%= cond do %>
+                          <% server.load < 30 -> %>
+                            <span class="inline-flex items-center gap-1 text-emerald-500">
+                              <span class="size-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              {server.load}% (Idle)
+                            </span>
+                          <% server.load < 70 -> %>
+                            <span class="inline-flex items-center gap-1 text-amber-500">
+                              <span class="size-1.5 rounded-full bg-amber-500"></span>
+                              {server.load}% (Normal)
+                            </span>
+                          <% true -> %>
+                            <span class="inline-flex items-center gap-1 text-error">
+                              <span class="size-1.5 rounded-full bg-error"></span>
+                              {server.load}% (Crowded)
+                            </span>
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4 text-base-content/50 truncate max-w-xs">
+                        {server.pubkey}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="flex justify-end gap-3">
+                <button
+                  type="button"
+                  phx-click="import_nord_servers"
+                  disabled={MapSet.size(@selected_nord_servers) == 0}
+                  class="btn btn-emerald rounded-[6px] text-xs font-semibold uppercase tracking-wider px-6 py-2 cursor-pointer flex items-center gap-2 text-white bg-emerald-600 hover:bg-emerald-700"
+                >
+                  <.icon name="hero-arrow-down-tray" class="size-4" />
+                  Import Selected ({MapSet.size(@selected_nord_servers)}) Outbounds
+                </button>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% "bulk_import" -> %>
+        <div class="space-y-6">
+          <h2 class="text-lg font-semibold">
+            Import custom WireGuard <code>.conf</code> files or raw configuration payload
+          </h2>
+
+          <form
+            id="bulk-import-form"
+            phx-submit="save_bulk"
+            phx-change="validate_bulk"
+            class="space-y-6"
+          >
+            <!-- File Upload Dropzone -->
+            <div class="space-y-2">
+              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Upload .conf Files</label>
+
+              <div
+                class="border-2 border-dashed border-base-300 hover:border-emerald-500 rounded-[8px] p-6 text-center cursor-pointer transition-colors relative"
+                phx-drop-target={@uploads.wg_files.ref}
+              >
+                <.live_file_input
+                  upload={@uploads.wg_files}
+                  class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+                <div class="space-y-2 pointer-events-none">
+                  <.icon
+                    name="hero-document-arrow-up"
+                    class="size-10 mx-auto text-base-content/40"
+                  />
+                  <p class="text-sm font-semibold text-base-content">
+                    Drag & Drop a WireGuard <code>.conf</code> file here to auto-fill
+                  </p>
+                  <p class="text-xs text-base-content/50">
+                    or click to browse from your computer (maximum 1 file)
+                  </p>
+                </div>
+              </div>
+
+              <!-- Upload list progress -->
+              <div
+                :if={@uploads.wg_files.entries != []}
+                class="space-y-2 mt-4 bg-base-200 p-4 rounded-[6px]"
+              >
+                <h4 class="text-xs font-semibold uppercase text-base-content/60">Queued Files</h4>
+                <div
+                  :for={entry <- @uploads.wg_files.entries}
+                  class="flex items-center justify-between text-xs py-1 border-b border-base-300 last:border-0"
+                >
+                  <span class="font-mono text-base-content">{entry.client_name}</span>
+                  <div class="flex items-center gap-3">
+                    <progress
+                      value={entry.progress}
+                      max="100"
+                      class="progress progress-primary w-20 h-1.5"
+                    ></progress>
+                    <button
+                      type="button"
+                      phx-click="cancel-upload"
+                      phx-value-ref={entry.ref}
+                      class="text-error hover:text-error/80 cursor-pointer"
+                    >
+                      <.icon name="hero-x-mark" class="size-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="divider text-xs text-base-content/40">OR PASTE MANUAL CONFIGURATION</div>
+
+            <!-- Manual Paste -->
+            <div class="space-y-4">
+              <div class="space-y-1.5">
+                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Profile Name</label>
+                <input
+                  type="text"
+                  name="paste_name"
+                  value={@paste_name}
+                  placeholder="e.g. My Custom WireGuard"
+                  class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                />
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
+                <textarea
+                  name="paste_text"
+                  rows="8"
+                  placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
+                  class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
+                ><%= @paste_text %></textarea>
+              </div>
+            </div>
+
+            <div class="flex justify-end">
+              <button
+                type="submit"
+                class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-6 py-2 cursor-pointer flex items-center gap-2"
+              >
+                <.icon name="hero-arrow-down-tray" class="size-4" /> Import Configurations
+              </button>
+            </div>
+          </form>
+        </div>
+    <% end %>
+  </div>
+
+  <!-- Saved VPN Configurations Section -->
+  <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+    <div>
+      <h3 class="text-lg font-semibold text-base-content uppercase flex items-center gap-2">
+        📦 Saved VPN Configurations ({length(@saved_configs)})
+      </h3>
+      <p class="text-base-content/60 text-xs mt-1">
+        These configurations are saved in your provider storage. You can quick-fill them when creating a new Outbound Profile.
+      </p>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr class="border-b border-base-300 text-base-content/60 text-xs font-medium uppercase tracking-wider">
+            <th class="py-2.5 px-4">Config Name</th>
+            <th class="py-2.5 px-4">Provider</th>
+            <th class="py-2.5 px-4">Endpoint</th>
+            <th class="py-2.5 px-4 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300 text-sm">
+          <%= if @saved_configs == [] do %>
+            <tr>
+              <td colspan="4" class="py-8 text-center text-base-content/50 italic">
+                No configurations imported yet. Use the tools above to fetch and save configs.
+              </td>
+            </tr>
+          <% else %>
+            <tr
+              :for={config <- @saved_configs}
+              class="hover:bg-base-200/50 transition-colors"
+            >
+              <td class="py-3 px-4 font-semibold text-base-content">{config.name}</td>
+              <td class="py-3 px-4">
+                <span class={[
+                  "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border uppercase font-mono",
+                  config.provider == "nordvpn" &&
+                    "bg-blue-500/10 text-blue-500 border-blue-500/20",
+                  config.provider == "custom" &&
+                    "bg-purple-500/10 text-purple-500 border-purple-500/20"
+                ]}>
+                  {config.provider}
+                </span>
+              </td>
+              <td class="py-3 px-4 font-mono text-xs text-base-content/60">
+                <%= case Regex.run(~r/^\s*Endpoint\s*=\s*([^\s#\n\r]+)/m, config.config["wg_config"] || config.config[:wg_config] || "") do %>
+                  <% [_, endpoint] -> %>
+                    {endpoint}
+                  <% _ -> %>
+                    -
+                <% end %>
+              </td>
+              <td class="py-3 px-4 text-right">
+                <button
+                  id={"delete-config-#{config.id}"}
+                  phx-click="delete_provider_config"
+                  phx-value-id={config.id}
+                  data-confirm="Are you sure you want to delete this saved VPN configuration?"
+                  class="btn btn-xs btn-error btn-outline rounded-[4px] cursor-pointer font-medium text-xs px-2.5"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

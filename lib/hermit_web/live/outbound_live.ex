@@ -7,10 +7,13 @@ defmodule HermitWeb.OutboundLive do
   @impl true
   def mount(_params, _session, socket) do
     outbound_profiles = Hermit.Repo.all(OutboundProfile)
+    provider_configs = Hermit.Repo.all(Hermit.Vpn.ProviderConfig) |> Enum.sort_by(& &1.name)
 
     {:ok,
      socket
      |> assign(outbound_profiles: outbound_profiles)
+     |> assign(provider_configs: provider_configs)
+     |> assign(selected_provider_config_id: "")
      |> assign(show_create_modal: false)
      |> assign(editing_outbound_profile: nil)
      |> assign(editing_outbound_form: nil)
@@ -24,7 +27,14 @@ defmodule HermitWeb.OutboundLive do
 
   @impl true
   def handle_event("open_create_modal", _params, socket) do
-    {:noreply, assign(socket, show_create_modal: true)}
+    provider_configs = Hermit.Repo.all(Hermit.Vpn.ProviderConfig) |> Enum.sort_by(& &1.name)
+
+    {:noreply,
+     assign(socket,
+       show_create_modal: true,
+       provider_configs: provider_configs,
+       selected_provider_config_id: ""
+     )}
   end
 
   @impl true
@@ -32,6 +42,7 @@ defmodule HermitWeb.OutboundLive do
     {:noreply,
      socket
      |> assign(show_create_modal: false)
+     |> assign(selected_provider_config_id: "")
      |> assign_outbound_form()}
   end
 
@@ -58,6 +69,7 @@ defmodule HermitWeb.OutboundLive do
          |> put_flash(:info, "Outbound Profile created successfully.")
          |> assign(outbound_profiles: outbound_profiles)
          |> assign(show_create_modal: false)
+         |> assign(selected_provider_config_id: "")
          |> assign_outbound_form()}
 
       {:error, changeset} ->
@@ -69,11 +81,14 @@ defmodule HermitWeb.OutboundLive do
   def handle_event("edit_outbound", %{"id" => id}, socket) do
     profile = Hermit.Repo.get!(OutboundProfile, id)
     changeset = OutboundProfile.changeset(profile, %{})
+    provider_configs = Hermit.Repo.all(Hermit.Vpn.ProviderConfig) |> Enum.sort_by(& &1.name)
 
     {:noreply,
      socket
      |> assign(editing_outbound_profile: profile)
-     |> assign(editing_outbound_form: to_form(changeset))}
+     |> assign(editing_outbound_form: to_form(changeset))
+     |> assign(provider_configs: provider_configs)
+     |> assign(selected_provider_config_id: "")}
   end
 
   @impl true
@@ -81,7 +96,8 @@ defmodule HermitWeb.OutboundLive do
     {:noreply,
      socket
      |> assign(editing_outbound_profile: nil)
-     |> assign(editing_outbound_form: nil)}
+     |> assign(editing_outbound_form: nil)
+     |> assign(selected_provider_config_id: "")}
   end
 
   @impl true
@@ -110,7 +126,8 @@ defmodule HermitWeb.OutboundLive do
          |> put_flash(:info, "Outbound Profile updated successfully.")
          |> assign(outbound_profiles: outbound_profiles)
          |> assign(editing_outbound_profile: nil)
-         |> assign(editing_outbound_form: nil)}
+         |> assign(editing_outbound_form: nil)
+         |> assign(selected_provider_config_id: "")}
 
       {:error, changeset} ->
         {:noreply, assign(socket, editing_outbound_form: to_form(changeset))}
@@ -144,6 +161,45 @@ defmodule HermitWeb.OutboundLive do
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to delete profile.")}
       end
+    end
+  end
+
+  @impl true
+  def handle_event("select_provider_config", params, socket) do
+    id = Map.get(params, "provider_config_id") || Map.get(params, "id") || ""
+    provider_configs = socket.assigns.provider_configs
+
+    case Enum.find(provider_configs, fn c -> to_string(c.id) == id end) do
+      nil ->
+        {:noreply, assign(socket, selected_provider_config_id: id)}
+
+      config ->
+        wg_config = config.config["wg_config"] || config.config[:wg_config] || ""
+
+        socket =
+          if socket.assigns.editing_outbound_profile do
+            profile = socket.assigns.editing_outbound_profile
+            # Build changes
+            attrs = %{
+              "name" => config.name,
+              "type" => "wireguard",
+              "config" => %{"wg_config" => wg_config}
+            }
+
+            changeset = OutboundProfile.changeset(profile, attrs)
+            assign(socket, editing_outbound_form: to_form(changeset))
+          else
+            attrs = %{
+              "name" => config.name,
+              "type" => "wireguard",
+              "config" => %{"wg_config" => wg_config}
+            }
+
+            changeset = OutboundProfile.changeset(%OutboundProfile{type: "wireguard"}, attrs)
+            assign(socket, outbound_form: to_form(changeset))
+          end
+
+        {:noreply, assign(socket, selected_provider_config_id: id)}
     end
   end
 

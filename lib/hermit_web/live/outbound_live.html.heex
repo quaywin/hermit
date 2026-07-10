@@ -139,15 +139,39 @@
           <!-- Dynamic Input Fields based on Type -->
           <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
             <% "wireguard" -> %>
-              <div class="space-y-2 bg-base-200 p-4 border border-base-300 rounded-[8px]">
-                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
-                <textarea
-                  name="outbound_profile[config][wg_config]"
-                  rows="10"
-                  placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
-                  required
-                  class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
-                ><%= Phoenix.HTML.Form.input_value(f, :config)["wg_config"] %></textarea>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <%= if @provider_configs != [] do %>
+                  <div class="space-y-1.5 bg-emerald-500/5 border border-emerald-500/20 p-3 rounded-[6px]">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-emerald-500">
+                      ✨ Quick-fill from Saved VPN Provider Configs
+                    </label>
+                    <select
+                      phx-change="select_provider_config"
+                      name="provider_config_id"
+                      class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                    >
+                      <option value="">-- Select a saved config to auto-fill --</option>
+                      <option
+                        :for={config <- @provider_configs}
+                        value={config.id}
+                        selected={to_string(config.id) == @selected_provider_config_id}
+                      >
+                        {config.name} ({String.upcase(config.provider)})
+                      </option>
+                    </select>
+                  </div>
+                <% end %>
+
+                <div class="space-y-2">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
+                  <textarea
+                    name="outbound_profile[config][wg_config]"
+                    rows="10"
+                    placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
+                    required
+                    class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
+                  ><%= Phoenix.HTML.Form.input_value(f, :config)["wg_config"] %></textarea>
+                </div>
               </div>
             <% "local" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
@@ -204,7 +228,8 @@
       <div class="modal-box w-full max-w-2xl bg-base-100 border border-base-300 p-6 space-y-4 text-base-content rounded-[16px]">
         <div class="flex items-center justify-between border-b border-base-300 pb-3">
           <h3 class="text-lg font-medium text-base-content flex items-center gap-2">
-            ✏️ Edit Outbound Profile: <span class="text-[#3ecf8e]">{@editing_outbound_profile.name}</span>
+            ✏️ Edit Outbound Profile:
+            <span class="text-[#3ecf8e]">{@editing_outbound_profile.name}</span>
           </h3>
           <button
             type="button"
@@ -246,15 +271,39 @@
           <!-- Dynamic Input Fields based on Type -->
           <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
             <% "wireguard" -> %>
-              <div class="space-y-2 bg-base-200 p-4 border border-base-300 rounded-[8px]">
-                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
-                <textarea
-                  name="outbound_profile[config][wg_config]"
-                  rows="10"
-                  placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
-                  required
-                  class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
-                ><%= (Phoenix.HTML.Form.input_value(f, :config) || %{})["wg_config"] %></textarea>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <%= if @provider_configs != [] do %>
+                  <div class="space-y-1.5 bg-emerald-500/5 border border-emerald-500/20 p-3 rounded-[6px]">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-emerald-500">
+                      ✨ Quick-fill from Saved VPN Provider Configs
+                    </label>
+                    <select
+                      phx-change="select_provider_config"
+                      name="provider_config_id"
+                      class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                    >
+                      <option value="">-- Select a saved config to auto-fill --</option>
+                      <option
+                        :for={config <- @provider_configs}
+                        value={config.id}
+                        selected={to_string(config.id) == @selected_provider_config_id}
+                      >
+                        {config.name} ({String.upcase(config.provider)})
+                      </option>
+                    </select>
+                  </div>
+                <% end %>
+
+                <div class="space-y-2">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
+                  <textarea
+                    name="outbound_profile[config][wg_config]"
+                    rows="10"
+                    placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
+                    required
+                    class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
+                  ><%= (Phoenix.HTML.Form.input_value(f, :config) || %{})["wg_config"] %></textarea>
+                </div>
                 <%= if error_msg = f[:config].errors |> List.first() do %>
                   <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
                     <.icon name="hero-exclamation-circle" class="size-4 text-error" />

@@ -109,4 +109,27 @@ defmodule Hermit.Dns.PacketTest do
 
     assert Packet.extract_resolved_ips(packet_bin) == ["142.250.190.46", "2001:db8::1"]
   end
+
+  test "correctly parses and formats new DNS qtypes" do
+    # Test qtype_to_string/1 directly
+    assert Packet.qtype_to_string(:HTTPS) == "HTTPS"
+    assert Packet.qtype_to_string(:SVCB) == "SVCB"
+    assert Packet.qtype_to_string(:SRV) == "SRV"
+    assert Packet.qtype_to_string(:CAA) == "CAA"
+    assert Packet.qtype_to_string(:ANY) == "ANY"
+
+    # Test parse query with TYPE_65 (HTTPS)
+    qname = <<6>> <> "google" <> <<3>> <> "com" <> <<0>>
+    # 65 in hex
+    qtype_https = <<0x00, 0x41>>
+    qclass = <<0x00, 0x01>>
+
+    packet_bin =
+      <<0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
+        qname <> qtype_https <> qclass
+
+    assert {:ok, query} = Packet.parse(packet_bin)
+    assert query.qtype == :HTTPS
+    assert Packet.qtype_to_string(query.qtype) == "HTTPS"
+  end
 end

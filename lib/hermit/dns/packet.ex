@@ -24,7 +24,21 @@ defmodule Hermit.Dns.Packet do
     Record.extract(:dns_rrdata_aaaa, from_lib: "dns_erlang/include/dns.hrl")
   )
 
-  @type qtype :: :A | :AAAA | :MX | :TXT | :CNAME | :NS | :PTR | :SOA | {:unknown, integer()}
+  @type qtype ::
+          :A
+          | :AAAA
+          | :MX
+          | :TXT
+          | :CNAME
+          | :NS
+          | :PTR
+          | :SOA
+          | :HTTPS
+          | :SVCB
+          | :SRV
+          | :CAA
+          | :ANY
+          | {:unknown, integer()}
 
   def parse(packet) do
     case packet do
@@ -38,7 +52,9 @@ defmodule Hermit.Dns.Packet do
     end
   end
 
-  defp parse_query_fast(<<id::16, _rest_header::binary-size(10), question_section::binary>> = packet) do
+  defp parse_query_fast(
+         <<id::16, _rest_header::binary-size(10), question_section::binary>> = packet
+       ) do
     case parse_name(question_section) do
       {domain, <<qtype_val::16, qclass::16, _rest::binary>>} ->
         id_bin = <<id::16>>
@@ -122,6 +138,11 @@ defmodule Hermit.Dns.Packet do
   defp to_qtype(2), do: :NS
   defp to_qtype(12), do: :PTR
   defp to_qtype(6), do: :SOA
+  defp to_qtype(65), do: :HTTPS
+  defp to_qtype(64), do: :SVCB
+  defp to_qtype(33), do: :SRV
+  defp to_qtype(257), do: :CAA
+  defp to_qtype(255), do: :ANY
   defp to_qtype(val), do: {:unknown, val}
 
   def qtype_to_string(:A), do: "A"
@@ -132,6 +153,11 @@ defmodule Hermit.Dns.Packet do
   def qtype_to_string(:NS), do: "NS"
   def qtype_to_string(:PTR), do: "PTR"
   def qtype_to_string(:SOA), do: "SOA"
+  def qtype_to_string(:HTTPS), do: "HTTPS"
+  def qtype_to_string(:SVCB), do: "SVCB"
+  def qtype_to_string(:SRV), do: "SRV"
+  def qtype_to_string(:CAA), do: "CAA"
+  def qtype_to_string(:ANY), do: "ANY"
   def qtype_to_string({:unknown, val}), do: "TYPE_#{val}"
 
   @doc """
@@ -175,7 +201,8 @@ defmodule Hermit.Dns.Packet do
   @doc """
   Builds an empty response (NOERROR with 0 answers) for AAAA blocking.
   """
-  def build_empty_response(id_bin, query_record) when Record.is_record(query_record, :dns_query) do
+  def build_empty_response(id_bin, query_record)
+      when Record.is_record(query_record, :dns_query) do
     id_val = parse_id_bin(id_bin)
 
     msg =

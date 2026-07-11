@@ -109,11 +109,123 @@ defmodule HermitWeb.DNSController do
         </plist>
         """
 
+        response_data =
+          case sign_profile(xml) do
+            {:ok, signed} -> signed
+            {:error, _} -> xml
+          end
+
         conn
         |> put_resp_header("content-type", "application/x-apple-aspen-config")
         |> put_resp_header("content-disposition", "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\"")
-        |> send_resp(200, xml)
+        |> send_resp(200, response_data)
     end
+  end
+
+  defp sign_profile(xml) do
+    phx_host = System.get_env("PHX_HOST")
+
+    if phx_host && phx_host not in [nil, "", "localhost", "127.0.0.1"] do
+      storage_dir = Application.get_env(:hermit, :storage)[:base_path] || "/app/storage"
+
+      # Check both the root certs/ directory and the site_encrypt domain-specific directory
+      certs_dirs = [
+        Path.join([storage_dir, "certs", phx_host]),
+        Path.join(storage_dir, "certs")
+      ]
+
+      cert_path = find_existing_file_in_dirs(certs_dirs, ["cert.pem", "fullchain.pem"])
+      key_path = find_existing_file_in_dirs(certs_dirs, ["privkey.pem", "key.pem"])
+
+      {cert_path, key_path} =
+        if cert_path && key_path do
+          {cert_path, key_path}
+        else
+          # Fallback to generating self-signed in the domain directory
+          generate_self_signed_cert(Path.join([storage_dir, "certs", phx_host]), phx_host)
+        end
+
+      chain_path = find_existing_file_in_dirs(certs_dirs, ["chain.pem"])
+
+      if cert_path && key_path do
+        random_suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+        temp_xml_path = Path.join(System.tmp_dir!(), "temp_profile_#{random_suffix}.xml")
+
+        try do
+          File.write!(temp_xml_path, xml)
+
+          args = [
+            "smime", "-sign",
+            "-signer", cert_path,
+            "-inkey", key_path,
+            "-outform", "der",
+            "-nodetach",
+            "-in", temp_xml_path
+          ]
+
+          args = if chain_path, do: args ++ ["-certfile", chain_path], else: args
+
+          case System.cmd("openssl", args) do
+            {signed_binary, 0} ->
+              {:ok, signed_binary}
+
+            {error_msg, status} ->
+              Logger.error("DNS Server: OpenSSL profile signing failed (status #{status}): #{inspect(error_msg)}")
+              {:error, :signing_failed}
+          end
+        rescue
+          exception ->
+            Logger.error("DNS Server: OpenSSL execution failed during signing: #{inspect(exception)}")
+            {:error, :signing_failed}
+        after
+          File.rm(temp_xml_path)
+        end
+      else
+        {:error, :missing_certs}
+      end
+    else
+      {:error, :no_signing_host}
+    end
+  end
+
+  defp generate_self_signed_cert(certs_dir, phx_host) do
+    File.mkdir_p!(certs_dir)
+    cert_path = Path.join(certs_dir, "cert.pem")
+    key_path = Path.join(certs_dir, "privkey.pem")
+
+    cmd_args = [
+      "req", "-x509", "-newkey", "rsa:2048",
+      "-keyout", key_path,
+      "-out", cert_path,
+      "-days", "3650",
+      "-nodes",
+      "-subj", "/CN=#{phx_host}"
+    ]
+
+    try do
+      case System.cmd("openssl", cmd_args) do
+        {_, 0} ->
+          Logger.info("DNS Server: Generated self-signed certificates for #{phx_host} at #{certs_dir}")
+          {cert_path, key_path}
+
+        {error, status} ->
+          Logger.error("DNS Server: Failed to generate self-signed certificates (status #{status}): #{inspect(error)}")
+          {nil, nil}
+      end
+    rescue
+      exception ->
+        Logger.error("DNS Server: Failed to execute openssl command for self-signed certificate generation: #{inspect(exception)}")
+        {nil, nil}
+    end
+  end
+
+  defp find_existing_file_in_dirs(dirs, filenames) do
+    Enum.find_value(dirs, fn dir ->
+      Enum.find_value(filenames, fn filename ->
+        path = Path.join(dir, filename)
+        if File.exists?(path), do: path
+      end)
+    end)
   end
 
   defp get_dns_packet(conn, params) do

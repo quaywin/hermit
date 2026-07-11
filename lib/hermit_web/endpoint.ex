@@ -1,5 +1,5 @@
 defmodule HermitWeb.Endpoint do
-  use Phoenix.Endpoint, otp_app: :hermit
+  use SiteEncrypt.Phoenix.Endpoint, otp_app: :hermit
 
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
@@ -49,6 +49,27 @@ defmodule HermitWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug HermitWeb.Router
+
+  @impl SiteEncrypt
+  def certification do
+    host = System.get_env("PHX_HOST") || "localhost"
+    storage_dir = Application.get_env(:hermit, :storage)[:base_path] || "/app/storage"
+
+    directory_url =
+      if host in ["localhost", "127.0.0.1", ""] do
+        {:internal, port: 4001}
+      else
+        System.get_env("ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory")
+      end
+
+    SiteEncrypt.configure(
+      client: :native,
+      directory_url: directory_url,
+      emails: ["admin@#{host}"],
+      db_folder: storage_dir,
+      domains: [host]
+    )
+  end
 
   def log_level(conn) do
     case conn.path_info do

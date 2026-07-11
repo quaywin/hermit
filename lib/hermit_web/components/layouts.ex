@@ -101,49 +101,62 @@ defmodule HermitWeb.Layouts do
       <!-- Main Content Area -->
       <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <!-- Top Nav cho Mobile / Tablet (Ẩn trên màn hình lớn lg) -->
-        <header class="h-16 flex items-center justify-between px-6 border-b border-base-300 lg:hidden bg-base-100 shrink-0">
-          <div class="flex items-center gap-4">
-            <.link navigate={~p"/"} class="flex items-center gap-2">
+        <header class="h-16 flex items-center justify-between px-4 sm:px-6 border-b border-base-300 lg:hidden bg-base-100 shrink-0">
+          <div class="flex items-center gap-4 w-full overflow-hidden">
+            <.link navigate={~p"/"} class="flex items-center gap-2 shrink-0">
               <img src={~p"/images/logo.png"} width="28" />
-              <span class="font-bold text-sm uppercase tracking-wider">Hermit</span>
+              <span class="font-bold text-sm uppercase tracking-wider text-base-content">Hermit</span>
             </.link>
-            <!-- Mobile Menu Links -->
-            <nav class="flex gap-3 text-[11px] font-semibold uppercase tracking-wider">
+            <!-- Mobile Menu Links (Icons only for maximum space efficiency) -->
+            <nav class="flex items-center gap-4 flex-1 justify-end py-1">
               <.link
                 navigate={~p"/"}
                 class={if @active == :tunnels, do: "text-emerald-500", else: "text-base-content/60"}
-              >Tunnels</.link>
+                title="Tunnels"
+              >
+                <.icon name="hero-server-stack" class="size-5 shrink-0" />
+              </.link>
               <.link
                 navigate={~p"/inbounds"}
                 class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}
-              >Inbounds</.link>
+                title="Inbound Profiles"
+              >
+                <.icon name="hero-arrow-down-left" class="size-5 shrink-0" />
+              </.link>
               <.link
                 navigate={~p"/outbounds"}
                 class={if @active == :outbounds, do: "text-emerald-500", else: "text-base-content/60"}
-              >Outbounds</.link>
+                title="Outbound Profiles"
+              >
+                <.icon name="hero-arrow-up-right" class="size-5 shrink-0" />
+              </.link>
               <.link
                 navigate={~p"/providers"}
                 class={if @active == :providers, do: "text-emerald-500", else: "text-base-content/60"}
-              >Providers</.link>
+                title="VPN Providers"
+              >
+                <.icon name="hero-cloud-arrow-down" class="size-5 shrink-0" />
+              </.link>
               <.link
                 navigate={~p"/dns"}
-                class={
-                  if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"
-                }
-              >DNS</.link>
+                class={if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"}
+                title="DNS Profiles"
+              >
+                <.icon name="hero-globe-alt" class="size-5 shrink-0" />
+              </.link>
               <.link
                 navigate={~p"/dns/blocklists"}
-                class={
-                  if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"
-                }
-              >Filters</.link>
+                class={if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"}
+                title="Filters"
+              >
+                <.icon name="hero-shield-check" class="size-5 shrink-0" />
+              </.link>
             </nav>
           </div>
-          <.theme_toggle />
         </header>
 
         <!-- Container cuộn chứa nội dung chính -->
-        <main class="flex-1 overflow-y-auto px-4 py-8 sm:px-6 lg:px-8 bg-base-200/10">
+        <main class="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 lg:px-8 bg-base-200/10">
           <div class="mx-auto max-w-7xl">
             {@inner_content}
           </div>
@@ -241,43 +254,6 @@ defmodule HermitWeb.Layouts do
         {gettext("Attempting to reconnect")}
         <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
       </.flash>
-    </div>
-    """
-  end
-
-  @doc """
-  Provides dark vs light theme toggle based on themes defined in app.css.
-
-  See <head> in root.html.heex which applies the theme before page load.
-  """
-  def theme_toggle(assigns) do
-    ~H"""
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 [[data-theme-source=system]_&]:!left-0 transition-[left]" />
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="system"
-      >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="light"
-      >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="dark"
-      >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
     </div>
     """
   end

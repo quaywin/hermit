@@ -212,4 +212,39 @@ defmodule HermitWeb.DNSControllerTest do
       :telemetry.detach(handler_id)
     end
   end
+
+  test "GET /dns-query/:doh_token/mobileconfig automatically generates certs and signs if PHX_HOST is set", %{conn: conn} do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "DoH_Signing_Profile",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_doh_sign"},
+        doh_token: "doh_sign_token"
+      })
+
+    profile_id = profile.id
+    doh_token = profile.doh_token
+
+    original_phx_host = System.get_env("PHX_HOST")
+    original_storage = Application.get_env(:hermit, :storage)
+    
+    System.put_env("PHX_HOST", "signed.example.com")
+    temp_storage_dir = Path.join(System.tmp_dir!(), "hermit_test_storage_#{profile_id}")
+    Application.put_env(:hermit, :storage, Keyword.put(original_storage || [], :base_path, temp_storage_dir))
+
+    try do
+      # Download should automatically generate certificates in temp storage and sign
+      conn_signed = get(conn, ~p"/dns-query/#{doh_token}/mobileconfig")
+      assert conn_signed.status == 200
+      signed_body = response(conn_signed, 200)
+
+      refute String.starts_with?(signed_body, "<?xml")
+      assert File.exists?(Path.join([temp_storage_dir, "certs", "signed.example.com", "cert.pem"]))
+      assert File.exists?(Path.join([temp_storage_dir, "certs", "signed.example.com", "privkey.pem"]))
+    after
+      if original_phx_host, do: System.put_env("PHX_HOST", original_phx_host), else: System.delete_env("PHX_HOST")
+      if original_storage, do: Application.put_env(:hermit, :storage, original_storage), else: Application.delete_env(:hermit, :storage)
+      File.rm_rf!(temp_storage_dir)
+    end
+  end
 end

@@ -1,6 +1,6 @@
 # Hermit
 
-Hermit is a modular multi-tunnel orchestrator and manager for VPN connection pairs running inside isolated network namespaces (`netns`). It decouples configurations into reusable **Inbound Profiles** (e.g., SOCKS5/HTTP Proxy, Tailscale) and **Outbound Profiles** (e.g., WireGuard), allowing you to easily pair, share configurations, and manage multiple tunnels side-by-side.
+Hermit is a modular multi-tunnel orchestrator and manager for VPN connection pairs running inside isolated network namespaces (`netns`). It decouples configurations into reusable **Inbound Profiles** (e.g., SOCKS5/HTTP Proxy, Tailscale) and **Outbound Profiles** (e.g., WireGuard, Local), allowing you to easily pair, share configurations, and manage multiple tunnels side-by-side.
 
 The application provides a real-time web dashboard to monitor bandwidth usage, manage connection states, create and share profiles, and configure global settings.
 
@@ -21,9 +21,9 @@ Hermit creates VPN tunnels by combining an **Inbound Profile** with an **Outboun
 flowchart TD
     Client["Client / Host Application"] -->|"1. Request In"| Inbound["Inbound Profile <br/> SOCKS5/HTTP or Tailscale"]
     subgraph NetNS["VPN Pair Namespace"]
-        Inbound -->|"2. Internal Forwarding"| Outbound["Outbound Profile <br/> WireGuard"]
+        Inbound -->|"2. Internal Forwarding"| Outbound["Outbound Profile <br/> WireGuard / Local"]
     end
-    Outbound -->|"3. Encrypted Tunnel Out"| Internet["VPN / External Internet"]
+    Outbound -->|"3. Tunnel / Host Out"| Internet["VPN / External Internet"]
 ```
 
 - **Inbound Profiles** define how traffic enters the namespace:
@@ -31,6 +31,7 @@ flowchart TD
   - **Tailscale**: Joins the namespace to your Tailscale network (tailnet) as a node, so any tailnet device can route traffic through it.
 - **Outbound Profiles** define how traffic exits the namespace:
   - **WireGuard**: All outbound traffic is routed through a WireGuard tunnel.
+  - **Local**: Bypasses VPN tunnels and routes traffic directly through the host network interface. This is useful for testing, local proxies, or selective routing without a VPN.
 - **VPN Pairs**: The orchestrator combines one Inbound + one Outbound into a running instance, handling resource allocation and conflict prevention automatically.
 
 ### DNS Control Plane
@@ -83,6 +84,21 @@ When a DNS query arrives, the server evaluates it through a **fast path** before
 If none of the above match (cache miss), the query is forwarded to configured **upstream DNS servers** (UDP or DoH). Tailscale internal domains (`*.ts.net`) are resolved via **MagicDNS** automatically.
 
 When **Tailscale DNS Override** is enabled, the DNS Node registers itself as the tailnet-wide DNS server via the Tailscale API, so all devices on the tailnet use it automatically without manual configuration.
+
+### DNS-over-HTTPS (DoH) & Apple Device Provisioning
+
+In addition to Tailscale integration, Hermit includes a built-in **DNS-over-HTTPS (DoH)** server. This allows any device (even those not on your Tailnet) to use your secure, filtered DNS configurations.
+- **Secure DoH Endpoint**: Each Inbound Profile is assigned a unique token, exposing a secure DoH resolver endpoint at `https://<your-host>/dns-query/<doh_token>`.
+- **Apple Configuration Profiles (`.mobileconfig`)**: Hermit can dynamically generate Apple configuration profiles for iOS and macOS. Users can download these profiles from the dashboard to configure system-wide secure DNS with zero manual setup.
+
+---
+
+## VPN Provider Integration
+
+To simplify creating Outbound Profiles, Hermit provides a dedicated **Providers** page (`/providers`) that integrates with popular commercial VPN providers:
+- **NordVPN**: Authenticate using a NordVPN Access Token to retrieve your private key, list recommended countries, and import recommended WireGuard server configurations.
+- **Mullvad**: Fetch active Mullvad WireGuard servers with country/city metadata, network speeds, and public keys.
+- **Custom Imports**: Easily upload or paste custom WireGuard configuration files to generate new Outbound Profiles in one click.
 
 ---
 

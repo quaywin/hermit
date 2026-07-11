@@ -21,4 +21,4 @@ services:
       - STORAGE_BASE_PATH=/app/storage
       - HERMIT_BASIC_AUTH_USER
       - HERMIT_BASIC_AUTH_PASS
-    restart: unless-stopped
+    restart: "on-failure:5"

@@ -66,19 +66,10 @@ if config_env() == :prod do
       )
 
   host = System.get_env("PHX_HOST") || "example.com"
-  force_ssl = System.get_env("FORCE_SSL") == "true"
 
   config :hermit, HermitWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     check_origin: :conn,
-    force_ssl:
-      if(force_ssl,
-        do: [
-          rewrite_on: [:x_forwarded_proto],
-          exclude: [hosts: ["localhost", "127.0.0.1"]]
-        ],
-        else: false
-      ),
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

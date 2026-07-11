@@ -15,6 +15,21 @@ defmodule HermitWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  @ssl_opts Plug.SSL.init(
+    rewrite_on: [:x_forwarded_proto],
+    exclude: [hosts: ["localhost", "127.0.0.1"]]
+  )
+
+  plug :force_ssl_redirect
+
+  defp force_ssl_redirect(conn, _opts) do
+    if System.get_env("FORCE_SSL") == "true" do
+      Plug.SSL.call(conn, @ssl_opts)
+    else
+      conn
+    end
+  end
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

@@ -1426,9 +1426,11 @@ defmodule Hermit.Vpn.PairWorker do
         {:noreply, updated_state}
 
       true ->
-        Logger.warning(
-          "Received EXIT signal from auxiliary process #{inspect(pid)} for pair #{state.id} (not main inbound port). Reason: #{inspect(reason)}"
-        )
+        if reason not in [:normal, :shutdown, :killed] do
+          Logger.warning(
+            "Received EXIT signal from auxiliary process #{inspect(pid)} for pair #{state.id} (not main inbound port). Reason: #{inspect(reason)}"
+          )
+        end
 
         {:noreply, state}
     end

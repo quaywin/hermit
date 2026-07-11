@@ -14,7 +14,7 @@ services:
       - PHX_SERVER=true
       - PORT=3000
       - PHX_HOST=${PHX_HOST:-localhost}
-      - SECRET_KEY_BASE=56eb70dfc4a56a64cfc4a56a64cfc4a56a64cfc4a56a64cfc4a56a64cfc4a56a
+      - SECRET_KEY_BASE
       - STORAGE_BASE_PATH=/app/storage
       - HERMIT_BASIC_AUTH_USER
       - HERMIT_BASIC_AUTH_PASS

@@ -139,19 +139,22 @@ HERMIT_BASIC_AUTH_PASS=your_secure_password
 
 If these environment variables are unset or commented out, authentication will be bypassed.
 
-### Customizing the Tailscale Port & Port Conflicts
+### Tailscale UDP Port & VPS Firewall Configuration
 
-By default, the container attempts to bind port `41641/udp` on the host machine. If you run Tailscale directly on the host machine (e.g., via the Tailscale macOS app or `tailscaled` daemon on Linux), Docker will fail to bind this port and return an error: `failed to bind host port 0.0.0.0:41641/udp: address already in use`.
+By default, Hermit binds port `41642/udp` on the host machine (mapped to `41641/udp` inside the container). This avoids conflicts with any Tailscale daemon running directly on your host machine, which typically uses port `41641/udp`.
 
-To resolve this conflict:
+If you are deploying Hermit on a VPS:
+- **Recommended**: Open port `41642/udp` in your VPS firewall to allow Tailscale to establish direct, peer-to-peer (P2P) connections, ensuring optimal speed and the lowest latency.
+
+If you need to change this port to a different one (e.g., `41643`):
 1. Open `docker-compose.yml` (and/or `docker-compose.dev.yml`).
-2. Change the host-side port mapping to a free port (e.g., `41642`):
+2. Change the host-side port mapping:
    ```yaml
    ports:
      - "${HERMIT_PORT:-3000}:3000"
-     - "41642:41641/udp"
+     - "41643:41641/udp"
    ```
-3. *(Optional but recommended)* Open port `41642/udp` in your VPS firewall to allow Tailscale to establish direct, peer-to-peer (P2P) connections for optimal speed and lowest latency.
+3. Open the corresponding port on your firewall instead.
 
 ## Why Docker?
 

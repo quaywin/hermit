@@ -1238,6 +1238,8 @@ defmodule Hermit.Dns.Server do
           # 3. Hết DNS dự phòng: Thử tìm trong cache stale trước khi trả SERVFAIL! (Serve-Stale - RFC 8767)
           case Cache.lookup(state.profile_id, original_query.domain, original_query.qtype, true) do
             {:stale, stale_packet, status, answer_log_info} ->
+              # Set TTL cho stale packet về 30s (RFC 8767) để client không cache quá lâu
+              stale_packet = Packet.patch_stale_ttl(stale_packet, 30)
               # Sửa ID của stale packet thành ID gốc của client và gửi đi
               <<_::binary-size(2), rest_packet::binary>> = stale_packet
               client_packet = original_tx_id <> rest_packet
@@ -1378,10 +1380,6 @@ defmodule Hermit.Dns.Server do
       other ->
         {:error, other}
     end
-  end
-
-  defp query_upstream({:doh_proxy, _url, _pair_id}, _packet) do
-    {:error, :probing_disabled}
   end
 
   defp query_upstream(other, _packet) do

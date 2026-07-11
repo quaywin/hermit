@@ -132,4 +132,36 @@ defmodule Hermit.Dns.PacketTest do
     assert query.qtype == :HTTPS
     assert Packet.qtype_to_string(query.qtype) == "HTTPS"
   end
+
+  test "patch_rcode/2 handles extremely short packets without crashing" do
+    # Empty packet
+    assert Packet.patch_rcode(<<>>, 2) == <<>>
+    # 2 bytes packet (only ID)
+    assert Packet.patch_rcode(<<0x12, 0x34>>, 2) == <<0x12, 0x34>>
+    # 3 bytes packet
+    assert Packet.patch_rcode(<<0x12, 0x34, 0x56>>, 2) == <<0x12, 0x34, 0x56>>
+  end
+
+  test "patch_stale_ttl/2 updates TTL of answers in response packet" do
+    id = <<0x12, 0x34>>
+    qname = <<6>> <> "google" <> <<3>> <> "com" <> <<0>>
+    qtype = <<0, 1>>
+    qclass = <<0, 1>>
+    question = qname <> qtype <> qclass
+
+    # Original TTL is 300 seconds (0x0000012C)
+    answer =
+      <<0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x04, 142, 250, 190,
+        46>>
+
+    packet_bin =
+      <<id::binary, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00>> <>
+        question <> answer
+
+    # Update TTL to 30s
+    patched = Packet.patch_stale_ttl(packet_bin, 30)
+
+    # Check that minimum TTL extracted is now 30
+    assert Packet.extract_min_ttl(patched) == 30
+  end
 end

@@ -274,11 +274,55 @@ defmodule Hermit.Dns.Packet do
         :dns.encode_message(patched_msg)
 
       _ ->
-        # Fallback to simple bitwise manipulation if decoding fails
-        <<id::binary-size(2), _flags::binary-size(2), rest::binary>> = packet
-        flags2 = 0x80 + rcode
-        <<id::binary, 0x81, flags2, rest::binary>>
+        # Fallback to simple bitwise manipulation if decoding fails, checking length
+        case packet do
+          <<id::binary-size(2), _flags::binary-size(2), rest::binary>> ->
+            flags2 = 0x80 + rcode
+            <<id::binary, 0x81, flags2, rest::binary>>
+
+          _ ->
+            packet
+        end
     end
+  end
+
+  @doc """
+  Safely updates the TTL of all answer/authority/additional records in a raw DNS response packet.
+  Used to set a short TTL (e.g. 30s) for stale cache responses according to RFC 8767.
+  """
+  def patch_stale_ttl(packet, target_ttl) do
+    case :dns.decode_message(packet) do
+      msg when Record.is_record(msg, :dns_message) ->
+        answers = dns_message(msg, :answers)
+        authority = dns_message(msg, :authority)
+        additional = dns_message(msg, :additional)
+
+        patched_answers = patch_rrs_ttl(answers, target_ttl)
+        patched_authority = patch_rrs_ttl(authority, target_ttl)
+        patched_additional = patch_rrs_ttl(additional, target_ttl)
+
+        patched_msg =
+          dns_message(msg,
+            answers: patched_answers,
+            authority: patched_authority,
+            additional: patched_additional
+          )
+
+        :dns.encode_message(patched_msg)
+
+      _ ->
+        packet
+    end
+  end
+
+  defp patch_rrs_ttl(rrs, target_ttl) when is_list(rrs) do
+    Enum.map(rrs, fn rr ->
+      if Record.is_record(rr, :dns_rr) do
+        dns_rr(rr, ttl: target_ttl)
+      else
+        rr
+      end
+    end)
   end
 
   defp parse_id_bin(<<val::16>>), do: val

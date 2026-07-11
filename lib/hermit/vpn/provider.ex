@@ -21,16 +21,23 @@ defmodule Hermit.Vpn.Provider do
 
       case Req.get(url, retry: false, receive_timeout: 5000) do
         {:ok, %{status: 200, body: body}} when is_list(body) ->
-          body
-          |> Enum.map(fn
-            %{"id" => id, "name" => name, "code" => code} ->
-              %{id: id, name: name, code: code}
+          countries =
+            body
+            |> Enum.map(fn
+              %{"id" => id, "name" => name, "code" => code} ->
+                %{id: id, name: name, code: code}
 
-            _ ->
-              nil
-          end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.sort_by(& &1.name)
+              _ ->
+                nil
+            end)
+            |> Enum.reject(&is_nil/1)
+
+          if countries == [] do
+            Logger.warning("NordVPN API returned no valid countries, using fallback list.")
+            fallback_countries()
+          else
+            Enum.sort_by(countries, & &1.name)
+          end
 
         error ->
           Logger.error("Failed to fetch NordVPN countries: #{inspect(error)}")

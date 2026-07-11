@@ -5,7 +5,10 @@ defmodule Hermit.Dns.Cache do
 
   @dns_cache_table :dns_cache
 
-  @spec lookup(integer(), String.t(), atom(), boolean()) :: {:ok, binary(), String.t(), String.t()} | {:stale, binary(), String.t(), String.t()} | :error
+  @spec lookup(integer(), String.t(), atom(), boolean()) ::
+          {:ok, binary(), String.t(), String.t()}
+          | {:stale, binary(), String.t(), String.t()}
+          | :error
   def lookup(profile_id, domain, qtype, allow_stale? \\ false) do
     now = System.monotonic_time(:second)
 
@@ -41,8 +44,7 @@ defmodule Hermit.Dns.Cache do
   @spec clear(integer()) :: :ok
   def clear(profile_id) do
     :ets.select_delete(@dns_cache_table, [
-      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]},
-      {{{profile_id, :_, :_}, :_, :_}, [], [true]}
+      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]}
     ])
 
     :ok
@@ -54,4 +56,3 @@ defmodule Hermit.Dns.Cache do
     :ok
   end
 end
-

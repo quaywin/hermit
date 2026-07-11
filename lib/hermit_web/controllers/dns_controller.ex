@@ -258,6 +258,9 @@ defmodule HermitWeb.DNSController do
   end
 
   defp render_mobile_config_page(conn, config, server_url) do
+    port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
+    logo_url = "https://#{conn.host}#{port_suffix}/images/logo.png"
+
     html = """
     <!DOCTYPE html>
     <html lang="en">
@@ -267,9 +270,9 @@ defmodule HermitWeb.DNSController do
       <title>Hermit DNS - #{config.name}</title>
       <style>
         body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          background-color: #0f172a;
-          color: #f8fafc;
+          font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          background-color: #fafafa;
+          color: #171717;
           margin: 0;
           padding: 24px;
           display: flex;
@@ -278,35 +281,57 @@ defmodule HermitWeb.DNSController do
           min-height: 80vh;
         }
         .card {
-          background-color: #1e293b;
-          border: 1px solid #334155;
+          background-color: #ffffff;
+          border: 1px solid #dfdfdf;
           border-radius: 12px;
-          padding: 24px;
+          padding: 32px 24px;
           max-width: 480px;
           width: 100%;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+        }
+        .logo-container {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 24px;
+          border-bottom: 1px solid #dfdfdf;
+          padding-bottom: 16px;
+        }
+        .logo-text {
+          font-weight: 700;
+          font-size: 18px;
+          text-transform: uppercase;
+          letter-spacing: 0.1em;
+          color: #171717;
         }
         h1 {
-          font-size: 20px;
+          font-size: 16px;
+          font-weight: 600;
           margin-top: 0;
-          color: #38bdf8;
+          margin-bottom: 8px;
+          color: #171717;
           text-transform: uppercase;
           letter-spacing: 0.05em;
         }
         p {
-          font-size: 14px;
-          color: #94a3b8;
+          font-size: 13px;
+          color: #64748b;
           line-height: 1.5;
+          margin-top: 0;
+          margin-bottom: 16px;
+        }
+        strong {
+          color: #171717;
         }
         .url-box {
-          background-color: #0f172a;
-          border: 1px solid #334155;
+          background-color: #fafafa;
+          border: 1px solid #dfdfdf;
           border-radius: 6px;
           padding: 12px;
-          font-family: monospace;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
           font-size: 12px;
           word-break: break-all;
-          margin: 16px 0;
+          margin: 12px 0 20px 0;
           color: #10b981;
           display: flex;
           align-items: center;
@@ -316,36 +341,45 @@ defmodule HermitWeb.DNSController do
         .btn {
           display: block;
           width: 100%;
-          background-color: #0284c7;
-          color: #ffffff;
+          background-color: #3ecf8e;
+          color: #171717;
           text-align: center;
           padding: 12px 0;
           border-radius: 6px;
           font-weight: 600;
+          font-size: 13px;
           text-decoration: none;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
           margin-top: 16px;
-          transition: background-color 0.2s;
+          transition: background-color 0.2s, border-color 0.2s;
           box-sizing: border-box;
+          border: 1px solid #3ecf8e;
         }
         .btn:hover {
-          background-color: #0369a1;
+          background-color: #24b47e;
+          border-color: #24b47e;
         }
         .btn-copy {
           background: none;
           border: none;
-          color: #38bdf8;
+          color: #3ecf8e;
           cursor: pointer;
           font-size: 11px;
           text-transform: uppercase;
           font-weight: 600;
           flex-shrink: 0;
           padding: 0;
+          transition: color 0.2s;
+        }
+        .btn-copy:hover {
+          color: #24b47e;
         }
         .section-title {
-          font-size: 12px;
+          font-size: 11px;
           text-transform: uppercase;
           letter-spacing: 0.05em;
-          color: #64748b;
+          color: #94a3b8;
           margin-top: 24px;
           margin-bottom: 8px;
           font-weight: bold;
@@ -354,13 +388,21 @@ defmodule HermitWeb.DNSController do
           padding-left: 20px;
           margin: 0;
           font-size: 13px;
-          color: #94a3b8;
+          color: #64748b;
           line-height: 1.6;
+        }
+        li {
+          margin-bottom: 6px;
         }
       </style>
     </head>
     <body>
       <div class="card">
+        <div class="logo-container">
+          <img src="#{logo_url}" width="30" height="30" alt="Hermit Logo" />
+          <span class="logo-text">Hermit</span>
+        </div>
+
         <h1>Hermit DNS Profile</h1>
         <p>Profile: <strong>#{config.name}</strong></p>
         
@@ -373,7 +415,6 @@ defmodule HermitWeb.DNSController do
         <div class="section-title">Apple Devices (iOS / macOS)</div>
         <p>Install this configuration profile to automatically configure secure DoH settings on your iPhone, iPad, or Mac.</p>
         <a href="#{server_url}/mobileconfig" class="btn">Download Config Profile</a>
-        <p style="font-size: 11px; color: #64748b; margin-top: 8px;">⚠️ Note: Apple devices will show an "Unsigned Profile" warning during installation because this profile is generated locally by your Hermit instance. This is expected and safe to install.</p>
 
         <div class="section-title">Android Settings</div>
         <ul>

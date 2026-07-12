@@ -14,7 +14,38 @@ defmodule Hermit.Dns.BlocklistLoader do
   def init(_opts) do
     # Create unified ETS table with read_concurrency to optimize concurrent DNS queries
     :ets.new(:dns_blocklist_entries, [:bag, :public, :named_table, read_concurrency: true])
-    :ets.new(@dns_cache_table, [:set, :public, :named_table, read_concurrency: true, write_concurrency: :auto])
+
+    :ets.new(@dns_cache_table, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+
+    :ets.new(:dns_filter_cache, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+
+    :ets.new(:inbound_profiles_cache, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+
+    :ets.new(:dns_proxy_cache, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
 
     # Load blocklists asynchronously to not block application startup
     send(self(), :load_blocklists)
@@ -42,6 +73,11 @@ defmodule Hermit.Dns.BlocklistLoader do
       {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
     ])
 
+    # Prune dns_filter_cache if too large to prevent memory leak
+    if :ets.info(:dns_filter_cache) != :undefined and :ets.info(:dns_filter_cache, :size) > 50_000 do
+      :ets.delete_all_objects(:dns_filter_cache)
+    end
+
     :erlang.send_after(60_000, self(), :prune_cache)
     {:noreply, state}
   end
@@ -65,9 +101,12 @@ defmodule Hermit.Dns.BlocklistLoader do
   """
   def get_memory_usage do
     case :ets.info(:dns_blocklist_entries, :memory) do
-      :undefined -> "0 KB"
+      :undefined ->
+        "0 KB"
+
       words ->
         bytes = words * :erlang.system_info(:wordsize)
+
         cond do
           bytes >= 1024 * 1024 ->
             "#{Float.round(bytes / (1024 * 1024), 2)} MB"
@@ -171,6 +210,7 @@ defmodule Hermit.Dns.BlocklistLoader do
   defp update_rules_count(blocklist_id, count) do
     import Ecto.Query
     now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
     Repo.update_all(
       from(b in Blocklist, where: b.id == ^blocklist_id),
       set: [rules_count: count, last_fetched_at: now, updated_at: now]
@@ -184,20 +224,34 @@ defmodule Hermit.Dns.BlocklistLoader do
     end
   end
 
+  @doc """
+  Clears the DNS filter result cache.
+  """
+  def clear_filter_cache do
+    if :ets.info(:dns_filter_cache) != :undefined do
+      :ets.delete_all_objects(:dns_filter_cache)
+    end
+  end
+
   defp clear_cache_for_blocklist(blocklist_id) do
+    clear_filter_cache()
     import Ecto.Query
     # Find all inbound profiles using a DNS config that contains this blocklist
     inbound_profile_ids =
       Repo.all(
-        from ip in Hermit.Vpn.InboundProfile,
+        from(ip in Hermit.Vpn.InboundProfile,
           join: dc in assoc(ip, :dns_profile),
           join: b in assoc(dc, :blocklists),
           where: b.id == ^blocklist_id,
           select: ip.id
+        )
       )
 
     Enum.each(inbound_profile_ids, fn ip_id ->
-      Logger.info("Blocklist #{blocklist_id} updated/unloaded. Clearing DNS cache for inbound profile #{ip_id}.")
+      Logger.info(
+        "Blocklist #{blocklist_id} updated/unloaded. Clearing DNS cache for inbound profile #{ip_id}."
+      )
+
       Hermit.Dns.Cache.clear(ip_id)
     end)
   rescue
@@ -206,7 +260,11 @@ defmodule Hermit.Dns.BlocklistLoader do
   end
 
   defp fetch_content(url) do
-    headers = [{"user-agent", "Mozilla/5.0 (compatible; HermitDNS/0.1.0; +https://github.com/kipcole9/dns)"}]
+    headers = [
+      {"user-agent",
+       "Mozilla/5.0 (compatible; HermitDNS/0.1.0; +https://github.com/kipcole9/dns)"}
+    ]
+
     case Req.get(url, headers: headers, retry: false) do
       {:ok, %{status: 200, body: body}} ->
         {:ok, body}
@@ -229,6 +287,7 @@ defmodule Hermit.Dns.BlocklistLoader do
 
       true ->
         resolved = resolve_path(url)
+
         if File.exists?(resolved) do
           {:ok, File.stream!(resolved, [:read_ahead])}
         else
@@ -289,6 +348,7 @@ defmodule Hermit.Dns.BlocklistLoader do
       end
     end
   end
+
   # Format: plain domains, one per line. Ignore comments starting with # or !
   defp parse_domains_line(line) do
     if String.starts_with?(line, ["#", "!"]) or line == "" do
@@ -297,6 +357,7 @@ defmodule Hermit.Dns.BlocklistLoader do
       clean_domain(line)
     end
   end
+
   defp clean_domain(domain) do
     domain = String.downcase(domain)
     # Basic validation to ensure it looks like a domain
@@ -339,8 +400,10 @@ defmodule Hermit.Dns.BlocklistLoader do
         cond do
           bytes >= 1024 * 1024 * 1024 ->
             "#{Float.round(bytes / (1024 * 1024 * 1024), 2)} GB"
+
           bytes >= 1024 * 1024 ->
             "#{Float.round(bytes / (1024 * 1024), 1)} MB"
+
           true ->
             "#{Float.round(bytes / 1024, 0)} KB"
         end
@@ -409,6 +472,7 @@ defmodule Hermit.Dns.BlocklistLoader do
             case String.split(line, ~r/:\s+/) do
               ["Pages free", count_str] ->
                 count_str |> String.trim_trailing(".") |> String.trim() |> String.to_integer()
+
               _ ->
                 nil
             end
@@ -421,6 +485,7 @@ defmodule Hermit.Dns.BlocklistLoader do
             case String.split(line, ~r/:\s+/) do
               ["Pages inactive", count_str] ->
                 count_str |> String.trim_trailing(".") |> String.trim() |> String.to_integer()
+
               _ ->
                 nil
             end

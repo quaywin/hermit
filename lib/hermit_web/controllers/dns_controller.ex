@@ -3,7 +3,7 @@ defmodule HermitWeb.DNSController do
   require Logger
 
   def query(conn, %{"doh_token" => doh_token} = params) do
-    case Hermit.Repo.get_by(Hermit.Vpn.InboundProfile, doh_token: doh_token) do
+    case Hermit.Vpn.InboundProfile.get_by_doh_token(doh_token) do
       nil ->
         conn
         |> put_status(404)
@@ -11,13 +11,19 @@ defmodule HermitWeb.DNSController do
 
       profile ->
         profile_id = profile.id
+
         case get_dns_packet(conn, params) do
           {:ok, query_packet} ->
             case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
               [{pid, _}] ->
                 client_ip = get_client_ip(conn)
                 device_name = get_device_name(conn)
-                case GenServer.call(pid, {:resolve_query, query_packet, {:doh, client_ip, device_name}}, 5000) do
+
+                case GenServer.call(
+                       pid,
+                       {:resolve_query, query_packet, {:doh, client_ip, device_name}},
+                       5000
+                     ) do
                   {:ok, response_packet} ->
                     conn
                     |> put_resp_header("content-type", "application/dns-message")
@@ -25,6 +31,7 @@ defmodule HermitWeb.DNSController do
 
                   {:error, reason} ->
                     Logger.error("DNS Server call failed: #{inspect(reason)}")
+
                     conn
                     |> put_status(500)
                     |> text("Internal Server Error")
@@ -45,6 +52,7 @@ defmodule HermitWeb.DNSController do
 
           {:error, reason} ->
             Logger.warning("Failed to get DNS packet from request: #{inspect(reason)}")
+
             conn
             |> put_status(400)
             |> text("Bad Request")
@@ -53,7 +61,7 @@ defmodule HermitWeb.DNSController do
   end
 
   def mobileconfig(conn, %{"doh_token" => doh_token}) do
-    case Hermit.Repo.get_by(Hermit.Vpn.InboundProfile, doh_token: doh_token) do
+    case Hermit.Vpn.InboundProfile.get_by_doh_token(doh_token) do
       nil ->
         conn |> put_status(404) |> text("Not Found")
 
@@ -117,7 +125,10 @@ defmodule HermitWeb.DNSController do
 
         conn
         |> put_resp_header("content-type", "application/x-apple-aspen-config")
-        |> put_resp_header("content-disposition", "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\"")
+        |> put_resp_header(
+          "content-disposition",
+          "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\""
+        )
         |> send_resp(200, response_data)
     end
   end
@@ -155,12 +166,17 @@ defmodule HermitWeb.DNSController do
           File.write!(temp_xml_path, xml)
 
           args = [
-            "smime", "-sign",
-            "-signer", cert_path,
-            "-inkey", key_path,
-            "-outform", "der",
+            "smime",
+            "-sign",
+            "-signer",
+            cert_path,
+            "-inkey",
+            key_path,
+            "-outform",
+            "der",
             "-nodetach",
-            "-in", temp_xml_path
+            "-in",
+            temp_xml_path
           ]
 
           args = if chain_path, do: args ++ ["-certfile", chain_path], else: args
@@ -170,12 +186,18 @@ defmodule HermitWeb.DNSController do
               {:ok, signed_binary}
 
             {error_msg, status} ->
-              Logger.error("DNS Server: OpenSSL profile signing failed (status #{status}): #{inspect(error_msg)}")
+              Logger.error(
+                "DNS Server: OpenSSL profile signing failed (status #{status}): #{inspect(error_msg)}"
+              )
+
               {:error, :signing_failed}
           end
         rescue
           exception ->
-            Logger.error("DNS Server: OpenSSL execution failed during signing: #{inspect(exception)}")
+            Logger.error(
+              "DNS Server: OpenSSL execution failed during signing: #{inspect(exception)}"
+            )
+
             {:error, :signing_failed}
         after
           File.rm(temp_xml_path)
@@ -194,27 +216,43 @@ defmodule HermitWeb.DNSController do
     key_path = Path.join(certs_dir, "privkey.pem")
 
     cmd_args = [
-      "req", "-x509", "-newkey", "rsa:2048",
-      "-keyout", key_path,
-      "-out", cert_path,
-      "-days", "3650",
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-keyout",
+      key_path,
+      "-out",
+      cert_path,
+      "-days",
+      "3650",
       "-nodes",
-      "-subj", "/CN=#{phx_host}"
+      "-subj",
+      "/CN=#{phx_host}"
     ]
 
     try do
       case System.cmd("openssl", cmd_args) do
         {_, 0} ->
-          Logger.info("DNS Server: Generated self-signed certificates for #{phx_host} at #{certs_dir}")
+          Logger.info(
+            "DNS Server: Generated self-signed certificates for #{phx_host} at #{certs_dir}"
+          )
+
           {cert_path, key_path}
 
         {error, status} ->
-          Logger.error("DNS Server: Failed to generate self-signed certificates (status #{status}): #{inspect(error)}")
+          Logger.error(
+            "DNS Server: Failed to generate self-signed certificates (status #{status}): #{inspect(error)}"
+          )
+
           {nil, nil}
       end
     rescue
       exception ->
-        Logger.error("DNS Server: Failed to execute openssl command for self-signed certificate generation: #{inspect(exception)}")
+        Logger.error(
+          "DNS Server: Failed to execute openssl command for self-signed certificate generation: #{inspect(exception)}"
+        )
+
         {nil, nil}
     end
   end
@@ -238,10 +276,13 @@ defmodule HermitWeb.DNSController do
 
       conn.method == "GET" ->
         dns_param = Map.get(params, "dns")
+
         if dns_param do
           # Try decoding base64url without padding first, then with padding
           case Base.url_decode64(dns_param, padding: false) do
-            {:ok, packet} -> {:ok, packet}
+            {:ok, packet} ->
+              {:ok, packet}
+
             _ ->
               case Base.url_decode64(dns_param) do
                 {:ok, packet} -> {:ok, packet}
@@ -405,7 +446,7 @@ defmodule HermitWeb.DNSController do
 
         <h1>Hermit DNS Profile</h1>
         <p>Profile: <strong>#{config.name}</strong></p>
-        
+
         <div class="section-title">DNS-over-HTTPS (DoH) URL</div>
         <div class="url-box">
           <span id="doh-url">#{server_url}</span>
@@ -448,8 +489,9 @@ defmodule HermitWeb.DNSController do
     raw = :crypto.strong_rand_bytes(16)
     <<u0::48, _v::4, u1::12, _r::2, u2::62>> = raw
     bin = <<u0::48, 4::4, u1::12, 2::2, u2::62>>
-    
+
     <<a::32, b::16, c::16, d::16, e::48>> = bin
+
     :io_lib.format(
       "~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b",
       [a, b, c, d, e]

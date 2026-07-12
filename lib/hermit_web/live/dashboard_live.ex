@@ -11,6 +11,7 @@ defmodule HermitWeb.DashboardLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
+      Registry.register(Hermit.Vpn.Registry, "ui_session:#{inspect(self())}", :active)
     end
 
     pairs = PairWorker.list_pairs()

@@ -940,6 +940,8 @@ defmodule Hermit.Vpn.PairWorkerTest do
     }
 
     {:ok, pid} = PairWorker.start_link(args)
+    # Register a mock UI session so the ping measurement is activated
+    Registry.register(Hermit.Vpn.Registry, "ui_session:test", :active)
     # Wait for bootstrap to complete and transition to running
     wait_until_status(pid, :running)
 

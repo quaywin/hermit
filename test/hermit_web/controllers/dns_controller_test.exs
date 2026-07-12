@@ -23,6 +23,7 @@ defmodule HermitWeb.DNSControllerTest do
     doh_token = profile.doh_token
     # Create DNS Config
     _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
     {:ok, _config} =
       Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
         enabled: true,
@@ -43,7 +44,11 @@ defmodule HermitWeb.DNSControllerTest do
     # Store in cache
     mock_response = Packet.build_a_response(<<0, 15>>, query_rec, "9.9.9.9")
     expires_at = System.monotonic_time(:second) + 100
-    :ets.insert(:dns_cache, {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at})
+
+    :ets.insert(
+      :dns_cache,
+      {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
+    )
 
     # Test POST method
     conn_post =
@@ -68,8 +73,10 @@ defmodule HermitWeb.DNSControllerTest do
 
     # Test blocked domain (NXDOMAIN block response)
     blocked_qname = <<7>> <> "blocked" <> <<3>> <> "com" <> <<0>>
-    blocked_query_packet = <<0, 16, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> blocked_qname <> <<0, 1, 0, 1>>
-    
+
+    blocked_query_packet =
+      <<0, 16, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> blocked_qname <> <<0, 1, 0, 1>>
+
     conn_blocked =
       conn
       |> put_req_header("content-type", "application/dns-message")
@@ -102,7 +109,9 @@ defmodule HermitWeb.DNSControllerTest do
     assert html_body =~ "/dns-query/#{doh_token}/mobileconfig"
   end
 
-  test "GET /dns-query/:doh_token/mobileconfig returns XML profile with correct content type", %{conn: conn} do
+  test "GET /dns-query/:doh_token/mobileconfig returns XML profile with correct content type", %{
+    conn: conn
+  } do
     {:ok, profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
         name: "DoH_XML_Profile",
@@ -118,14 +127,20 @@ defmodule HermitWeb.DNSControllerTest do
     conn_xml = get(conn, ~p"/dns-query/#{doh_token}/mobileconfig")
     assert conn_xml.status == 200
     assert get_resp_header(conn_xml, "content-type") == ["application/x-apple-aspen-config"]
-    assert get_resp_header(conn_xml, "content-disposition") == ["attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\""]
+
+    assert get_resp_header(conn_xml, "content-disposition") == [
+             "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\""
+           ]
+
     xml_body = response(conn_xml, 200)
     assert xml_body =~ "<plist version=\"1.0\">"
     assert xml_body =~ "<string>HTTPS</string>"
     assert xml_body =~ "<string>com.apple.dnsSettings.managed</string>"
   end
 
-  test "GET/POST /dns-query/:doh_token extracts correct client IP from proxy headers", %{conn: conn} do
+  test "GET/POST /dns-query/:doh_token extracts correct client IP from proxy headers", %{
+    conn: conn
+  } do
     # Create inbound profile
     {:ok, profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
@@ -139,6 +154,7 @@ defmodule HermitWeb.DNSControllerTest do
     doh_token = profile.doh_token
     # Create DNS Config
     _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+
     {:ok, _config} =
       Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
         enabled: true,
@@ -158,19 +174,25 @@ defmodule HermitWeb.DNSControllerTest do
     # Store in cache
     mock_response = Packet.build_a_response(<<0, 17>>, query_rec, "9.9.9.9")
     expires_at = System.monotonic_time(:second) + 100
-    :ets.insert(:dns_cache, {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at})
+
+    :ets.insert(
+      :dns_cache,
+      {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
+    )
 
     # Attach telemetry handler to capture client IP
     test_pid = self()
     handler_id = "test-doh-ip-handler-#{profile_id}"
-    :ok = :telemetry.attach(
-      handler_id,
-      [:hermit, :dns, :query],
-      fn _name, _measurements, metadata, _config ->
-        send(test_pid, {:captured_query_metadata, metadata})
-      end,
-      nil
-    )
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:hermit, :dns, :query],
+        fn _name, _measurements, metadata, _config ->
+          send(test_pid, {:captured_query_metadata, metadata})
+        end,
+        nil
+      )
 
     try do
       # 1. Test X-Forwarded-For (with multiple IPs)
@@ -198,7 +220,8 @@ defmodule HermitWeb.DNSControllerTest do
         |> put_req_header("cf-connecting-ip", "2001:db8::1")
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
-      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {8193, 3512, 0, 0, 0, 0, 0, 1}, nil}}}
+      assert_receive {:captured_query_metadata,
+                      %{client_ip: {:doh, {8193, 3512, 0, 0, 0, 0, 0, 1}, nil}}}
 
       # 4. Test Device Name Header (e.g. x-device-name)
       _conn4 =
@@ -213,7 +236,8 @@ defmodule HermitWeb.DNSControllerTest do
     end
   end
 
-  test "GET /dns-query/:doh_token/mobileconfig automatically generates certs and signs if PHX_HOST is set", %{conn: conn} do
+  test "GET /dns-query/:doh_token/mobileconfig automatically generates certs and signs if PHX_HOST is set",
+       %{conn: conn} do
     {:ok, profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
         name: "DoH_Signing_Profile",
@@ -227,10 +251,15 @@ defmodule HermitWeb.DNSControllerTest do
 
     original_phx_host = System.get_env("PHX_HOST")
     original_storage = Application.get_env(:hermit, :storage)
-    
+
     System.put_env("PHX_HOST", "signed.example.com")
     temp_storage_dir = Path.join(System.tmp_dir!(), "hermit_test_storage_#{profile_id}")
-    Application.put_env(:hermit, :storage, Keyword.put(original_storage || [], :base_path, temp_storage_dir))
+
+    Application.put_env(
+      :hermit,
+      :storage,
+      Keyword.put(original_storage || [], :base_path, temp_storage_dir)
+    )
 
     try do
       # Download should automatically generate certificates in temp storage and sign
@@ -239,12 +268,57 @@ defmodule HermitWeb.DNSControllerTest do
       signed_body = response(conn_signed, 200)
 
       refute String.starts_with?(signed_body, "<?xml")
-      assert File.exists?(Path.join([temp_storage_dir, "certs", "signed.example.com", "cert.pem"]))
-      assert File.exists?(Path.join([temp_storage_dir, "certs", "signed.example.com", "privkey.pem"]))
+
+      assert File.exists?(
+               Path.join([temp_storage_dir, "certs", "signed.example.com", "cert.pem"])
+             )
+
+      assert File.exists?(
+               Path.join([temp_storage_dir, "certs", "signed.example.com", "privkey.pem"])
+             )
     after
-      if original_phx_host, do: System.put_env("PHX_HOST", original_phx_host), else: System.delete_env("PHX_HOST")
-      if original_storage, do: Application.put_env(:hermit, :storage, original_storage), else: Application.delete_env(:hermit, :storage)
+      if original_phx_host,
+        do: System.put_env("PHX_HOST", original_phx_host),
+        else: System.delete_env("PHX_HOST")
+
+      if original_storage,
+        do: Application.put_env(:hermit, :storage, original_storage),
+        else: Application.delete_env(:hermit, :storage)
+
       File.rm_rf!(temp_storage_dir)
     end
+  end
+
+  test "InboundProfile get_by_doh_token is cached and cleared correctly" do
+    import Ecto.Query
+
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "Cache_Test_Profile",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_cache_test"},
+        doh_token: "doh_cache_token"
+      })
+
+    # First lookup should query the DB and store in ETS cache
+    cached_profile = Hermit.Vpn.InboundProfile.get_by_doh_token("doh_cache_token")
+    assert cached_profile.id == profile.id
+
+    # Modify in DB directly bypassing cache clear to prove cache returns stale data
+    Hermit.Repo.update_all(
+      from(p in Hermit.Vpn.InboundProfile, where: p.id == ^profile.id),
+      set: [name: "New_Name"]
+    )
+
+    # Cache should still return the old profile name
+    cached_profile2 = Hermit.Vpn.InboundProfile.get_by_doh_token("doh_cache_token")
+    assert cached_profile2.name == "Cache_Test_Profile"
+
+    # Clear cache
+    Hermit.Vpn.InboundProfile.clear_cache()
+
+    # Now it should fetch the updated name from DB
+    cached_profile3 = Hermit.Vpn.InboundProfile.get_by_doh_token("doh_cache_token")
+    assert cached_profile3.name == "New_Name"
   end
 end

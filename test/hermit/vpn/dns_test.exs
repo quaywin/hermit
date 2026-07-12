@@ -57,6 +57,41 @@ defmodule Hermit.Vpn.DnsTest do
     assert hd(cached)["domain"] == "google.com"
   end
 
+  test "Telemetry prunes old raw logs when they exceed the limit" do
+    profile_id = "test_prune_profile"
+
+    # 1. Insert 205 log entries directly into ETS to exceed the @max_raw_logs limit (200)
+    entries =
+      Enum.map(1..205, fn i ->
+        counter = System.unique_integer([:monotonic])
+
+        log_data = %{
+          "pair_id" => profile_id,
+          "domain" => "domain#{i}.com",
+          "timestamp" => System.system_time(:second)
+        }
+
+        {{profile_id, counter}, log_data}
+      end)
+
+    :ets.insert(:dns_query_logs, entries)
+
+    # Verify we successfully inserted 205 entries
+    pattern = {{profile_id, :_}, :"$1"}
+    cached_before = :ets.select(:dns_query_logs, [{pattern, [], [:"$1"]}])
+    assert length(cached_before) == 205
+
+    # 2. Trigger periodic prune manually
+    send(Hermit.Dns.Telemetry, :periodic_prune)
+
+    # Wait for the async GenServer to finish processing :periodic_prune
+    Process.sleep(100)
+
+    # 3. Assert the logs have been pruned down to the limit (@max_raw_logs = 200)
+    cached_after = :ets.select(:dns_query_logs, [{pattern, [], [:"$1"]}])
+    assert length(cached_after) == 200
+  end
+
   test "Telemetry handler enriches logs with client_name from DnsDeviceResolver" do
     profile_id = 888
     config_id = 888

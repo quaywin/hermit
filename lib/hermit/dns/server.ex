@@ -69,12 +69,24 @@ defmodule Hermit.Dns.Server do
 
     proxy_ports_cache = pre_populate_proxy_ports_cache()
 
+    # Create dynamic ETS table for pending_queries to allow concurrent read/write
+    pending_table = :"dns_pending_queries_#{profile_id}"
+
+    :ets.new(pending_table, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+
     state = %{
       socket: nil,
       tcp_socket: nil,
       upstream_sockets: upstream_sockets,
       doh_client: doh_client,
-      pending_queries: %{},
+      pending_table: pending_table,
+      server_pid: self(),
       port: port,
       profile_id: profile_id,
       upstreams: upstreams,
@@ -192,20 +204,24 @@ defmodule Hermit.Dns.Server do
 
   @impl true
   def handle_call({:resolve_query, packet, client_ip}, from, state) do
-    case Packet.parse(packet) do
-      {:ok, query} ->
-        new_state = process_query_fast_path(nil, client_ip, from, packet, query, state)
-        {:noreply, new_state}
+    # Offload TCP query processing to Task.Supervisor to keep GenServer single-thread free
+    Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+      case Packet.parse(packet) do
+        {:ok, query} ->
+          process_query_fast_path(nil, client_ip, from, packet, query, state)
 
-      {:error, _reason} ->
-        if byte_size(packet) >= 12 do
-          <<id::binary-size(2), _::binary>> = packet
-          err_resp = <<id::binary, 0x81, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
-          {:reply, {:ok, err_resp}, state}
-        else
-          {:reply, {:error, :bad_packet}, state}
-        end
-    end
+        {:error, _reason} ->
+          if byte_size(packet) >= 12 do
+            <<id::binary-size(2), _::binary>> = packet
+            err_resp = <<id::binary, 0x81, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+            GenServer.reply(from, {:ok, err_resp})
+          else
+            GenServer.reply(from, {:error, :bad_packet})
+          end
+      end
+    end)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -217,6 +233,7 @@ defmodule Hermit.Dns.Server do
 
     # Flush cache for this profile on configuration changes
     Cache.clear(state.profile_id)
+    Hermit.Dns.BlocklistLoader.clear_filter_cache()
 
     {:noreply, %{new_state | config: updated_config, custom_rules: custom_rules}}
   end
@@ -238,6 +255,7 @@ defmodule Hermit.Dns.Server do
       )
 
       Cache.clear(state.profile_id)
+      Hermit.Dns.BlocklistLoader.clear_filter_cache()
     end
 
     {:noreply, state}
@@ -271,20 +289,22 @@ defmodule Hermit.Dns.Server do
 
   @impl true
   def handle_info({:udp, socket, ip, port, packet}, %{socket: socket} = state) do
-    case Packet.parse(packet) do
-      {:ok, query} ->
-        new_state = process_query_fast_path(socket, ip, port, packet, query, state)
-        {:noreply, new_state}
+    # Offload query parsing and processing to Task.Supervisor to free the GenServer single thread immediately
+    Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+      case Packet.parse(packet) do
+        {:ok, query} ->
+          process_query_fast_path(socket, ip, port, packet, query, state)
 
-      {:error, _reason} ->
-        if byte_size(packet) >= 12 do
-          <<id::binary-size(2), _::binary>> = packet
-          err_resp = <<id::binary, 0x81, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
-          :gen_udp.send(socket, ip, port, err_resp)
-        end
+        {:error, _reason} ->
+          if byte_size(packet) >= 12 do
+            <<id::binary-size(2), _::binary>> = packet
+            err_resp = <<id::binary, 0x81, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+            :gen_udp.send(socket, ip, port, err_resp)
+          end
+      end
+    end)
 
-        {:noreply, state}
-    end
+    {:noreply, state}
   end
 
   # Handle asynchronous responses from upstream DNS servers
@@ -300,9 +320,12 @@ defmodule Hermit.Dns.Server do
     if is_our_upstream_socket? and byte_size(packet) >= 12 do
       <<tx_id::16, _::binary>> = packet
 
-      case Map.get(state.pending_queries, tx_id) do
-        {client_ip, client_port, original_query, sent_at, target_upstreams, current_index,
-         original_tx_id} ->
+      case :ets.lookup(state.pending_table, tx_id) do
+        [
+          {_,
+           {client_ip, client_port, original_query, sent_at, target_upstreams, current_index,
+            original_tx_id}}
+        ] ->
           upstream = elem(target_upstreams, current_index)
           # Only accept response if it matches the source IP of the current active upstream
           is_valid_source? =
@@ -381,14 +404,14 @@ defmodule Hermit.Dns.Server do
               )
             end)
 
-            # Cleanup pending query immediately in GenServer state
-            new_pending = Map.delete(state.pending_queries, tx_id)
-            {:noreply, %{state | pending_queries: new_pending}}
+            # Cleanup pending query immediately in ETS
+            :ets.delete(state.pending_table, tx_id)
+            {:noreply, state}
           else
             {:noreply, state}
           end
 
-        nil ->
+        [] ->
           # Query not found (potentially timed out and cleaned up)
           {:noreply, state}
       end
@@ -400,9 +423,12 @@ defmodule Hermit.Dns.Server do
   # Handle asynchronous DoH responses from background task
   @impl true
   def handle_info({:doh_response, tx_id, url, packet, duration}, state) do
-    case Map.get(state.pending_queries, tx_id) do
-      {client_ip, client_port, original_query, _sent_at, target_upstreams, current_index,
-       original_tx_id} ->
+    case :ets.lookup(state.pending_table, tx_id) do
+      [
+        {_,
+         {client_ip, client_port, original_query, _sent_at, target_upstreams, current_index,
+          original_tx_id}}
+      ] ->
         upstream = elem(target_upstreams, current_index)
 
         expected_url =
@@ -425,10 +451,10 @@ defmodule Hermit.Dns.Server do
             <<_::binary-size(2), rest_packet::binary>> = packet
             client_packet = original_tx_id <> rest_packet
 
-            # Send response packet back to client
+            # Send response packet back to client immediately
             send_client_response(client_socket, client_ip, client_port, client_packet)
 
-            # Log latency update
+            # Calculate latency and cast back to server
             GenServer.cast(server_pid, {:update_latency, upstream, duration})
 
             # Parse metadata and store cache
@@ -458,8 +484,8 @@ defmodule Hermit.Dns.Server do
 
             resolver_tag =
               case upstream do
-                {:doh_proxy, _url, pair_id} -> "Proxy: #{pair_id}"
-                _ -> "DoH (#{extract_host(url)})"
+                {:doh, _} -> "DoH (#{extract_host(url)})"
+                {:doh_proxy, _, _} -> "DoH Proxy (#{extract_host(url)})"
               end
 
             :telemetry.execute(
@@ -480,13 +506,13 @@ defmodule Hermit.Dns.Server do
           end)
 
           # Cleanup pending query
-          new_pending = Map.delete(state.pending_queries, tx_id)
-          {:noreply, %{state | pending_queries: new_pending}}
+          :ets.delete(state.pending_table, tx_id)
+          {:noreply, state}
         else
           {:noreply, state}
         end
 
-      nil ->
+      [] ->
         {:noreply, state}
     end
   end
@@ -495,9 +521,10 @@ defmodule Hermit.Dns.Server do
   @impl true
   def handle_info(:clean_timeouts, state) do
     now = System.monotonic_time(:millisecond)
+    records = :ets.tab2list(state.pending_table)
 
     new_state =
-      Enum.reduce(state.pending_queries, state, fn {tx_id, info}, acc_state ->
+      Enum.reduce(records, state, fn {tx_id, info}, acc_state ->
         {_client_ip, _client_port, _original_query, sent_at, target_upstreams, current_index,
          _original_tx_id} = info
 
@@ -732,7 +759,7 @@ defmodule Hermit.Dns.Server do
 
               matched_id =
                 if enabled_blocklist_ids != [] do
-                  Filter.match_any_ets_blocklist?(query.domain, enabled_blocklist_ids)
+                  Filter.match_any_ets_blocklist_cached?(query.domain, enabled_blocklist_ids)
                 else
                   nil
                 end
@@ -1071,9 +1098,8 @@ defmodule Hermit.Dns.Server do
       send_client_response(socket, ip, port, servfail)
       state
     else
-      # Sinh unique upstream transaction ID mới
-      upstream_tx_id = state.next_tx_id
-      next_tx_id = rem(upstream_tx_id + 1, 65536)
+      # Sinh ngẫu nhiên transaction ID 16-bit để tránh xung đột khi chạy đa luồng
+      upstream_tx_id = :rand.uniform(65536) - 1
       upstream_tx_id_bin = <<upstream_tx_id::16>>
 
       # Rewrite Transaction ID trong gói tin gửi đi
@@ -1089,16 +1115,17 @@ defmodule Hermit.Dns.Server do
         state.upstream_sockets,
         state.doh_client,
         first_upstream,
-        rewritten_packet
+        rewritten_packet,
+        state.server_pid
       )
 
-      # Save query context in pending_queries map
+      # Save query context in pending_queries table
       # Struct: {client_ip, client_port, original_query, sent_at, target_upstreams_tuple, current_index, original_tx_id}
       upstreams_tuple = List.to_tuple(sorted_upstreams)
       query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
-      new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
+      :ets.insert(state.pending_table, {upstream_tx_id, query_info})
 
-      %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
+      state
     end
   end
 
@@ -1126,7 +1153,13 @@ defmodule Hermit.Dns.Server do
     sorted_healthy ++ sorted_penalized
   end
 
-  defp async_send_to_upstream(upstream_sockets, _doh_client, {:udp, {ip, port}}, packet)
+  defp async_send_to_upstream(
+         upstream_sockets,
+         _doh_client,
+         {:udp, {ip, port}},
+         packet,
+         _server_pid
+       )
        when is_tuple(upstream_sockets) do
     # For UDP upstreams with specific port, send immediately using a socket from the pool
     <<tx_id::16, _::binary>> = packet
@@ -1135,7 +1168,7 @@ defmodule Hermit.Dns.Server do
     :gen_udp.send(selected_socket, ip, port, packet)
   end
 
-  defp async_send_to_upstream(upstream_sockets, _doh_client, {:udp, ip}, packet)
+  defp async_send_to_upstream(upstream_sockets, _doh_client, {:udp, ip}, packet, _server_pid)
        when is_tuple(upstream_sockets) and is_tuple(ip) do
     # For UDP upstreams with only IP, default port to 53
     <<tx_id::16, _::binary>> = packet
@@ -1144,10 +1177,9 @@ defmodule Hermit.Dns.Server do
     :gen_udp.send(selected_socket, ip, 53, packet)
   end
 
-  defp async_send_to_upstream(_upstream_sockets, doh_client, {:doh, url}, packet) do
+  defp async_send_to_upstream(_upstream_sockets, doh_client, {:doh, url}, packet, server_pid) do
     # For DoH upstreams, send asynchronously using a Task
     # Since HTTP Req calls are blocking, we task them to avoid blocking the GenServer
-    server_pid = self()
     <<tx_id::16, _::binary>> = packet
 
     Task.start(fn ->
@@ -1194,9 +1226,12 @@ defmodule Hermit.Dns.Server do
 
   # Hàm helper dùng chung xử lý lỗi upstream
   defp handle_upstream_failure(tx_id, state) do
-    case Map.get(state.pending_queries, tx_id) do
-      {client_ip, client_port, original_query, sent_at, target_upstreams, current_index,
-       original_tx_id} ->
+    case :ets.lookup(state.pending_table, tx_id) do
+      [
+        {_,
+         {client_ip, client_port, original_query, sent_at, target_upstreams, current_index,
+          original_tx_id}}
+      ] ->
         failed_upstream = elem(target_upstreams, current_index)
 
         # 1. Phạt độ trễ ngay lập tức trong state của GenServer
@@ -1222,7 +1257,14 @@ defmodule Hermit.Dns.Server do
           next_upstream = elem(target_upstreams, next_index)
           # Gửi với tx_id (ID mới dùng cho upstream)
           packet = Packet.build_query_packet(tx_id, original_query.query_record)
-          async_send_to_upstream(state.upstream_sockets, state.doh_client, next_upstream, packet)
+
+          async_send_to_upstream(
+            state.upstream_sockets,
+            state.doh_client,
+            next_upstream,
+            packet,
+            state.server_pid
+          )
 
           # Cập nhật thông tin truy vấn trong pending_queries
           now = System.monotonic_time(:millisecond)
@@ -1231,9 +1273,9 @@ defmodule Hermit.Dns.Server do
             {client_ip, client_port, original_query, now, target_upstreams, next_index,
              original_tx_id}
 
-          new_pending = Map.put(state.pending_queries, tx_id, updated_info)
+          :ets.insert(state.pending_table, {tx_id, updated_info})
 
-          %{state | pending_queries: new_pending}
+          state
         else
           # 3. Hết DNS dự phòng: Thử tìm trong cache stale trước khi trả SERVFAIL! (Serve-Stale - RFC 8767)
           case Cache.lookup(state.profile_id, original_query.domain, original_query.qtype, true) do
@@ -1296,11 +1338,11 @@ defmodule Hermit.Dns.Server do
               )
           end
 
-          new_pending = Map.delete(state.pending_queries, tx_id)
-          %{state | pending_queries: new_pending}
+          :ets.delete(state.pending_table, tx_id)
+          state
         end
 
-      nil ->
+      [] ->
         state
     end
   end
@@ -1459,16 +1501,18 @@ defmodule Hermit.Dns.Server do
     if mock?() do
       {{:ok, 8080, 1080}, state}
     else
-      case Map.get(state.proxy_ports_cache, pair_id) do
-        {http_port, socks5_port} ->
+      ensure_proxy_cache_table_exists()
+
+      case :ets.lookup(:dns_proxy_cache, {:ports, pair_id}) do
+        [{_, {http_port, socks5_port}}] ->
           {{:ok, http_port, socks5_port}, state}
 
-        nil ->
+        [] ->
           # Fallback: if not in cache yet, read from disk and update cache
           case read_proxy_ports_from_disk(pair_id) do
             {:ok, http_port, socks5_port} ->
-              new_cache = Map.put(state.proxy_ports_cache, pair_id, {http_port, socks5_port})
-              {{:ok, http_port, socks5_port}, %{state | proxy_ports_cache: new_cache}}
+              :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, socks5_port}})
+              {{:ok, http_port, socks5_port}, state}
 
             {:error, reason} ->
               {{:error, reason}, state}
@@ -1481,10 +1525,12 @@ defmodule Hermit.Dns.Server do
     try do
       import Ecto.Query
       pairs = Hermit.Repo.all(from(p in Hermit.Vpn.VpnPair, where: p.status == "running"))
+      ensure_proxy_cache_table_exists()
 
       Enum.reduce(pairs, %{}, fn pair, acc ->
         case read_proxy_ports_from_disk(pair.pair_id) do
           {:ok, http_port, socks5_port} ->
+            :ets.insert(:dns_proxy_cache, {{:ports, pair.pair_id}, {http_port, socks5_port}})
             Map.put(acc, pair.pair_id, {http_port, socks5_port})
 
           _ ->
@@ -1525,10 +1571,13 @@ defmodule Hermit.Dns.Server do
   end
 
   defp get_or_make_proxy_client(proxy_port, state) do
-    proxy_clients = Map.get(state, :proxy_clients, %{})
+    ensure_proxy_cache_table_exists()
 
-    case Map.get(proxy_clients, proxy_port) do
-      nil ->
+    case :ets.lookup(:dns_proxy_cache, {:client, proxy_port}) do
+      [{_, client}] ->
+        {client, state}
+
+      [] ->
         client =
           Req.new(
             connect_options: [
@@ -1539,11 +1588,24 @@ defmodule Hermit.Dns.Server do
             receive_timeout: 4000
           )
 
-        new_proxy_clients = Map.put(proxy_clients, proxy_port, client)
-        {client, Map.put(state, :proxy_clients, new_proxy_clients)}
-
-      client ->
+        :ets.insert(:dns_proxy_cache, {{:client, proxy_port}, client})
         {client, state}
+    end
+  end
+
+  defp ensure_proxy_cache_table_exists do
+    if :ets.info(:dns_proxy_cache) == :undefined do
+      try do
+        :ets.new(:dns_proxy_cache, [
+          :set,
+          :public,
+          :named_table,
+          read_concurrency: true,
+          write_concurrency: :auto
+        ])
+      rescue
+        _ -> :ok
+      end
     end
   end
 
@@ -1561,11 +1623,11 @@ defmodule Hermit.Dns.Server do
     {doh_client, state} = get_or_make_proxy_client(proxy_port, state)
     proxy_url = "http://127.0.0.1:#{proxy_port}"
 
-    server_pid = self()
+    server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 
-    upstream_tx_id = state.next_tx_id
-    next_tx_id = rem(upstream_tx_id + 1, 65536)
+    # Sinh ngẫu nhiên transaction ID 16-bit
+    upstream_tx_id = :rand.uniform(65536) - 1
     upstream_tx_id_bin = <<upstream_tx_id::16>>
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
@@ -1615,9 +1677,9 @@ defmodule Hermit.Dns.Server do
 
     upstreams_tuple = {{:doh_proxy, doh_url, pair_id}}
     query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
-    new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
+    :ets.insert(state.pending_table, {upstream_tx_id, query_info})
 
-    %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
+    state
   end
 
   defp async_forward_to_udp_proxy(
@@ -1632,11 +1694,11 @@ defmodule Hermit.Dns.Server do
          state
        ) do
     socks5_ip = "127.0.0.1"
-    server_pid = self()
+    server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 
-    upstream_tx_id = state.next_tx_id
-    next_tx_id = rem(upstream_tx_id + 1, 65536)
+    # Sinh ngẫu nhiên transaction ID 16-bit
+    upstream_tx_id = :rand.uniform(65536) - 1
     upstream_tx_id_bin = <<upstream_tx_id::16>>
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
@@ -1688,9 +1750,9 @@ defmodule Hermit.Dns.Server do
 
     upstreams_tuple = {{:doh_proxy, udp_proxy_url, pair_id}}
     query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
-    new_pending = Map.put(state.pending_queries, upstream_tx_id, query_info)
+    :ets.insert(state.pending_table, {upstream_tx_id, query_info})
 
-    %{state | pending_queries: new_pending, next_tx_id: next_tx_id}
+    state
   end
 
   defp socks5_udp_resolve(socks5_ip, socks5_port, target_ip, target_port, packet) do

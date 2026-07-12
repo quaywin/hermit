@@ -67,6 +67,38 @@ defmodule Hermit.Dns.Filter do
     end
   end
 
+  @spec match_any_ets_blocklist_cached?(String.t(), [integer()]) :: integer() | nil
+  def match_any_ets_blocklist_cached?(domain, blocklist_ids) do
+    ensure_filter_cache_table_exists()
+    cache_key = {domain, blocklist_ids}
+
+    case :ets.lookup(:dns_filter_cache, cache_key) do
+      [{_, matched_id}] ->
+        matched_id
+
+      [] ->
+        matched_id = match_any_ets_blocklist?(domain, blocklist_ids)
+        :ets.insert(:dns_filter_cache, {cache_key, matched_id})
+        matched_id
+    end
+  end
+
+  defp ensure_filter_cache_table_exists do
+    if :ets.info(:dns_filter_cache) == :undefined do
+      try do
+        :ets.new(:dns_filter_cache, [
+          :set,
+          :public,
+          :named_table,
+          read_concurrency: true,
+          write_concurrency: :auto
+        ])
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
   @spec match_any_ets_blocklist?(String.t(), [integer()]) :: integer() | nil
   def match_any_ets_blocklist?(domain, blocklist_ids) do
     domain = String.downcase(domain)

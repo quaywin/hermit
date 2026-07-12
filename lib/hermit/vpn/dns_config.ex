@@ -18,7 +18,12 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:inbound_profile_id, :integer, virtual: true)
 
     has_many(:inbound_profiles, Hermit.Vpn.InboundProfile, foreign_key: :dns_profile_id)
-    many_to_many(:blocklists, Hermit.Dns.Blocklist, join_through: "dns_configs_blocklists", join_keys: [dns_config_id: :id, dns_blocklist_id: :id], on_replace: :delete)
+
+    many_to_many(:blocklists, Hermit.Dns.Blocklist,
+      join_through: "dns_configs_blocklists",
+      join_keys: [dns_config_id: :id, dns_blocklist_id: :id],
+      on_replace: :delete
+    )
 
     timestamps()
   end
@@ -52,7 +57,7 @@ defmodule Hermit.Vpn.DnsConfig do
     # hoặc khi changeset explicitly muốn kiểm tra liên kết inbound
     is_profile_validation? =
       Map.has_key?(changeset.params || %{}, "inbound_profile_id") or
-      Map.has_key?(changeset.params || %{}, :inbound_profile_id)
+        Map.has_key?(changeset.params || %{}, :inbound_profile_id)
 
     if is_profile_validation? and enabled and is_nil(inbound_profile_id) do
       add_error(
@@ -144,7 +149,9 @@ defmodule Hermit.Vpn.DnsConfig do
   defp valid_rule?(rule) when is_map(rule) do
     domain = Map.get(rule, "domain") || Map.get(rule, :domain)
     action = Map.get(rule, "action") || Map.get(rule, :action)
-    action in ["block", "bypass", "redirect", "forward_proxy"] and is_binary(domain) and domain != ""
+
+    action in ["block", "bypass", "redirect", "forward_proxy"] and is_binary(domain) and
+      domain != ""
   end
 
   defp valid_rule?(_), do: false
@@ -161,6 +168,7 @@ defmodule Hermit.Vpn.DnsConfig do
       is_nil(profile.dns_profile_id) ->
         # Nếu chưa liên kết DNS Profile nào, tự động tạo một DNS Profile riêng biệt cho Inbound này
         profile_dns_name = "DNS Profile for Inbound #{profile_id}"
+
         new_config =
           case Hermit.Repo.get_by(__MODULE__, name: profile_dns_name) do
             nil ->
@@ -177,11 +185,15 @@ defmodule Hermit.Vpn.DnsConfig do
         |> Hermit.Vpn.InboundProfile.changeset(%{dns_profile_id: new_config.id})
         |> Hermit.Repo.update!()
 
+        Hermit.Vpn.InboundProfile.clear_cache()
+
         new_config = Hermit.Repo.preload(new_config, :blocklists)
         %{new_config | inbound_profile_id: profile_id}
 
       true ->
-        config = Hermit.Repo.get!(__MODULE__, profile.dns_profile_id) |> Hermit.Repo.preload(:blocklists)
+        config =
+          Hermit.Repo.get!(__MODULE__, profile.dns_profile_id) |> Hermit.Repo.preload(:blocklists)
+
         %{config | inbound_profile_id: profile_id}
     end
   end
@@ -197,17 +209,25 @@ defmodule Hermit.Vpn.DnsConfig do
       {:ok, updated} ->
         updated = updated |> Hermit.Repo.preload(:blocklists)
         updated = %{updated | inbound_profile_id: profile_id}
+
         if :erlang.whereis(Hermit.PubSub) != :undefined do
-          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_config:#{profile_id}", {:dns_config_updated, updated})
+          Phoenix.PubSub.broadcast(
+            Hermit.PubSub,
+            "dns_config:#{profile_id}",
+            {:dns_config_updated, updated}
+          )
         end
+
         {:ok, updated}
-      {:error, changeset} -> {:error, changeset}
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 
   def update_blocklists(config, blocklist_ids) do
     import Ecto.Query
-    blocklists = Hermit.Repo.all(from b in Hermit.Dns.Blocklist, where: b.id in ^blocklist_ids)
+    blocklists = Hermit.Repo.all(from(b in Hermit.Dns.Blocklist, where: b.id in ^blocklist_ids))
 
     config
     |> Hermit.Repo.preload(:blocklists)

@@ -54,6 +54,7 @@ defmodule HermitWeb.InboundLive do
 
     case Hermit.Repo.insert(changeset) do
       {:ok, _profile} ->
+        InboundProfile.clear_cache()
         inbound_profiles = Hermit.Repo.all(InboundProfile)
         dns_profiles = Hermit.Repo.all(from(d in Hermit.Vpn.DnsConfig, order_by: d.name))
 
@@ -98,6 +99,7 @@ defmodule HermitWeb.InboundLive do
 
       case Hermit.Repo.delete(profile) do
         {:ok, _} ->
+          InboundProfile.clear_cache()
           inbound_profiles = Hermit.Repo.all(InboundProfile)
           dns_profiles = Hermit.Repo.all(from(d in Hermit.Vpn.DnsConfig, order_by: d.name))
 

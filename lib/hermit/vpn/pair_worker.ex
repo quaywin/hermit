@@ -44,7 +44,8 @@ defmodule Hermit.Vpn.PairWorker do
     outbound_if: "wg0",
     bootstrap_task: nil,
     current_ping_task: nil,
-    latency_last_checked_at: 0
+    latency_last_checked_at: 0,
+    last_db_state: nil
   ]
 
   # --- Client API ---
@@ -533,6 +534,15 @@ defmodule Hermit.Vpn.PairWorker do
         Map.get(inbound_config, :ts_auth_key) ||
         args[:ts_auth_key]
 
+    last_db_state = %{
+      status: overall_status,
+      wg_status: wg_status,
+      ts_status: ts_status,
+      wg_error_reason: nil,
+      ts_error_reason: nil,
+      started_at: started_at
+    }
+
     state = %__MODULE__{
       id: id,
       wg_container_name: "hermit_wg_#{id}",
@@ -555,7 +565,8 @@ defmodule Hermit.Vpn.PairWorker do
       outbound_module: outbound_module,
       inbound_config: inbound_config,
       outbound_config: outbound_config,
-      inbound_type: inbound_type
+      inbound_type: inbound_type,
+      last_db_state: last_db_state
     }
 
     cond do
@@ -1239,7 +1250,8 @@ defmodule Hermit.Vpn.PairWorker do
           now = System.system_time(:second)
 
           state =
-            if is_nil(state.current_ping_task) and now - state.latency_last_checked_at >= 30 do
+            if has_active_ui?() and is_nil(state.current_ping_task) and
+                 now - state.latency_last_checked_at >= 30 do
               task =
                 Task.async(fn ->
                   measure_ping(state.outbound_module, state.id)
@@ -1639,19 +1651,44 @@ defmodule Hermit.Vpn.PairWorker do
 
     updated_state = %{state | status: overall_status, error_reason: error_reason}
 
-    update_db_status(
-      updated_state.id,
-      to_string(updated_state.wg_status),
-      to_string(updated_state.ts_status),
-      updated_state.wg_error_reason,
-      updated_state.ts_error_reason,
-      to_string(overall_status),
-      updated_state.started_at
-    )
+    db_changed? =
+      is_nil(state.last_db_state) or
+        state.last_db_state.status != overall_status or
+        state.last_db_state.wg_status != state.wg_status or
+        state.last_db_state.ts_status != state.ts_status or
+        state.last_db_state.wg_error_reason != state.wg_error_reason or
+        state.last_db_state.ts_error_reason != state.ts_error_reason or
+        state.last_db_state.started_at != state.started_at
 
-    Phoenix.PubSub.broadcast(Hermit.PubSub, @topic, {:vpn_pair_updated, updated_state})
+    state_with_db =
+      if db_changed? do
+        update_db_status(
+          updated_state.id,
+          to_string(updated_state.wg_status),
+          to_string(updated_state.ts_status),
+          updated_state.wg_error_reason,
+          updated_state.ts_error_reason,
+          to_string(overall_status),
+          updated_state.started_at
+        )
 
-    updated_state
+        new_last_db_state = %{
+          status: overall_status,
+          wg_status: state.wg_status,
+          ts_status: state.ts_status,
+          wg_error_reason: state.wg_error_reason,
+          ts_error_reason: state.ts_error_reason,
+          started_at: state.started_at
+        }
+
+        %{updated_state | last_db_state: new_last_db_state}
+      else
+        updated_state
+      end
+
+    Phoenix.PubSub.broadcast(Hermit.PubSub, @topic, {:vpn_pair_updated, state_with_db})
+
+    state_with_db
   end
 
   defp update_db_status(id, wg_status, ts_status, wg_err, ts_err, overall_status, started_at) do
@@ -1713,6 +1750,18 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp has_inbound_info?(_metrics, _module), do: false
+
+  defp has_active_ui? do
+    try do
+      Registry.select(Hermit.Vpn.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.any?(fn
+        key when is_binary(key) -> String.starts_with?(key, "ui_session:")
+        _ -> false
+      end)
+    rescue
+      _ -> false
+    end
+  end
 
   defp sanitize_inbound_config(pair_id, config) when is_map(config) do
     string_config = Map.new(config, fn {k, v} -> {to_string(k), v} end)

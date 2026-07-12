@@ -39,6 +39,10 @@ defmodule HermitWeb.Router do
     get "/mobileconfig", DNSController, :mobileconfig
   end
 
+  scope "/", HermitWeb do
+    match :*, "/*path", Plugs.NotFound, []
+  end
+
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:hermit, :dev_routes) do
     # If you want to use the LiveDashboard in production, you should put
@@ -57,5 +61,18 @@ defmodule HermitWeb.Router do
     else
       conn
     end
+  end
+end
+
+defmodule HermitWeb.Plugs.NotFound do
+  import Plug.Conn
+
+  def init(opts), do: opts
+
+  def call(conn, _opts) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(404, "Not Found")
+    |> halt()
   end
 end

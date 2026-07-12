@@ -119,4 +119,41 @@ defmodule Hermit.Vpn.InboundProfile do
         changeset
     end
   end
+
+  @doc """
+  Lấy InboundProfile bằng `doh_token` qua cache ETS.
+  Nếu chưa cache thì truy vấn DB và ghi nhận vào cache.
+  """
+  def get_by_doh_token(doh_token) do
+    try do
+      case :ets.lookup(:inbound_profiles_cache, doh_token) do
+        [{^doh_token, profile}] ->
+          profile
+
+        [] ->
+          case Hermit.Repo.get_by(__MODULE__, doh_token: doh_token) do
+            nil ->
+              nil
+
+            profile ->
+              :ets.insert(:inbound_profiles_cache, {doh_token, profile})
+              profile
+          end
+      end
+    rescue
+      ArgumentError ->
+        Hermit.Repo.get_by(__MODULE__, doh_token: doh_token)
+    end
+  end
+
+  @doc """
+  Xóa sạch cache của InboundProfile (dùng khi thêm/sửa/xóa profile).
+  """
+  def clear_cache do
+    try do
+      :ets.delete_all_objects(:inbound_profiles_cache)
+    rescue
+      ArgumentError -> :ok
+    end
+  end
 end

@@ -9,6 +9,7 @@ defmodule HermitWeb.TunnelDetailLive do
   def mount(%{"id" => id}, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
+      Registry.register(Hermit.Vpn.Registry, "ui_session:#{inspect(self())}", :active)
       :timer.send_interval(1000, self(), :tick)
     end
 

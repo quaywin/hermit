@@ -93,6 +93,7 @@ defmodule HermitWeb.InboundDetailLive do
 
     case Hermit.Repo.update(changeset) do
       {:ok, updated_profile} ->
+        InboundProfile.clear_cache()
         # Reboot DNS node if it was running with old credentials
         if updated_profile.type == "tailscale" and
              DnsWorker.get_status(updated_profile.id) |> elem(0) == :running do
@@ -168,7 +169,8 @@ defmodule HermitWeb.InboundDetailLive do
     enabled = not config.enabled
 
     # If we are disabling DNS, we must also disable tailscale_override_dns
-    update_params = if not enabled, do: %{enabled: false, tailscale_override_dns: false}, else: %{enabled: true}
+    update_params =
+      if not enabled, do: %{enabled: false, tailscale_override_dns: false}, else: %{enabled: true}
 
     case DnsConfig.update_for_profile(profile_id, update_params) do
       {:ok, updated} ->
@@ -232,7 +234,6 @@ defmodule HermitWeb.InboundDetailLive do
      |> put_flash(:info, "Reconnecting DNS Node...")}
   end
 
-
   @impl true
   def handle_event("toggle_query_logging", _params, socket) do
     profile_id = socket.assigns.id
@@ -260,7 +261,8 @@ defmodule HermitWeb.InboundDetailLive do
     {status, _, _} = DnsWorker.get_status(profile_id)
 
     if status != :running do
-      {:noreply, put_flash(socket, :error, "Cannot toggle Override DNS when DNS Node is not running.")}
+      {:noreply,
+       put_flash(socket, :error, "Cannot toggle Override DNS when DNS Node is not running.")}
     else
       config = socket.assigns.dns_config
       override = not config.tailscale_override_dns
@@ -296,7 +298,9 @@ defmodule HermitWeb.InboundDetailLive do
   @impl true
   def handle_event("select_dns_profile", %{"dns_profile_id" => dns_profile_id_str}, socket) do
     profile = socket.assigns.profile
-    dns_profile_id = if dns_profile_id_str == "", do: nil, else: String.to_integer(dns_profile_id_str)
+
+    dns_profile_id =
+      if dns_profile_id_str == "", do: nil, else: String.to_integer(dns_profile_id_str)
 
     # Capture active status of current DNS configuration
     old_dns_config = socket.assigns.dns_config
@@ -307,6 +311,8 @@ defmodule HermitWeb.InboundDetailLive do
 
     case Hermit.Repo.update(changeset) do
       {:ok, updated_profile} ->
+        InboundProfile.clear_cache()
+
         # Load new dns config (which might update the profile's dns_profile_id in DB if it was nil)
         updated_dns_config = DnsConfig.get_for_profile(updated_profile.id)
 
@@ -329,6 +335,7 @@ defmodule HermitWeb.InboundDetailLive do
 
         # Hot-reload DNS server and sync Tailscale DNS config if running
         {status, ip, err} = DnsWorker.get_status(reloaded_profile.id)
+
         if status == :running do
           Hermit.Vpn.DnsSupervisor.restart_dns_server(reloaded_profile.id)
           Hermit.Vpn.DnsWorker.sync_state(reloaded_profile.id)

@@ -141,28 +141,8 @@ defmodule Hermit.Application do
         System.cmd("sysctl", ["-w", "net.ipv4.conf.all.rp_filter=2"])
         System.cmd("sysctl", ["-w", "net.ipv4.conf.default.rp_filter=2"])
 
-        # Ensure NAT and forwarding rules for Tailscale range are present on host
-        ensure_nat_rule(["POSTROUTING", "-s", "100.64.0.0/10", "-j", "MASQUERADE"])
-        ensure_iptables_rule(["FORWARD", "-s", "100.64.0.0/10", "-j", "ACCEPT"])
-        ensure_iptables_rule(["FORWARD", "-d", "100.64.0.0/10", "-j", "ACCEPT"])
-
-        # Ensure incoming traffic from virtual interfaces is allowed in host INPUT chain
-        ensure_iptables_rule(["INPUT", "-i", "dns_h_+", "-j", "ACCEPT"])
-        ensure_iptables_rule(["INPUT", "-i", "loc_+", "-j", "ACCEPT"])
-        ensure_iptables_rule(["INPUT", "-i", "vh_+", "-j", "ACCEPT"])
-
-        # Clamp TCP MSS to path MTU to prevent MTU issues in cloud environments like GCP/AWS
-        ensure_iptables_rule("mangle", [
-          "FORWARD",
-          "-p",
-          "tcp",
-          "--tcp-flags",
-          "SYN,RST",
-          "SYN",
-          "-j",
-          "TCPMSS",
-          "--clamp-mss-to-pmtu"
-        ])
+        # Setup host network rules using nftables
+        setup_nftables_host()
       rescue
         e ->
           IO.inspect(e,
@@ -173,21 +153,115 @@ defmodule Hermit.Application do
     end
   end
 
-  defp ensure_iptables_rule(table, args) do
-    case System.cmd("iptables", ["-t", table, "-C" | args]) do
-      {_, 0} -> :ok
-      _ -> System.cmd("iptables", ["-t", table, "-I" | args])
+  defp setup_nftables_host do
+    try do
+      # 1. Ensure table exists
+      run_nft(["add", "table", "inet", "hermit_host"])
+      # 2. Flush to prevent duplicate rules on restart
+      run_nft(["flush", "table", "inet", "hermit_host"])
+
+      # 3. Create chains
+      run_nft([
+        "add",
+        "chain",
+        "inet",
+        "hermit_host",
+        "input",
+        "{ type filter hook input priority filter ; }"
+      ])
+
+      run_nft([
+        "add",
+        "chain",
+        "inet",
+        "hermit_host",
+        "forward",
+        "{ type filter hook forward priority filter ; }"
+      ])
+
+      run_nft([
+        "add",
+        "chain",
+        "inet",
+        "hermit_host",
+        "postrouting",
+        "{ type nat hook postrouting priority srcnat ; }"
+      ])
+
+      # 4. Input rules for virtual interfaces (dns_h*, loc*, vh*)
+      run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "dns_h*", "accept"])
+      run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "loc*", "accept"])
+      run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "vh*", "accept"])
+
+      # 5. Forwarding rules for Tailscale range
+      run_nft([
+        "add",
+        "rule",
+        "inet",
+        "hermit_host",
+        "forward",
+        "ip",
+        "saddr",
+        "100.64.0.0/10",
+        "accept"
+      ])
+
+      run_nft([
+        "add",
+        "rule",
+        "inet",
+        "hermit_host",
+        "forward",
+        "ip",
+        "daddr",
+        "100.64.0.0/10",
+        "accept"
+      ])
+
+      # MSS clamping to prevent MTU issues
+      run_nft([
+        "add",
+        "rule",
+        "inet",
+        "hermit_host",
+        "forward",
+        "tcp",
+        "flags",
+        "syn",
+        "tcp",
+        "option",
+        "maxseg",
+        "size",
+        "set",
+        "rt",
+        "mtu"
+      ])
+
+      # 6. Nat masquerade for Tailscale range
+      run_nft([
+        "add",
+        "rule",
+        "inet",
+        "hermit_host",
+        "postrouting",
+        "ip",
+        "saddr",
+        "100.64.0.0/10",
+        "masquerade"
+      ])
+
+      :ok
+    rescue
+      e ->
+        IO.inspect(e, label: "Warning: Failed to setup nftables host rules")
+        {:error, e}
     end
   end
 
-  defp ensure_iptables_rule(args) do
-    ensure_iptables_rule("filter", args)
-  end
-
-  defp ensure_nat_rule(args) do
-    case System.cmd("iptables", ["-t", "nat", "-C" | args]) do
-      {_, 0} -> :ok
-      _ -> System.cmd("iptables", ["-t", "nat", "-I" | args])
+  defp run_nft(args) do
+    case System.cmd("nft", args) do
+      {output, 0} -> {:ok, output}
+      {output, code} -> {:error, {code, output}}
     end
   end
 

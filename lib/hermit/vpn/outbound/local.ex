@@ -156,27 +156,37 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "netns",
                    "exec",
                    wg_name,
-                   "iptables",
-                   "-t",
-                   "nat",
-                   "-A",
-                   "POSTROUTING",
-                   "-o",
-                   "eth0",
-                   "-j",
-                   "MASQUERADE"
+                   "nft",
+                   "add",
+                   "table",
+                   "inet",
+                   "hermit_ns"
                  ]),
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",
                    "exec",
                    wg_name,
-                   "iptables",
-                   "-I",
-                   "FORWARD",
-                   "1",
-                   "-j",
-                   "ACCEPT"
+                   "nft",
+                   "add",
+                   "chain",
+                   "inet",
+                   "hermit_ns",
+                   "forward",
+                   "{ type filter hook forward priority filter ; }"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "chain",
+                   "inet",
+                   "hermit_ns",
+                   "postrouting",
+                   "{ type nat hook postrouting priority srcnat ; }"
                  ]),
                {:block_ipv6, {:ok, _}} <-
                  {:block_ipv6,
@@ -185,55 +195,111 @@ defmodule Hermit.Vpn.Outbound.Local do
                       "netns",
                       "exec",
                       wg_name,
-                      "ip6tables",
-                      "-I",
-                      "FORWARD",
-                      "1",
-                      "-j",
-                      "REJECT",
-                      "--reject-with",
-                      "icmp6-port-unreachable"
+                      "nft",
+                      "add",
+                      "rule",
+                      "inet",
+                      "hermit_ns",
+                      "forward",
+                      "meta",
+                      "nfproto",
+                      "ipv6",
+                      "reject",
+                      "with",
+                      "icmpv6",
+                      "type",
+                      "port-unreachable"
                     ])
                   else
-                    run_cmd("ip", [
-                      "netns",
-                      "exec",
-                      wg_name,
-                      "ip6tables",
-                      "-t",
-                      "nat",
-                      "-A",
-                      "POSTROUTING",
-                      "-o",
-                      "eth0",
-                      "-j",
-                      "MASQUERADE"
-                    ])
+                    {:ok, :skipped}
                   end},
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "rule",
+                   "inet",
+                   "hermit_ns",
+                   "forward",
+                   "accept"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "rule",
+                   "inet",
+                   "hermit_ns",
+                   "postrouting",
+                   "oifname",
+                   "eth0",
+                   "masquerade"
+                 ]),
                {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
                {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
+               # Setup profile-specific nftables table on host
+               {:ok, _} <- run_cmd("nft", ["add", "table", "ip", "hermit_local_#{pair_id}"]),
                {:ok, _} <-
-                 run_cmd("iptables", [
-                   "-t",
-                   "nat",
-                   "-I",
-                   "POSTROUTING",
-                   "-s",
-                   subnet,
-                   "-j",
-                   "MASQUERADE"
+                 run_cmd("nft", [
+                   "add",
+                   "chain",
+                   "ip",
+                   "hermit_local_#{pair_id}",
+                   "forward",
+                   "{ type filter hook forward priority filter ; }"
                  ]),
-               {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
                {:ok, _} <-
-                 run_cmd("iptables", [
-                   "-I",
-                   "FORWARD",
-                   "-d",
+                 run_cmd("nft", [
+                   "add",
+                   "chain",
+                   "ip",
+                   "hermit_local_#{pair_id}",
+                   "postrouting",
+                   "{ type nat hook postrouting priority srcnat ; }"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("nft", [
+                   "add",
+                   "rule",
+                   "ip",
+                   "hermit_local_#{pair_id}",
+                   "forward",
+                   "ip",
+                   "saddr",
                    subnet,
-                   "-j",
-                   "ACCEPT"
+                   "accept"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("nft", [
+                   "add",
+                   "rule",
+                   "ip",
+                   "hermit_local_#{pair_id}",
+                   "forward",
+                   "ip",
+                   "daddr",
+                   subnet,
+                   "accept"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("nft", [
+                   "add",
+                   "rule",
+                   "ip",
+                   "hermit_local_#{pair_id}",
+                   "postrouting",
+                   "ip",
+                   "saddr",
+                   subnet,
+                   "masquerade"
                  ]) do
             # Setup network namespace DNS
             dns_servers =
@@ -305,27 +371,8 @@ defmodule Hermit.Vpn.Outbound.Local do
             System.cmd("ip", ["netns", "del", wg_name])
             File.rm_rf(netns_dns_dir)
 
-            System.cmd("iptables", [
-              "-t",
-              "nat",
-              "-D",
-              "POSTROUTING",
-              "-s",
-              subnet,
-              "-j",
-              "MASQUERADE"
-            ])
-
-            System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
-
-            System.cmd("iptables", [
-              "-D",
-              "FORWARD",
-              "-d",
-              subnet,
-              "-j",
-              "ACCEPT"
-            ])
+            # Clean up profile-specific nftables table on host
+            System.cmd("nft", ["delete", "table", "ip", "hermit_local_#{pair_id}"])
 
             {:error, reason}
         end
@@ -347,28 +394,6 @@ defmodule Hermit.Vpn.Outbound.Local do
 
       Logger.info("Stopping Local outbound netns: #{wg_name}")
 
-      # Read config from database to clean up iptables rules if custom IPs were used
-      pair = Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id)
-      pair = if pair, do: Hermit.Repo.preload(pair, :outbound_profile), else: nil
-
-      config =
-        if pair && pair.outbound_profile, do: pair.outbound_profile.config || %{}, else: %{}
-
-      hash = :erlang.phash2(pair_id, 250) + 1
-
-      local_ip =
-        Map.get(config, "local_ip") || Map.get(config, :local_ip) || "10.200.#{hash}.2/30"
-
-      subnet =
-        case String.split(local_ip, ".") do
-          [a, b, c, d_cidr] ->
-            [_, cidr] = String.split(d_cidr, "/")
-            "#{a}.#{b}.#{c}.0/#{cidr}"
-
-          _ ->
-            "10.200.#{hash}.0/30"
-        end
-
       try do
         # Delete host interface if any
         System.cmd("ip", ["link", "delete", host_if_name])
@@ -381,28 +406,8 @@ defmodule Hermit.Vpn.Outbound.Local do
         # Clean up netns DNS config
         File.rm_rf("/etc/netns/#{wg_name}")
 
-        # Clean up iptables rules
-        System.cmd("iptables", [
-          "-t",
-          "nat",
-          "-D",
-          "POSTROUTING",
-          "-s",
-          subnet,
-          "-j",
-          "MASQUERADE"
-        ])
-
-        System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
-
-        System.cmd("iptables", [
-          "-D",
-          "FORWARD",
-          "-d",
-          subnet,
-          "-j",
-          "ACCEPT"
-        ])
+        # Clean up nftables host rules
+        System.cmd("nft", ["delete", "table", "ip", "hermit_local_#{pair_id}"])
       rescue
         e ->
           Logger.warning(

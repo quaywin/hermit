@@ -418,46 +418,129 @@ defmodule Hermit.Vpn.DnsWorker do
                  "dev",
                  "eth0"
                ]),
-             # NAT routing on Host
+             # NAT routing on Host via profile-specific nftables table
+             {:ok, _} <- run_cmd("nft", ["add", "table", "ip", "hermit_dns_#{profile_id}"]),
              {:ok, _} <-
-               run_cmd("iptables", [
-                 "-t",
-                 "nat",
-                 "-I",
-                 "POSTROUTING",
-                 "-s",
-                 subnet,
-                 "-j",
-                 "MASQUERADE"
+               run_cmd("nft", [
+                 "add",
+                 "chain",
+                 "ip",
+                 "hermit_dns_#{profile_id}",
+                 "forward",
+                 "{ type filter hook forward priority filter ; }"
                ]),
-             {:ok, _} <- run_cmd("iptables", ["-I", "FORWARD", "-s", subnet, "-j", "ACCEPT"]),
              {:ok, _} <-
-               run_cmd("iptables", [
-                 "-I",
-                 "FORWARD",
-                 "-d",
-                 subnet,
-                 "-j",
-                 "ACCEPT"
+               run_cmd("nft", [
+                 "add",
+                 "chain",
+                 "ip",
+                 "hermit_dns_#{profile_id}",
+                 "postrouting",
+                 "{ type nat hook postrouting priority srcnat ; }"
                ]),
-             # DNAT port redirection inside namespace
+             {:ok, _} <-
+               run_cmd("nft", [
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_dns_#{profile_id}",
+                 "forward",
+                 "ip",
+                 "saddr",
+                 subnet,
+                 "accept"
+               ]),
+             {:ok, _} <-
+               run_cmd("nft", [
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_dns_#{profile_id}",
+                 "forward",
+                 "ip",
+                 "daddr",
+                 subnet,
+                 "accept"
+               ]),
+             {:ok, _} <-
+               run_cmd("nft", [
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_dns_#{profile_id}",
+                 "postrouting",
+                 "ip",
+                 "saddr",
+                 subnet,
+                 "masquerade"
+               ]),
+             # DNAT port redirection inside namespace using nftables
              {:ok, _} <-
                run_cmd("ip", [
                  "netns",
                  "exec",
                  ns,
-                 "iptables",
-                 "-t",
-                 "nat",
-                 "-A",
-                 "PREROUTING",
-                 "-p",
+                 "nft",
+                 "add",
+                 "table",
+                 "ip",
+                 "hermit_ns"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "nft",
+                 "add",
+                 "chain",
+                 "ip",
+                 "hermit_ns",
+                 "prerouting",
+                 "{ type nat hook prerouting priority dstnat ; }"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "nft",
+                 "add",
+                 "chain",
+                 "ip",
+                 "hermit_ns",
+                 "forward",
+                 "{ type filter hook forward priority filter ; }"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "nft",
+                 "add",
+                 "chain",
+                 "ip",
+                 "hermit_ns",
+                 "postrouting",
+                 "{ type nat hook postrouting priority srcnat ; }"
+               ]),
+             {:ok, _} <-
+               run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "nft",
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_ns",
+                 "prerouting",
                  "udp",
-                 "--dport",
+                 "dport",
                  "53",
-                 "-j",
-                 "DNAT",
-                 "--to-destination",
+                 "dnat",
+                 "to",
                  "#{host_ip}:#{port}"
                ]),
              {:ok, _} <-
@@ -465,18 +548,17 @@ defmodule Hermit.Vpn.DnsWorker do
                  "netns",
                  "exec",
                  ns,
-                 "iptables",
-                 "-t",
-                 "nat",
-                 "-A",
-                 "PREROUTING",
-                 "-p",
+                 "nft",
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_ns",
+                 "prerouting",
                  "tcp",
-                 "--dport",
+                 "dport",
                  "53",
-                 "-j",
-                 "DNAT",
-                 "--to-destination",
+                 "dnat",
+                 "to",
                  "#{host_ip}:#{port}"
                ]),
              # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
@@ -485,12 +567,13 @@ defmodule Hermit.Vpn.DnsWorker do
                  "netns",
                  "exec",
                  ns,
-                 "iptables",
-                 "-I",
-                 "FORWARD",
-                 "1",
-                 "-j",
-                 "ACCEPT"
+                 "nft",
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_ns",
+                 "forward",
+                 "accept"
                ]),
 
              # Source policy routing on host (replacing global route)
@@ -630,19 +713,19 @@ defmodule Hermit.Vpn.DnsWorker do
                     "netns",
                     "exec",
                     ns,
-                    "iptables",
-                    "-t",
-                    "nat",
-                    "-I",
-                    "POSTROUTING",
-                    "-p",
+                    "nft",
+                    "insert",
+                    "rule",
+                    "ip",
+                    "hermit_ns",
+                    "postrouting",
                     "udp",
-                    "-d",
+                    "daddr",
                     host_ip,
-                    "--dport",
+                    "udp",
+                    "dport",
                     to_string(port),
-                    "-j",
-                    "RETURN"
+                    "return"
                   ])
 
                 _ =
@@ -650,19 +733,19 @@ defmodule Hermit.Vpn.DnsWorker do
                     "netns",
                     "exec",
                     ns,
-                    "iptables",
-                    "-t",
-                    "nat",
-                    "-I",
-                    "POSTROUTING",
-                    "-p",
+                    "nft",
+                    "insert",
+                    "rule",
+                    "ip",
+                    "hermit_ns",
+                    "postrouting",
                     "tcp",
-                    "-d",
+                    "daddr",
                     host_ip,
-                    "--dport",
+                    "tcp",
+                    "dport",
                     to_string(port),
-                    "-j",
-                    "RETURN"
+                    "return"
                   ])
               end
 
@@ -705,7 +788,6 @@ defmodule Hermit.Vpn.DnsWorker do
     host_if = "dns_h_#{profile_id}"
     table_id = 1000 + profile_id
     host_ip = "10.251.#{profile_id}.1"
-    subnet = "10.251.#{profile_id}.0/30"
 
     try do
       System.cmd("ip", ["link", "delete", host_if])
@@ -730,17 +812,8 @@ defmodule Hermit.Vpn.DnsWorker do
 
       System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
 
-      System.cmd("iptables", ["-t", "nat", "-D", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"])
-      System.cmd("iptables", ["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"])
-
-      System.cmd("iptables", [
-        "-D",
-        "FORWARD",
-        "-d",
-        subnet,
-        "-j",
-        "ACCEPT"
-      ])
+      # Clean up nftables table for this profile on host
+      System.cmd("nft", ["delete", "table", "ip", "hermit_dns_#{profile_id}"])
     rescue
       e ->
         Logger.warning(

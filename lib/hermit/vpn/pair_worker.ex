@@ -249,7 +249,10 @@ defmodule Hermit.Vpn.PairWorker do
 
     registry_ids =
       Registry.select(Hermit.Vpn.Registry, [{{:"$1", :"$2", :"$3"}, [], [:"$1"]}])
-      |> Enum.filter(&is_binary/1)
+      |> Enum.filter(fn
+        key when is_binary(key) -> not String.starts_with?(key, "ui_session:")
+        _ -> false
+      end)
 
     all_ids = Enum.uniq(persisted_ids ++ registry_ids)
 

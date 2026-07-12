@@ -202,46 +202,87 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    "netns",
                    "exec",
                    wg_name,
-                   "iptables",
-                   "-t",
-                   "mangle",
-                   "-A",
-                   "POSTROUTING",
-                   "-p",
+                   "nft",
+                   "add",
+                   "table",
+                   "inet",
+                   "hermit_ns"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "chain",
+                   "inet",
+                   "hermit_ns",
+                   "forward",
+                   "{ type filter hook forward priority filter ; }"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "chain",
+                   "inet",
+                   "hermit_ns",
+                   "postrouting",
+                   "{ type nat hook postrouting priority srcnat ; }"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "rule",
+                   "inet",
+                   "hermit_ns",
+                   "forward",
                    "tcp",
-                   "--tcp-flags",
-                   "SYN,RST",
-                   "SYN",
-                   "-j",
-                   "TCPMSS",
-                   "--clamp-mss-to-pmtu"
+                   "flags",
+                   "syn",
+                   "tcp",
+                   "option",
+                   "maxseg",
+                   "size",
+                   "set",
+                   "rt",
+                   "mtu"
                  ]),
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",
                    "exec",
                    wg_name,
-                   "iptables",
-                   "-t",
-                   "nat",
-                   "-A",
-                   "POSTROUTING",
-                   "-o",
+                   "nft",
+                   "add",
+                   "rule",
+                   "inet",
+                   "hermit_ns",
+                   "forward",
+                   "accept"
+                 ]),
+               {:ok, _} <-
+                 run_cmd("ip", [
+                   "netns",
+                   "exec",
+                   wg_name,
+                   "nft",
+                   "add",
+                   "rule",
+                   "inet",
+                   "hermit_ns",
+                   "postrouting",
+                   "oifname",
                    "wg0",
-                   "-j",
-                   "MASQUERADE"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "iptables",
-                   "-I",
-                   "FORWARD",
-                   "1",
-                   "-j",
-                   "ACCEPT"
+                   "masquerade"
                  ]),
                {:block_ipv6, {:ok, _}} <-
                  {:block_ipv6,
@@ -250,30 +291,23 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                       "netns",
                       "exec",
                       wg_name,
-                      "ip6tables",
-                      "-I",
-                      "FORWARD",
-                      "1",
-                      "-j",
-                      "REJECT",
-                      "--reject-with",
-                      "icmp6-port-unreachable"
+                      "nft",
+                      "add",
+                      "rule",
+                      "inet",
+                      "hermit_ns",
+                      "forward",
+                      "meta",
+                      "nfproto",
+                      "ipv6",
+                      "reject",
+                      "with",
+                      "icmpv6",
+                      "type",
+                      "port-unreachable"
                     ])
                   else
-                    run_cmd("ip", [
-                      "netns",
-                      "exec",
-                      wg_name,
-                      "ip6tables",
-                      "-t",
-                      "nat",
-                      "-A",
-                      "POSTROUTING",
-                      "-o",
-                      "wg0",
-                      "-j",
-                      "MASQUERADE"
-                    ])
+                    {:ok, :skipped}
                   end} do
             # Setup network namespace specific DNS
             if dns_servers != [] do

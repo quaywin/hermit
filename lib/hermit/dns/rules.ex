@@ -3,12 +3,13 @@ defmodule Hermit.Dns.Rules do
   Handles matching and precompilation of custom DNS rules.
   """
 
-  @spec match(String.t(), map()) :: {String.t(), String.t() | nil} | {nil, nil}
-  def match(_domain, rules_map) when map_size(rules_map) == 0, do: {nil, nil}
+  @spec match(String.t(), map()) ::
+          {String.t(), String.t() | nil, String.t() | nil} | {nil, nil, nil}
+  def match(_domain, rules_map) when map_size(rules_map) == 0, do: {nil, nil, nil}
 
   def match(domain, rules_map) do
     case Map.get(rules_map, domain) do
-      {_action, _value} = result ->
+      {_action, _value, _proxy_pair_id} = result ->
         result
 
       nil ->
@@ -18,7 +19,7 @@ defmodule Hermit.Dns.Rules do
             match(parent, rules_map)
 
           :nomatch ->
-            {nil, nil}
+            {nil, nil, nil}
         end
     end
   end
@@ -30,7 +31,8 @@ defmodule Hermit.Dns.Rules do
       domain = Map.get(rule, "domain") || Map.get(rule, :domain)
       action = Map.get(rule, "action") || Map.get(rule, :action)
       value = Map.get(rule, "value") || Map.get(rule, :value)
-      {domain, {action, value}}
+      proxy_pair_id = Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
+      {domain, {action, value, proxy_pair_id}}
     end)
     |> Enum.reject(fn {domain, _} -> is_nil(domain) end)
     |> Map.new()

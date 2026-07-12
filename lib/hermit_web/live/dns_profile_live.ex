@@ -11,7 +11,9 @@ defmodule HermitWeb.DnsProfileLive do
       |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
 
     vpn_pairs =
-      Hermit.Repo.all(from(p in Hermit.Vpn.VpnPair, order_by: p.pair_id))
+      Hermit.Repo.all(
+        from(p in Hermit.Vpn.VpnPair, where: p.inbound_type == "proxy", order_by: p.pair_id)
+      )
       |> Hermit.Repo.preload([:inbound_profile, :outbound_profile])
 
     # Chọn profile đầu tiên làm mặc định nếu có, hoặc nil
@@ -45,6 +47,7 @@ defmodule HermitWeb.DnsProfileLive do
      |> assign(custom_rule_action: "block")
      |> assign(custom_rule_domain: "")
      |> assign(custom_rule_value: "")
+     |> assign(custom_rule_proxy_pair_id: "")
      |> assign(editing_name: false)
      |> assign(pause_logs: false)
      |> assign_create_form()
@@ -87,6 +90,7 @@ defmodule HermitWeb.DnsProfileLive do
      |> assign(custom_rule_action: "block")
      |> assign(custom_rule_domain: "")
      |> assign(custom_rule_value: "")
+     |> assign(custom_rule_proxy_pair_id: "")
      |> assign_name_form()}
   end
 
@@ -352,12 +356,14 @@ defmodule HermitWeb.DnsProfileLive do
     action = Map.get(params, "action", "block")
     domain = Map.get(params, "domain", "")
     value = Map.get(params, "value", "")
+    proxy_pair_id = Map.get(params, "proxy_pair_id", "")
 
     {:noreply,
      socket
      |> assign(custom_rule_action: action)
      |> assign(custom_rule_domain: domain)
-     |> assign(custom_rule_value: value)}
+     |> assign(custom_rule_value: value)
+     |> assign(custom_rule_proxy_pair_id: proxy_pair_id)}
   end
 
   @impl true
@@ -368,19 +374,32 @@ defmodule HermitWeb.DnsProfileLive do
     domain = String.trim(domain) |> String.downcase()
 
     value =
-      if action in ["redirect", "forward_proxy"],
+      if action in ["redirect", "forward_proxy", "forward_dns"],
         do: String.trim(Map.get(params, "value", "")),
         else: nil
+
+    proxy_pair_id =
+      if action == "forward_dns",
+        do: String.trim(Map.get(params, "proxy_pair_id", "")),
+        else: nil
+
+    proxy_pair_id = if proxy_pair_id == "", do: nil, else: proxy_pair_id
 
     cond do
       domain == "" ->
         {:noreply, put_flash(socket, :error, "Domain cannot be empty.")}
 
-      action in ["redirect", "forward_proxy"] and (is_nil(value) or value == "") ->
+      action in ["redirect", "forward_proxy", "forward_dns"] and (is_nil(value) or value == "") ->
         {:noreply, put_flash(socket, :error, "Target value cannot be empty.")}
 
       true ->
-        new_rule = %{"domain" => domain, "action" => action, "value" => value}
+        new_rule = %{
+          "domain" => domain,
+          "action" => action,
+          "value" => value,
+          "proxy_pair_id" => proxy_pair_id
+        }
+
         updated_rules = Enum.reject(custom_rules, &(&1["domain"] == domain)) ++ [new_rule]
 
         case update_profile(
@@ -394,7 +413,8 @@ defmodule HermitWeb.DnsProfileLive do
              new_socket
              |> assign(custom_rule_domain: "")
              |> assign(custom_rule_action: "block")
-             |> assign(custom_rule_value: "")}
+             |> assign(custom_rule_value: "")
+             |> assign(custom_rule_proxy_pair_id: "")}
 
           other ->
             other

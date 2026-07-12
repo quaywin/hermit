@@ -17,7 +17,13 @@ defmodule Hermit.Vpn.GlobalDnsTest do
         custom_rules: [
           %{"domain" => "bypass.domain.com", "action" => "bypass"},
           %{"domain" => "block.domain.net", "action" => "block"},
-          %{"domain" => "redirect.me", "action" => "redirect", "value" => "192.168.1.1"}
+          %{"domain" => "redirect.me", "action" => "redirect", "value" => "192.168.1.1"},
+          %{
+            "domain" => "company.local",
+            "action" => "forward_dns",
+            "value" => "10.0.0.1",
+            "proxy_pair_id" => "wg_company"
+          }
         ]
       })
 

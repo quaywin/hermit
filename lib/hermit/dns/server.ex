@@ -736,14 +736,14 @@ defmodule Hermit.Dns.Server do
 
         :error ->
           # 2. Match custom rules
-          {action, redirect_val, block_reason} =
+          {action, redirect_val, proxy_pair_id, block_reason} =
             case Rules.match(query.domain, state.custom_rules) do
-              {"block", nil} -> {"block", nil, "custom_rule"}
-              {act, val} -> {act, val, nil}
+              {"block", nil, _} -> {"block", nil, nil, "custom_rule"}
+              {act, val, p_id} -> {act, val, p_id, nil}
             end
 
           # 3. Match dynamic blocklists if not matched by custom rules
-          {action, redirect_val, block_reason, blocklist_id} =
+          {action, redirect_val, proxy_pair_id, block_reason, blocklist_id} =
             if is_nil(action) and config.enabled do
               blocklists_list =
                 case config.blocklists do
@@ -771,12 +771,12 @@ defmodule Hermit.Dns.Server do
                     b -> b.name
                   end
 
-                {"block", nil, matched_name, matched_id}
+                {"block", nil, nil, matched_name, matched_id}
               else
-                {nil, nil, nil, nil}
+                {nil, nil, nil, nil, nil}
               end
             else
-              {action, redirect_val, block_reason, nil}
+              {action, redirect_val, proxy_pair_id, block_reason, nil}
             end
 
           case action do
@@ -889,9 +889,102 @@ defmodule Hermit.Dns.Server do
 
               state
 
+            "forward_dns" when not is_nil(redirect_val) ->
+              if not is_nil(proxy_pair_id) and proxy_pair_id != "" do
+                {proxy_ports, state} = get_proxy_ports_for_pair(proxy_pair_id, state)
+
+                case proxy_ports do
+                  {:ok, http_port, socks5_port} ->
+                    case parse_upstreams(redirect_val) do
+                      [] ->
+                        Logger.error(
+                          "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
+                        )
+
+                        servfail = Packet.build_nxdomain(query.id, query.query_record)
+                        servfail = Packet.patch_rcode(servfail, 2)
+                        send_client_response(socket, ip, port, servfail)
+                        state
+
+                      target_upstreams ->
+                        first_upstream = List.first(target_upstreams)
+
+                        case first_upstream do
+                          {:udp, _} when not is_nil(socks5_port) ->
+                            async_forward_to_udp_proxy(
+                              socket,
+                              ip,
+                              port,
+                              packet,
+                              query,
+                              first_upstream,
+                              socks5_port,
+                              proxy_pair_id,
+                              state
+                            )
+
+                          {:doh, url} when not is_nil(http_port) ->
+                            async_forward_to_proxy(
+                              socket,
+                              ip,
+                              port,
+                              packet,
+                              query,
+                              url,
+                              http_port,
+                              proxy_pair_id,
+                              state
+                            )
+
+                          _ ->
+                            Logger.error(
+                              "DNS Server: SOCKS5/HTTP proxy port missing for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
+                            )
+
+                            servfail = Packet.build_nxdomain(query.id, query.query_record)
+                            servfail = Packet.patch_rcode(servfail, 2)
+                            send_client_response(socket, ip, port, servfail)
+                            state
+                        end
+                    end
+
+                  _ ->
+                    Logger.error(
+                      "DNS Server: Failed to get proxy ports for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
+                    )
+
+                    servfail = Packet.build_nxdomain(query.id, query.query_record)
+                    servfail = Packet.patch_rcode(servfail, 2)
+                    send_client_response(socket, ip, port, servfail)
+                    state
+                end
+              else
+                case parse_upstreams(redirect_val) do
+                  [] ->
+                    Logger.error(
+                      "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
+                    )
+
+                    servfail = Packet.build_nxdomain(query.id, query.query_record)
+                    servfail = Packet.patch_rcode(servfail, 2)
+                    send_client_response(socket, ip, port, servfail)
+                    state
+
+                  target_upstreams ->
+                    async_forward_to_upstream(
+                      socket,
+                      ip,
+                      port,
+                      packet,
+                      query,
+                      target_upstreams,
+                      state
+                    )
+                end
+              end
+
             "forward_proxy" when not is_nil(redirect_val) ->
-              target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
-              first_upstream = List.first(target_upstreams)
+              first_upstream = List.first(upstreams)
 
               case first_upstream do
                 {:udp, _} ->
@@ -1039,52 +1132,11 @@ defmodule Hermit.Dns.Server do
               end
 
             _ ->
-              # Split routing based on domain
-              target_upstreams = select_upstreams_for_domain(query.domain, upstreams)
-              async_forward_to_upstream(socket, ip, port, packet, query, target_upstreams, state)
+              async_forward_to_upstream(socket, ip, port, packet, query, upstreams, state)
           end
       end
     end
   end
-
-  # Split routing: if domain is domestic, prioritize private/local IP upstreams
-  defp select_upstreams_for_domain(domain, upstreams) do
-    cond do
-      is_tailscale_domain?(domain) ->
-        # For Tailscale magic DNS domains, prepend Tailscale nameserver 100.100.100.100
-        ts_ns = {:udp, {100, 100, 100, 100}}
-        [ts_ns | List.delete(upstreams, ts_ns)]
-
-      is_domestic_domain?(domain) ->
-        Enum.sort_by(upstreams, fn target ->
-          case target do
-            {:udp, ip} -> if local_ip?(ip), do: 0, else: 1
-            # Put DoH at the bottom for domestic domains
-            _ -> 2
-          end
-        end)
-
-      true ->
-        upstreams
-    end
-  end
-
-  defp is_tailscale_domain?(domain) do
-    String.ends_with?(domain, ".ts.net") or
-      String.ends_with?(domain, ".tailscale.net")
-  end
-
-  defp is_domestic_domain?(domain) do
-    String.ends_with?(domain, ".vn") or
-      String.ends_with?(domain, ".local") or
-      String.ends_with?(domain, ".hermit")
-  end
-
-  defp local_ip?({192, 168, _, _}), do: true
-  defp local_ip?({10, _, _, _}), do: true
-  defp local_ip?({172, idx, _, _}) when idx >= 16 and idx <= 31, do: true
-  defp local_ip?({100, idx, _, _}) when idx >= 64 and idx <= 127, do: true
-  defp local_ip?(_), do: false
 
   defp async_forward_to_upstream(socket, ip, port, packet, query, target_upstreams, state) do
     # Sort target upstreams based on configured priority and health status

@@ -143,8 +143,6 @@ defmodule Hermit.Dns.Server do
 
             server_pid = self()
             spawn_link(fn -> tcp_accept_loop(tcp_socket, profile_id, server_pid) end)
-            # Start periodic active probing timer
-            :erlang.send_after(30_000, self(), :active_probe)
             {:ok, %{state | socket: udp_socket, tcp_socket: tcp_socket}}
 
           {:error, reason} ->
@@ -556,34 +554,6 @@ defmodule Hermit.Dns.Server do
   end
 
   # Hàm helper dùng chung xử lý lỗi upstream được chuyển xuống dưới
-  @impl true
-  def handle_info(:active_probe, state) do
-    :erlang.send_after(30_000, self(), :active_probe)
-    upstreams = Map.keys(state.upstreams_map)
-    server_pid = self()
-
-    if length(upstreams) > 0 do
-      # Smallest possible query: NS query for root domain "." (17 bytes)
-      probe_packet =
-        <<0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-          0x02, 0x00, 0x01>>
-
-      Task.start(fn ->
-        Enum.each(upstreams, fn upstream ->
-          case query_upstream(upstream, probe_packet) do
-            {:ok, _resp, duration} ->
-              GenServer.cast(server_pid, {:update_latency, upstream, duration})
-
-            _ ->
-              GenServer.cast(server_pid, {:update_latency, upstream, 2000})
-          end
-        end)
-      end)
-    end
-
-    {:noreply, state}
-  end
-
   @impl true
   def handle_info(:retry_bind, state) do
     if is_nil(state.socket) do
@@ -1405,80 +1375,6 @@ defmodule Hermit.Dns.Server do
     else
       :gen_udp.send(socket, ip, port, resp)
     end
-  end
-
-  # Simplified query_upstream for active latency probing task
-  defp query_upstream({:udp, upstream}, packet) do
-    start = System.monotonic_time()
-
-    {ip, port} =
-      case upstream do
-        {ip_addr, p} -> {ip_addr, p}
-        ip_addr when is_tuple(ip_addr) -> {ip_addr, 53}
-      end
-
-    case :gen_udp.open(0, [:binary, active: false]) do
-      {:ok, socket} ->
-        try do
-          case :gen_udp.send(socket, ip, port, packet) do
-            :ok ->
-              case :gen_udp.recv(socket, 0, 1500) do
-                {:ok, {_ip, _port, resp_packet}} ->
-                  duration =
-                    System.convert_time_unit(
-                      System.monotonic_time() - start,
-                      :native,
-                      :millisecond
-                    )
-
-                  {:ok, resp_packet, duration}
-
-                other ->
-                  {:error, other}
-              end
-
-            other ->
-              {:error, other}
-          end
-        after
-          :gen_udp.close(socket)
-        end
-
-      other ->
-        {:error, other}
-    end
-  end
-
-  defp query_upstream({:doh, url}, packet) do
-    start = System.monotonic_time()
-
-    case Req.post(url,
-           headers: [
-             {"content-type", "application/dns-message"},
-             {"accept", "application/dns-message"}
-           ],
-           body: packet,
-           retry: false,
-           receive_timeout: 1500
-         ) do
-      {:ok, %{status: 200, body: resp_packet}} ->
-        duration =
-          System.convert_time_unit(
-            System.monotonic_time() - start,
-            :native,
-            :millisecond
-          )
-
-        {:ok, resp_packet, duration}
-
-      other ->
-        {:error, other}
-    end
-  end
-
-  defp query_upstream(other, _packet) do
-    Logger.warning("DNS Server: query_upstream called with unsupported type: #{inspect(other)}")
-    {:error, :unsupported_upstream_type}
   end
 
   # --- Log Recording ---

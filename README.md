@@ -59,29 +59,31 @@ flowchart TD
         end
 
         Fast["Fast Path<br/>(Cache / Blocklist)"]
-        Upstream["Upstream DNS / DoH"]
-        Magic["Tailscale MagicDNS"]
+        Upstream["Upstream DNS / DoH / Forward DNS"]
     end
 
     TS -->|"2. DNAT Redirect"| Server
     Server -->|"Loads"| Profile
-    
+
     Profile --> Fast
     Profile --> Upstream
-    Profile --> Magic
 
     Fast -->|"Instant Return"| Client
     Upstream -->|"Cache & Return"| Server
-    Magic -->|"Cache & Return"| Server
 ```
 
 When a DNS query arrives, the server evaluates it through a **fast path** before reaching the network:
 
-1. **Custom Rules**: User-defined block or redirect rules are matched first.
+1. **Custom Rules**: User-defined routing rules are matched first. Actions include:
+   - **Block**: Instantly block matching domains (NXDOMAIN).
+   - **Bypass**: Bypass ad/tracker blocklist filters.
+   - **Redirect**: Resolve domain to a specific target IP address (A record).
+   - **Forward Proxy**: Proxy the DNS query through the proxy tunnel of a selected VPN pair.
+   - **Forward DNS**: Forward the DNS query to a specific DNS Server (UDP/DoH), optionally routed through the SOCKS5/HTTP proxy of a selected VPN pair (useful for resolving corporate/private networks or Tailscale MagicDNS).
 2. **Blocklists**: Checked against built-in ad/tracker blocklists (AdGuard, GoodbyeAds, adult content). Matched domains are blocked instantly.
 3. **Cache**: Previously resolved queries are returned from cache.
 
-If none of the above match (cache miss), the query is forwarded to configured **upstream DNS servers** (UDP or DoH). Tailscale internal domains (`*.ts.net`) are resolved via **MagicDNS** automatically.
+If none of the above match (cache miss), the query is forwarded to configured **upstream DNS servers** (UDP or DoH).
 
 When **Tailscale DNS Override** is enabled, the DNS Node registers itself as the tailnet-wide DNS server via the Tailscale API, so all devices on the tailnet use it automatically without manual configuration.
 

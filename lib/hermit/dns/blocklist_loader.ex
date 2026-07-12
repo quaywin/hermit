@@ -61,7 +61,8 @@ defmodule Hermit.Dns.BlocklistLoader do
 
   @impl true
   def handle_info(:load_blocklists, state) do
-    reload_all()
+    # Run blocklist reloading in a background task to prevent freezing the GenServer during boot
+    Task.start(fn -> reload_all() end)
     {:noreply, state}
   end
 
@@ -85,7 +86,8 @@ defmodule Hermit.Dns.BlocklistLoader do
   @impl true
   def handle_info(:periodic_update, state) do
     Logger.info("Starting scheduled periodic update of DNS blocklists...")
-    reload_all()
+    # Run blocklist reloading in a background task to prevent freezing the GenServer during update
+    Task.start(fn -> reload_all() end)
     state = schedule_next_update(state)
     {:noreply, state}
   end
@@ -129,7 +131,9 @@ defmodule Hermit.Dns.BlocklistLoader do
         Blocklist
         |> Repo.all()
         |> Enum.filter(& &1.enabled)
-        |> Enum.each(&load_blocklist/1)
+        # Load blocklists in parallel with max concurrency of 4 to utilize cores and reduce I/O time
+        |> Task.async_stream(&load_blocklist/1, max_concurrency: 4, timeout: 120_000)
+        |> Stream.run()
       else
         Logger.warning("No DNS blocklists found in database to load.")
       end

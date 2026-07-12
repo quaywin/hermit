@@ -15,6 +15,9 @@ defmodule Hermit.Dns.BlocklistLoader do
     # Create unified ETS table with read_concurrency to optimize concurrent DNS queries
     :ets.new(:dns_blocklist_entries, [:bag, :public, :named_table, read_concurrency: true])
 
+    # Create Bloom Filter storage table
+    :ets.new(:dns_bloom_filter, [:set, :public, :named_table, read_concurrency: true])
+
     :ets.new(@dns_cache_table, [
       :set,
       :public,
@@ -152,10 +155,12 @@ defmodule Hermit.Dns.BlocklistLoader do
 
     # Clean old entries for this blocklist first
     :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
+    :ets.delete(:dns_bloom_filter, blocklist.id)
 
     case get_lines(blocklist.url) do
       {:ok, line_stream_or_enum} ->
-        count =
+        # 1. Parse and extract all valid domains from stream into a flat list
+        domains =
           line_stream_or_enum
           |> Stream.map(&String.trim/1)
           |> Stream.map(fn line ->
@@ -167,18 +172,32 @@ defmodule Hermit.Dns.BlocklistLoader do
             end
           end)
           |> Stream.reject(&is_nil/1)
-          |> Stream.chunk_every(5000)
-          |> Stream.map(fn chunk ->
-            entries = Enum.map(chunk, &{&1, blocklist.id})
-            :ets.insert(:dns_blocklist_entries, entries)
-            length(entries)
-          end)
-          |> Enum.sum()
+          |> Enum.to_list()
+
+        count = length(domains)
+
+        # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
+        domains
+        |> Enum.chunk_every(5000)
+        |> Enum.each(fn chunk ->
+          entries = Enum.map(chunk, &{&1, blocklist.id})
+          :ets.insert(:dns_blocklist_entries, entries)
+        end)
+
+        # 3. Generate Bloom Filter and store it as a single binary key in ETS
+        if count > 0 do
+          bit_size = Hermit.Dns.BloomFilter.calculate_size(count)
+          empty_bloom = Hermit.Dns.BloomFilter.new(bit_size)
+          bloom_binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
+          :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
+        end
 
         duration =
           System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
 
-        Logger.info("Loaded #{count} domains into Blocklist '#{blocklist.name}' in #{duration}ms")
+        Logger.info(
+          "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
+        )
 
         # Update rules count and timestamp in DB without triggering callbacks
         update_rules_count(blocklist.id, count)
@@ -206,6 +225,7 @@ defmodule Hermit.Dns.BlocklistLoader do
   def unload_blocklist(blocklist_id) do
     :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist_id}, [], [true]}])
     :ets.delete(:dns_blocklist_entries, {:metadata, blocklist_id})
+    :ets.delete(:dns_bloom_filter, blocklist_id)
 
     # Clear DNS caches for all profiles using this blocklist
     clear_cache_for_blocklist(blocklist_id)

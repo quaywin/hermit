@@ -7,12 +7,48 @@ defmodule Hermit.Dns.Filter do
   def match_global_ets_blocklist?(domain) do
     domain = String.downcase(domain)
 
-    case :ets.lookup(:dns_blocklist_entries, domain) do
-      [] ->
-        match_global_suffix_recursive(domain)
+    # Fast path: Check Bloom Filter first. If clean, skip ETS lookup entirely.
+    if any_bloom_member?(domain) do
+      case :ets.lookup(:dns_blocklist_entries, domain) do
+        [] ->
+          match_global_suffix_recursive(domain)
 
-      [{_, id} | _] ->
-        id
+        [{_, id} | _] ->
+          id
+      end
+    else
+      nil
+    end
+  end
+
+  defp any_bloom_member?(domain) do
+    if :ets.info(:dns_bloom_filter) == :undefined do
+      true
+    else
+      case :ets.tab2list(:dns_bloom_filter) do
+        [] -> true
+        filters -> any_bloom_member_recursive?(domain, filters)
+      end
+    end
+  end
+
+  defp any_bloom_member_recursive?(domain, filters) do
+    matched =
+      Enum.any?(filters, fn {_, bloom_binary} ->
+        Hermit.Dns.BloomFilter.member?(domain, bloom_binary)
+      end)
+
+    if matched do
+      true
+    else
+      case :binary.match(domain, ".") do
+        :nomatch ->
+          false
+
+        {idx, _len} ->
+          suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
+          any_bloom_member_recursive?(suffix, filters)
+      end
     end
   end
 
@@ -47,13 +83,24 @@ defmodule Hermit.Dns.Filter do
   def match_ets_blocklist?(domain, blocklist_id) when is_integer(blocklist_id) do
     domain = String.downcase(domain)
 
-    case :ets.lookup(:dns_blocklist_entries, domain) do
-      [] ->
-        match_suffix_recursive_dynamic(domain, blocklist_id)
+    # Check Bloom Filter for the specific blocklist
+    bloom_match =
+      if :ets.info(:dns_bloom_filter) != :undefined do
+        case :ets.lookup(:dns_bloom_filter, blocklist_id) do
+          [{_, bloom_binary}] ->
+            bloom_member_recursive?(domain, bloom_binary)
 
-      tuples ->
-        Enum.any?(tuples, fn {_, id} -> id == blocklist_id end) or
-          match_suffix_recursive_dynamic(domain, blocklist_id)
+          _ ->
+            true
+        end
+      else
+        true
+      end
+
+    if bloom_match do
+      do_match_ets_blocklist?(domain, blocklist_id)
+    else
+      false
     end
   end
 
@@ -64,6 +111,32 @@ defmodule Hermit.Dns.Filter do
       true
     else
       match_suffix_recursive(domain, table)
+    end
+  end
+
+  defp bloom_member_recursive?(domain, bloom_binary) do
+    if Hermit.Dns.BloomFilter.member?(domain, bloom_binary) do
+      true
+    else
+      case :binary.match(domain, ".") do
+        :nomatch ->
+          false
+
+        {idx, _len} ->
+          suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
+          bloom_member_recursive?(suffix, bloom_binary)
+      end
+    end
+  end
+
+  defp do_match_ets_blocklist?(domain, blocklist_id) do
+    case :ets.lookup(:dns_blocklist_entries, domain) do
+      [] ->
+        match_suffix_recursive_dynamic(domain, blocklist_id)
+
+      tuples ->
+        Enum.any?(tuples, fn {_, id} -> id == blocklist_id end) or
+          match_suffix_recursive_dynamic(domain, blocklist_id)
     end
   end
 
@@ -103,6 +176,30 @@ defmodule Hermit.Dns.Filter do
   def match_any_ets_blocklist?(domain, blocklist_ids) do
     domain = String.downcase(domain)
 
+    # Filter blocklist_ids using Bloom Filter
+    active_ids =
+      if :ets.info(:dns_bloom_filter) != :undefined do
+        Enum.filter(blocklist_ids, fn id ->
+          case :ets.lookup(:dns_bloom_filter, id) do
+            [{_, bloom_binary}] ->
+              bloom_member_recursive?(domain, bloom_binary)
+
+            _ ->
+              true
+          end
+        end)
+      else
+        blocklist_ids
+      end
+
+    if active_ids == [] do
+      nil
+    else
+      do_match_any_ets_blocklist?(domain, active_ids)
+    end
+  end
+
+  defp do_match_any_ets_blocklist?(domain, blocklist_ids) do
     case :ets.lookup(:dns_blocklist_entries, domain) do
       [] ->
         match_any_suffix_recursive(domain, blocklist_ids)

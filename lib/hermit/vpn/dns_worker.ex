@@ -1032,15 +1032,26 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
-  defp wait_for_socket(path, retries \\ 10)
+  defp wait_for_socket(path, retries \\ 30)
   defp wait_for_socket(_path, 0), do: :ok
 
   defp wait_for_socket(path, retries) do
-    if File.exists?(path) do
+    if File.exists?(path) and socket_connectable?(path) do
       :ok
     else
       Process.sleep(200)
       wait_for_socket(path, retries - 1)
+    end
+  end
+
+  defp socket_connectable?(path) do
+    case :gen_tcp.connect({:local, path}, 0, [:binary, active: false]) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+        true
+
+      _ ->
+        false
     end
   end
 

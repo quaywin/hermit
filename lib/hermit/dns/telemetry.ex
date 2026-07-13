@@ -315,17 +315,23 @@ defmodule Hermit.Dns.Telemetry do
               name
 
             _ ->
-              case Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
-                nil ->
-                  "Unknown"
+              try do
+                case Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
+                  nil ->
+                    "Unknown"
 
-                endpoint ->
-                  :ets.insert(
-                    :inbound_profiles_cache,
-                    {{:endpoint_name, endpoint_id}, endpoint.name}
-                  )
+                  endpoint ->
+                    :ets.insert(
+                      :inbound_profiles_cache,
+                      {{:endpoint_name, endpoint_id}, endpoint.name}
+                    )
 
-                  endpoint.name
+                    endpoint.name
+                end
+              rescue
+                _ -> "Unknown"
+              catch
+                _, _ -> "Unknown"
               end
           end
         else

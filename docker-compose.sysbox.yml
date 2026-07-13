@@ -1,0 +1,21 @@
+services:
+  hermit:
+    image: ghcr.io/quaywin/hermit:latest
+    container_name: hermit_orchestrator
+    # Use Sysbox runtime for advanced security isolation on Linux
+    runtime: sysbox-runc
+    ports:
+      - "${HERMIT_PORT:-3000}:3000" # Web dashboard
+      - "41642:41641/udp" # Tailscale UDP port
+    volumes:
+      # Mount storage directory for Sandboxed configurations
+      - ./storage:/app/storage
+    environment:
+      - PHX_SERVER=true
+      - PORT=3000
+      - PHX_HOST=${PHX_HOST:-localhost}
+      - SECRET_KEY_BASE
+      - STORAGE_BASE_PATH=/app/storage
+      - HERMIT_BASIC_AUTH_USER
+      - HERMIT_BASIC_AUTH_PASS
+    restart: "on-failure:5"

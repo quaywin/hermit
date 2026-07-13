@@ -152,11 +152,23 @@ To simplify creating Outbound Profiles, Hermit provides a dedicated **Providers*
 
 Hermit can be run in two different modes:
 
-### 1. Production Mode (No Clone Required)
+### 1. Production Mode (Quick Installer Script)
+
+We recommend using our automated setup script. This script automatically prepares the `./storage` directory, generates a secure random `.env` file, checks if your host has **Sysbox** installed to run in a non-privileged configuration, and guides you through security settings.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
+```
+
+Alternatively, you can perform a manual installation without cloning:
+
+```bash
+# Create storage directory manually to prevent root ownership issues
+mkdir -p storage
+# Download docker-compose configuration
 curl -L https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o docker-compose.yml
-docker compose pull && docker compose up -d
+# Start Hermit
+docker compose up -d
 ```
 
 If you have already cloned the repository, run `docker compose up -d --build` instead.
@@ -222,6 +234,20 @@ If you need to change this port to a different one (e.g., `41643`):
 Running real-world VPN pairs requires operating-system level root privileges to create network namespaces (`netns`), configure virtual network interfaces, and route traffic via `nftables`.
 - The **`privileged: true`** setting in `docker-compose.yml` grants the container permissions to perform these system-level operations in an isolated manner.
 - Running directly on your host machine risks messing up local network interfaces and requires granting global `sudo` privileges to external scripts, which is unsafe for your development environment.
+
+### Securing the Container: Sysbox Integration (Optional but Recommended)
+
+By default, Docker containers require `privileged: true` to perform network namespace and mounting tasks. If you want to run Hermit in a production environment with maximum security, you can use the **Sysbox Container Runtime** on Linux to run without privileged access.
+
+With Sysbox installed on your host system:
+1. Sysbox intercepts mount and network calls safely using Linux User Namespaces.
+2. The container runs with strict VM-like isolation while still permitting Hermit to configure nested namespaces and routes.
+
+To run with Sysbox, use the dedicated configuration:
+```bash
+docker compose -f docker-compose.sysbox.yml up -d
+```
+*(Our `install.sh` script automatically detects Sysbox and configures it if available).*
 
 ---
 

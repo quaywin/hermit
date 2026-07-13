@@ -311,8 +311,22 @@ defmodule Hermit.Dns.Telemetry do
       endpoint_name =
         if endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined do
           case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
-            [{_, name}] -> name
-            _ -> "Unknown"
+            [{_, name}] ->
+              name
+
+            _ ->
+              case Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
+                nil ->
+                  "Unknown"
+
+                endpoint ->
+                  :ets.insert(
+                    :inbound_profiles_cache,
+                    {{:endpoint_name, endpoint_id}, endpoint.name}
+                  )
+
+                  endpoint.name
+              end
           end
         else
           # Fallback if table doesn't exist or profile_id is not integer-like

@@ -808,35 +808,45 @@ defmodule Hermit.Vpn.DnsWorker do
     host_ip = "10.251.#{endpoint_id}.1"
 
     try do
-      System.cmd("ip", ["link", "delete", host_if])
+      System.cmd("ip", ["link", "delete", host_if], stderr_to_stdout: true)
 
       if netns_exists?(ns) do
-        System.cmd("ip", ["netns", "del", ns])
+        System.cmd("ip", ["netns", "del", ns], stderr_to_stdout: true)
       end
 
       # Clean up netns DNS config directory
       File.rm_rf("/etc/netns/#{ns}")
 
-      System.cmd("ip", [
-        "rule",
-        "delete",
-        "from",
-        host_ip,
-        "to",
-        "100.64.0.0/10",
-        "table",
-        to_string(table_id)
-      ])
+      System.cmd(
+        "ip",
+        [
+          "rule",
+          "delete",
+          "from",
+          host_ip,
+          "to",
+          "100.64.0.0/10",
+          "table",
+          to_string(table_id)
+        ],
+        stderr_to_stdout: true
+      )
 
-      System.cmd("ip", [
-        "route",
-        "flush",
-        "table",
-        to_string(table_id)
-      ])
+      System.cmd(
+        "ip",
+        [
+          "route",
+          "flush",
+          "table",
+          to_string(table_id)
+        ],
+        stderr_to_stdout: true
+      )
 
       # Clean up nftables table for this endpoint on host
-      System.cmd("nft", ["delete", "table", "ip", "hermit_dns_endpoint_#{endpoint_id}"])
+      System.cmd("nft", ["delete", "table", "ip", "hermit_dns_endpoint_#{endpoint_id}"],
+        stderr_to_stdout: true
+      )
     rescue
       e ->
         Logger.warning(

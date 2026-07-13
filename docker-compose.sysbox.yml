@@ -4,6 +4,11 @@ services:
     container_name: hermit_orchestrator
     # Use Sysbox runtime for advanced security isolation on Linux
     runtime: sysbox-runc
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    devices:
+      - "/dev/net/tun:/dev/net/tun"
     ports:
       - "${HERMIT_PORT:-3000}:3000" # Web dashboard
       - "41642:41641/udp" # Tailscale UDP port

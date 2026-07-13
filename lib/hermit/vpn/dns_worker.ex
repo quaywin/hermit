@@ -523,7 +523,7 @@ defmodule Hermit.Vpn.DnsWorker do
                  "ip",
                  "hermit_ns",
                  "postrouting",
-                 "{ type nat hook postrouting priority srcnat ; }"
+                 "{ type nat hook postrouting priority srcnat - 10 ; }"
                ]),
              {:ok, _} <-
                run_cmd("ip", [
@@ -722,30 +722,10 @@ defmodule Hermit.Vpn.DnsWorker do
                     "ip",
                     "daddr",
                     host_ip,
-                    "udp",
-                    "dport",
-                    to_string(port),
-                    "return"
-                  ])
-
-                _ =
-                  run_cmd("ip", [
-                    "netns",
-                    "exec",
-                    ns,
-                    "nft",
-                    "insert",
-                    "rule",
-                    "ip",
-                    "hermit_ns",
-                    "postrouting",
-                    "ip",
-                    "daddr",
-                    host_ip,
-                    "tcp",
-                    "dport",
-                    to_string(port),
-                    "return"
+                    "meta",
+                    "mark",
+                    "set",
+                    "0"
                   ])
               end
 

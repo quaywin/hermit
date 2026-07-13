@@ -188,28 +188,73 @@
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <!-- Upstream Servers -->
           <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col justify-between">
-            <div>
-              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 mb-1">
-                Upstream DNS Servers
-              </h3>
-              <p class="text-[11px] text-base-content/50 mb-4">
-                Support legacy DNS IPs (53) or HTTPS DoH URLs (e.g. <code>https://cloudflare-dns.com/dns-query</code>).
-              </p>
-              <form id="save-upstream-dns-form" phx-submit="save_upstream_dns" class="space-y-4">
-                <input
-                  type="text"
-                  name="upstream_dns"
-                  value={@selected_profile.upstream_dns}
-                  placeholder="e.g. 1.1.1.1, 8.8.8.8, https://dns.google/dns-query"
-                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
-                />
-                <button
-                  type="submit"
-                  class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px]"
-                >
-                  Save Upstream
-                </button>
-              </form>
+            <div class="space-y-6">
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                    Upstream DNS Servers
+                  </h3>
+                  <!-- EDNS Client Subnet (ECS) Toggle -->
+                  <button
+                    phx-click="toggle_enable_ecs"
+                    class={[
+                      "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                      if(@selected_profile.enable_ecs, do: "btn-primary", else: "btn-outline")
+                    ]}
+                    title="Sends EDNS Client Subnet to upstream DNS to optimize CDN routing (e.g. YouTube, Netflix)."
+                  >
+                    {if @selected_profile.enable_ecs, do: "ECS Active", else: "ECS Inactive"}
+                  </button>
+                </div>
+                <p class="text-[11px] text-base-content/50 mb-4">
+                  Support legacy DNS IPs (53) or HTTPS DoH URLs (e.g. <code>https://cloudflare-dns.com/dns-query</code>).
+                </p>
+                <form id="save-upstream-dns-form" phx-submit="save_upstream_dns" class="space-y-4">
+                  <input
+                    type="text"
+                    name="upstream_dns"
+                    value={@selected_profile.upstream_dns}
+                    placeholder="e.g. 1.1.1.1, 8.8.8.8, https://dns.google/dns-query"
+                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+                  />
+                  <button
+                    type="submit"
+                    class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px]"
+                  >
+                    Save Upstream
+                  </button>
+                </form>
+              </div>
+
+              <%= if @selected_profile.enable_ecs do %>
+                <div class="border-t border-base-300/50 pt-4">
+                  <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 mb-1">
+                    EDNS Client Subnet (ECS) Fallback IP
+                  </h3>
+                  <p class="text-[11px] text-base-content/50 mb-4">
+                    Optional. Used when the client IP is private (Tailscale, LAN). Allows public resolvers to locate CDNs in your target country (e.g. Vietnam).
+                  </p>
+                  <form
+                    id="save-ecs-fallback-ip-form"
+                    phx-submit="save_ecs_fallback_ip"
+                    class="space-y-4"
+                  >
+                    <input
+                      type="text"
+                      name="ecs_fallback_ip"
+                      value={@selected_profile.ecs_fallback_ip}
+                      placeholder="e.g. 14.162.50.1 (FPT), 113.160.0.1 (VNPT)"
+                      class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+                    />
+                    <button
+                      type="submit"
+                      class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px]"
+                    >
+                      Save Fallback IP
+                    </button>
+                  </form>
+                </div>
+              <% end %>
             </div>
           </div>
 

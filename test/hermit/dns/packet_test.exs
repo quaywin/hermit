@@ -5,6 +5,18 @@ defmodule Hermit.Dns.PacketTest do
 
   Record.defrecord(:dns_query, Record.extract(:dns_query, from_lib: "dns_erlang/include/dns.hrl"))
 
+  Record.defrecord(
+    :dns_message,
+    Record.extract(:dns_message, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(:dns_optrr, Record.extract(:dns_optrr, from_lib: "dns_erlang/include/dns.hrl"))
+
+  Record.defrecord(
+    :dns_opt_ecs,
+    Record.extract(:dns_opt_ecs, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
   test "parses a standard DNS query binary successfully" do
     # Transaction ID: 0x1234, Flags: 0x0100 (RD=1), Questions=1, Answer/Authority/Additional=0
     # Query: google.com (type A, class IN)
@@ -163,5 +175,48 @@ defmodule Hermit.Dns.PacketTest do
 
     # Check that minimum TTL extracted is now 30
     assert Packet.extract_min_ttl(patched) == 30
+  end
+
+  test "inject_ecs/3 successfully injects ECS option into query packet with fallback" do
+    id = 0x1234
+    query_rec = dns_query(name: "google.com", class: 1, type: 1)
+    query_packet = Packet.build_query_packet(id, query_rec)
+
+    # 1. Inject public IPv4 client IP -> should inject client IP directly
+    client_ip_v4 = {14, 162, 50, 99}
+    assert {:ok, injected_v4} = Packet.inject_ecs(query_packet, client_ip_v4, {8, 8, 8, 8})
+
+    assert msg_v4 = :dns.decode_message(injected_v4)
+    additional_v4 = dns_message(msg_v4, :additional)
+    assert [opt_v4] = Enum.filter(additional_v4, &Record.is_record(&1, :dns_optrr))
+    opts_v4 = dns_optrr(opt_v4, :data)
+    assert [ecs_v4] = Enum.filter(opts_v4, &Record.is_record(&1, :dns_opt_ecs))
+    assert dns_opt_ecs(ecs_v4, :address) == <<14, 162, 50>>
+
+    # 2. Inject private IPv4 client IP without fallback -> should skip ECS (return query_packet unchanged)
+    private_ip = {10, 0, 0, 5}
+    assert {:ok, ^query_packet} = Packet.inject_ecs(query_packet, private_ip, nil)
+
+    # 3. Inject private IPv4 client IP with public fallback IP -> should use fallback IP
+    fallback_ip = {113, 160, 20, 1}
+    assert {:ok, injected_fallback} = Packet.inject_ecs(query_packet, private_ip, fallback_ip)
+
+    assert msg_fb = :dns.decode_message(injected_fallback)
+    additional_fb = dns_message(msg_fb, :additional)
+    assert [opt_fb] = Enum.filter(additional_fb, &Record.is_record(&1, :dns_optrr))
+    opts_fb = dns_optrr(opt_fb, :data)
+    assert [ecs_fb] = Enum.filter(opts_fb, &Record.is_record(&1, :dns_opt_ecs))
+    assert dns_opt_ecs(ecs_fb, :address) == <<113, 160, 20>>
+
+    # 4. Inject DoH 3-tuple format public IP
+    doh_client_ip = {:doh, {14, 162, 50, 99}, "my-ios-device"}
+    assert {:ok, injected_doh} = Packet.inject_ecs(query_packet, doh_client_ip, nil)
+
+    assert msg_doh = :dns.decode_message(injected_doh)
+    additional_doh = dns_message(msg_doh, :additional)
+    assert [opt_doh] = Enum.filter(additional_doh, &Record.is_record(&1, :dns_optrr))
+    opts_doh = dns_optrr(opt_doh, :data)
+    assert [ecs_doh] = Enum.filter(opts_doh, &Record.is_record(&1, :dns_opt_ecs))
+    assert dns_opt_ecs(ecs_doh, :address) == <<14, 162, 50>>
   end
 end

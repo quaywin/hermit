@@ -313,6 +313,19 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   @impl true
+  def handle_event("toggle_enable_ecs", _params, socket) do
+    profile = socket.assigns.selected_profile
+    enable_ecs = not profile.enable_ecs
+
+    update_profile(
+      socket,
+      profile,
+      %{enable_ecs: enable_ecs},
+      "EDNS Client Subnet (ECS) #{if enable_ecs, do: "enabled", else: "disabled"}!"
+    )
+  end
+
+  @impl true
   def handle_event("toggle_query_logging", _params, socket) do
     profile = socket.assigns.selected_profile
     enable_logging = not profile.enable_query_logging
@@ -348,6 +361,19 @@ defmodule HermitWeb.DnsProfileLive do
       profile,
       %{upstream_dns: String.trim(upstream)},
       "Upstream DNS servers updated."
+    )
+  end
+
+  @impl true
+  def handle_event("save_ecs_fallback_ip", %{"ecs_fallback_ip" => ip_str}, socket) do
+    profile = socket.assigns.selected_profile
+    ip_str = String.trim(ip_str)
+
+    update_profile(
+      socket,
+      profile,
+      %{ecs_fallback_ip: if(ip_str == "", do: nil, else: ip_str)},
+      "ECS fallback IP address updated."
     )
   end
 

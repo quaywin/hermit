@@ -1127,6 +1127,7 @@ defmodule Hermit.Dns.Server do
       # Rewrite Transaction ID trong gói tin gửi đi
       <<_old_id::binary-size(2), rest_packet::binary>> = packet
       rewritten_packet = upstream_tx_id_bin <> rest_packet
+      final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
 
       now = System.monotonic_time(:millisecond)
 
@@ -1137,7 +1138,7 @@ defmodule Hermit.Dns.Server do
         state.upstream_sockets,
         state.doh_client,
         first_upstream,
-        rewritten_packet,
+        final_packet,
         state.server_pid
       )
 
@@ -1580,6 +1581,7 @@ defmodule Hermit.Dns.Server do
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
     rewritten_packet = upstream_tx_id_bin <> rest_packet
+    final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
 
     now = System.monotonic_time(:millisecond)
 
@@ -1592,7 +1594,7 @@ defmodule Hermit.Dns.Server do
                {"content-type", "application/dns-message"},
                {"accept", "application/dns-message"}
              ],
-             body: rewritten_packet
+             body: final_packet
            ) do
         {:ok, %{status: 200, body: resp_packet}} ->
           <<upstream_tx_id_resp::16, _::binary>> = resp_packet
@@ -1651,6 +1653,7 @@ defmodule Hermit.Dns.Server do
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
     rewritten_packet = upstream_tx_id_bin <> rest_packet
+    final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
 
     now = System.monotonic_time(:millisecond)
 
@@ -1666,7 +1669,7 @@ defmodule Hermit.Dns.Server do
     Task.start(fn ->
       start = System.monotonic_time()
 
-      case socks5_udp_resolve(socks5_ip, socks5_port, target_ip, target_port, rewritten_packet) do
+      case socks5_udp_resolve(socks5_ip, socks5_port, target_ip, target_port, final_packet) do
         {:ok, resp_packet} ->
           <<upstream_tx_id_resp::16, _::binary>> = resp_packet
 
@@ -1814,6 +1817,19 @@ defmodule Hermit.Dns.Server do
 
   defp read_socks5_addr_port(_socket, other) do
     {:error, {:unknown_atyp, other}}
+  end
+
+  defp maybe_inject_ecs(packet, client_ip, state) do
+    if Map.get(state.config, :enable_ecs, false) do
+      fallback_ip = Map.get(state.config, :ecs_fallback_ip)
+
+      case Packet.inject_ecs(packet, client_ip, fallback_ip) do
+        {:ok, ecs_packet} -> ecs_packet
+        _ -> packet
+      end
+    else
+      packet
+    end
   end
 
   defp mock? do

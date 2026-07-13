@@ -15,6 +15,16 @@ defmodule Hermit.Dns.Packet do
   Record.defrecord(:dns_rr, Record.extract(:dns_rr, from_lib: "dns_erlang/include/dns.hrl"))
 
   Record.defrecord(
+    :dns_optrr,
+    Record.extract(:dns_optrr, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(
+    :dns_opt_ecs,
+    Record.extract(:dns_opt_ecs, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(
     :dns_rrdata_a,
     Record.extract(:dns_rrdata_a, from_lib: "dns_erlang/include/dns.hrl")
   )
@@ -426,5 +436,131 @@ defmodule Hermit.Dns.Packet do
       charlist when is_list(charlist) -> List.to_string(charlist)
       _ -> ""
     end
+  end
+
+  @doc """
+  Injects or updates the EDNS Client Subnet (ECS) option in a raw DNS query packet.
+  `client_ip` can be an IP tuple (IPv4 or IPv6) or an IP address string.
+  If the `client_ip` is private and `fallback_ip` is provided, `fallback_ip` will be used instead.
+  If the `client_ip` is private and no `fallback_ip` is provided, ECS injection is skipped.
+  """
+  def inject_ecs(packet, client_ip, fallback_ip \\ nil) do
+    with {:ok, ip_tuple} <- to_ip_tuple(client_ip) do
+      if private_ip?(ip_tuple) do
+        case to_ip_tuple(fallback_ip) do
+          {:ok, fallback_tuple} ->
+            do_inject_ecs(packet, fallback_tuple)
+
+          _ ->
+            # Private IP and no fallback -> Skip ECS entirely (return clean packet)
+            {:ok, packet}
+        end
+      else
+        do_inject_ecs(packet, ip_tuple)
+      end
+    else
+      _ -> {:ok, packet}
+    end
+  end
+
+  def private_ip?({127, _, _, _}), do: true
+  def private_ip?({10, _, _, _}), do: true
+  def private_ip?({172, second, _, _}) when second >= 16 and second <= 31, do: true
+  def private_ip?({192, 168, _, _}), do: true
+  def private_ip?({100, second, _, _}) when second >= 64 and second <= 127, do: true
+  def private_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+  def private_ip?({0xFC00, _, _, _, _, _, _, _}), do: true
+  def private_ip?({0xFD00, _, _, _, _, _, _, _}), do: true
+  def private_ip?(_), do: false
+
+  defp to_ip_tuple({:doh, ip_tuple, _device_name}), do: to_ip_tuple(ip_tuple)
+  defp to_ip_tuple(ip) when is_tuple(ip) and tuple_size(ip) in [4, 8], do: {:ok, ip}
+
+  defp to_ip_tuple(ip) when is_binary(ip) do
+    case :inet.parse_address(String.to_charlist(ip)) do
+      {:ok, tuple} -> {:ok, tuple}
+      _ -> :error
+    end
+  end
+
+  defp to_ip_tuple(_), do: :error
+
+  defp do_inject_ecs(packet, ip_tuple) do
+    case :dns.decode_message(packet) do
+      msg when Record.is_record(msg, :dns_message) ->
+        ecs_opt = build_ecs_record(ip_tuple)
+        additional = dns_message(msg, :additional)
+
+        # 1. Separate the existing OPT record from the additional section (if any)
+        {optrr, other_additional} =
+          case Enum.split_with(additional, &Record.is_record(&1, :dns_optrr)) do
+            {[rr | _], rest} -> {rr, rest}
+            {[], rest} -> {dns_optrr(udp_payload_size: 4096, data: []), rest}
+          end
+
+        # 2. Replace or prepend the new ECS option in the OPT record data list
+        updated_data =
+          Enum.reject(dns_optrr(optrr, :data), &Record.is_record(&1, :dns_opt_ecs)) ++ [ecs_opt]
+
+        updated_optrr = dns_optrr(optrr, data: updated_data)
+        updated_additional = [updated_optrr | other_additional]
+
+        # 3. Re-encode the DNS packet with updated additional records count
+        patched_msg =
+          dns_message(msg,
+            additional: updated_additional,
+            adc: length(updated_additional)
+          )
+
+        {:ok, :dns.encode_message(patched_msg)}
+
+      _ ->
+        {:error, :invalid_packet}
+    end
+  end
+
+  defp build_ecs_record({ip1, ip2, ip3, _ip4}) do
+    # IPv4 /24 subnet (3 bytes)
+    dns_opt_ecs(
+      family: 1,
+      source_prefix_length: 24,
+      scope_prefix_length: 0,
+      address: <<ip1, ip2, ip3>>
+    )
+  end
+
+  defp build_ecs_record({ip1, ip2, ip3, _ip4, _ip5, _ip6, _ip7, _ip8}) do
+    # IPv6 /48 subnet (3 blocks = 6 bytes)
+    dns_opt_ecs(
+      family: 2,
+      source_prefix_length: 48,
+      scope_prefix_length: 0,
+      address: <<ip1::16, ip2::16, ip3::16>>
+    )
+  end
+
+  defp build_ecs_record(client_ip) when is_binary(client_ip) do
+    case :inet.parse_address(String.to_charlist(client_ip)) do
+      {:ok, ip_tuple} ->
+        build_ecs_record(ip_tuple)
+
+      _ ->
+        # Fallback to local subnet in case parsing fails
+        dns_opt_ecs(
+          family: 1,
+          source_prefix_length: 24,
+          scope_prefix_length: 0,
+          address: <<127, 0, 0>>
+        )
+    end
+  end
+
+  defp build_ecs_record(_) do
+    dns_opt_ecs(
+      family: 1,
+      source_prefix_length: 24,
+      scope_prefix_length: 0,
+      address: <<127, 0, 0>>
+    )
   end
 end

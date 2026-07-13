@@ -13,6 +13,8 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:custom_rules, {:array, :map}, default: [])
     field(:tailscale_override_dns, :boolean, default: false)
     field(:enable_query_logging, :boolean, default: false)
+    field(:enable_ecs, :boolean, default: false)
+    field(:ecs_fallback_ip, :string)
 
     # Virtual field to maintain backward compatibility with old tests and code
     field(:inbound_profile_id, :integer, virtual: true)
@@ -41,12 +43,31 @@ defmodule Hermit.Vpn.DnsConfig do
       :custom_rules,
       :tailscale_override_dns,
       :enable_query_logging,
+      :enable_ecs,
+      :ecs_fallback_ip,
       :inbound_profile_id
     ])
     |> validate_required([:name, :upstream_dns, :custom_rules])
     |> validate_upstream_dns()
     |> validate_custom_rules()
     |> validate_inbound_profile_presence()
+    |> validate_ecs_fallback_ip()
+  end
+
+  defp validate_ecs_fallback_ip(changeset) do
+    case get_field(changeset, :ecs_fallback_ip) do
+      nil ->
+        changeset
+
+      "" ->
+        changeset
+
+      ip_str ->
+        case :inet.parse_address(String.to_charlist(ip_str)) do
+          {:ok, _} -> changeset
+          _ -> add_error(changeset, :ecs_fallback_ip, "must be a valid IP address")
+        end
+    end
   end
 
   defp validate_inbound_profile_presence(changeset) do

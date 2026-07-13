@@ -93,6 +93,11 @@ In addition to Tailscale integration, Hermit includes a built-in **DNS-over-HTTP
 - **Secure DoH Endpoint**: Each Inbound Profile is assigned a unique token, exposing a secure DoH resolver endpoint at `https://<your-host>/dns-query/<doh_token>`.
 - **Apple Configuration Profiles (`.mobileconfig`)**: Hermit can dynamically generate Apple configuration profiles for iOS and macOS. Users can download these profiles from the dashboard to configure system-wide secure DNS with zero manual setup.
 
+### EDNS Client Subnet (ECS) & Subnet Spoofing
+Hermit supports **EDNS Client Subnet (ECS, RFC 7871)** to optimize CDN routing (e.g. YouTube, Netflix, Facebook) by forwarding the client's subnet mask (IPv4 `/24` or IPv6 `/48`) to public upstream DNS servers (like Google `8.8.8.8`).
+- **Smart Client Subnet Forwarding**: For public client IPs (e.g. via DoH), Hermit forwards the subnet directly. For private client IPs (e.g. loopback, LAN, or Tailscale CGNAT `100.64.0.0/10`), Hermit skips ECS injection automatically to protect client privacy.
+- **ECS Fallback IP**: You can configure a public IP address (such as a Vietnamese ISP IP) as the fallback. When a request originates from a private Tailscale IP, Hermit will inject the fallback IP subnet instead, ensuring you always resolve CDN traffic to your target country.
+
 ---
 
 ## VPN Provider Integration

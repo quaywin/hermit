@@ -154,7 +154,7 @@ Hermit can be run in two different modes:
 
 ### 1. Production Mode (Quick Installer Script)
 
-We recommend using our automated setup script. This script automatically prepares the `./storage` directory, generates a secure random `.env` file, checks if your host has **Sysbox** installed to run in a non-privileged configuration, and guides you through security settings.
+We recommend using our automated setup script. This script automatically prepares the `~/.hermit/storage` directory, generates a secure random `env` file at `~/.hermit/env`, checks if your host has **Sysbox** installed to run in a non-privileged configuration, and guides you through security settings.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
@@ -163,8 +163,8 @@ curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | ba
 Alternatively, you can perform a manual installation without cloning:
 
 ```bash
-# Create storage directory manually to prevent root ownership issues
-mkdir -p storage
+# Create storage directory in your home folder to prevent root ownership issues
+mkdir -p ~/.hermit/storage
 # Download docker-compose configuration
 curl -L https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o docker-compose.yml
 # Start Hermit
@@ -200,7 +200,7 @@ HERMIT_PORT=8080 docker compose -f docker-compose.dev.yml up -d
 
 ### Enforcing Web Dashboard Authentication (Basic Auth)
 
-By default, the web dashboard has no authentication enabled. If you are deploying Hermit on a public VPS or a shared network, you can enforce Basic Authentication by setting the following environment variables in your `.env` file:
+By default, the web dashboard has no authentication enabled. If you are deploying Hermit on a public VPS or a shared network, you can enforce Basic Authentication by setting the following environment variables in your environment configuration file (`~/.hermit/env`):
 
 ```bash
 HERMIT_BASIC_AUTH_USER=admin
@@ -248,6 +248,24 @@ To run with Sysbox, use the dedicated configuration:
 docker compose -f docker-compose.sysbox.yml up -d
 ```
 *(Our `install.sh` script automatically detects Sysbox and configures it if available).*
+
+#### Troubleshooting Docker 29.5+ & Sysbox Compatibility
+
+If container creation fails with `OCI runtime create failed: namespace {"time" ""} does not exist`, this is due to a compatibility issue between Docker 29.5+ (which enables time namespaces by default) and current Sysbox releases.
+
+To resolve this, disable `time-namespaces` in your host's Docker daemon configuration:
+1. Edit `/etc/docker/daemon.json` and add:
+   ```json
+   {
+     "features": {
+       "time-namespaces": false
+     }
+   }
+   ```
+2. Restart the Docker service:
+   ```bash
+   sudo systemctl restart docker
+   ```
 
 ---
 

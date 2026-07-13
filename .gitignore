@@ -44,5 +44,4 @@ npm-debug.log
 
 
 # Sandboxed storage folder for VPN configs/states
-/storage/*
-!/storage/.gitkeep
+/storage/

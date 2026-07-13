@@ -9,10 +9,13 @@ services:
       - "3000:3000" # Web dashboard
       - "41642:41641/udp" # Tailscale UDP port
     privileged: true
+    env_file:
+      - ${HOME}/.hermit/env
     volumes:
       # Mount the whole project directory so code updates are hot-reloaded
       - .:/app
       - /app/_build
+      - ${HOME}/.hermit/dev-storage:/app/storage
     environment:
       - MIX_ENV=dev
       - PHX_SERVER=true

@@ -5,12 +5,16 @@ echo "========================================="
 echo "   Installing Hermit Orchestrator        "
 echo "========================================="
 
-# 1. Create storage directory with current user permissions
-mkdir -p storage
-echo "✓ Prepared ./storage directory"
+# Define global configuration directory in user home
+HERMIT_DIR="$HOME/.hermit"
+ENV_FILE="$HERMIT_DIR/env"
 
-# 2. Automatically generate .env file if it does not exist
-if [ ! -f .env ]; then
+# 1. Create storage directory in user home
+mkdir -p "$HERMIT_DIR/storage"
+echo "✓ Prepared config & storage directory at $HERMIT_DIR"
+
+# 2. Automatically generate env file if it does not exist
+if [ ! -f "$ENV_FILE" ]; then
   # Try openssl or fallback to a simpler generator for SECRET_KEY_BASE
   if command -v openssl >/dev/null 2>&1; then
     SECRET_KEY=$(openssl rand -base64 48 | tr -d '\n')
@@ -20,7 +24,7 @@ if [ ! -f .env ]; then
     BASIC_AUTH_PASS="admin123"
   fi
 
-  cat <<EOF > .env
+  cat <<EOF > "$ENV_FILE"
 # Hermit Environment Configurations
 SECRET_KEY_BASE=$SECRET_KEY
 PHX_HOST=localhost
@@ -28,13 +32,15 @@ HERMIT_PORT=3000
 HERMIT_BASIC_AUTH_USER=admin
 HERMIT_BASIC_AUTH_PASS=$BASIC_AUTH_PASS
 EOF
-  echo "✓ Generated template .env with secure random keys"
+  echo "✓ Generated template environment file at $ENV_FILE"
   echo "👉 Default login credentials: admin / $BASIC_AUTH_PASS"
 fi
 
 # 3. Check for Sysbox Runtime
 if docker info 2>&1 | grep -q "sysbox-runc"; then
   echo "✓ Detected Sysbox Runtime on the host system. Using secure Sysbox configuration..."
+  echo "💡 Note: If container creation fails with 'namespace \"time\" does not exist' (Docker 29.5+),"
+  echo "   please disable 'time-namespaces' in /etc/docker/daemon.json on your host and restart Docker."
   # Download or copy docker-compose.sysbox.yml into docker-compose.yml
   if [ -f docker-compose.sysbox.yml ]; then
     cp docker-compose.sysbox.yml docker-compose.yml
@@ -80,7 +86,7 @@ docker compose up -d
 
 echo ""
 echo "=== INSTALLATION COMPLETED ==="
-echo "Hermit Web Dashboard: http://localhost:$(grep HERMIT_PORT .env | cut -d'=' -f2 || echo "3000")"
-echo "Login username: $(grep HERMIT_BASIC_AUTH_USER .env | cut -d'=' -f2)"
-echo "Login password: $(grep HERMIT_BASIC_AUTH_PASS .env | cut -d'=' -f2)"
+echo "Hermit Web Dashboard: http://localhost:$(grep HERMIT_PORT "$ENV_FILE" | cut -d'=' -f2 || echo "3000")"
+echo "Login username: $(grep HERMIT_BASIC_AUTH_USER "$ENV_FILE" | cut -d'=' -f2)"
+echo "Login password: $(grep HERMIT_BASIC_AUTH_PASS "$ENV_FILE" | cut -d'=' -f2)"
 echo "-----------------------------------------"

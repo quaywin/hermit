@@ -56,10 +56,18 @@ defmodule Hermit.Dns.BlocklistLoader do
     # Schedule periodic cache pruning every 60 seconds
     :erlang.send_after(60_000, self(), :prune_cache)
 
+    # Post-init message to safely load DB configurations after migrations run
+    send(self(), :post_init)
+
     state = %{update_timer: nil}
-    state = schedule_next_update(state)
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_info(:post_init, state) do
+    state = schedule_next_update(state)
+    {:noreply, state}
   end
 
   @impl true

@@ -50,24 +50,18 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
         Logger.info("Starting tailscaled daemon in netns #{wg_name}")
 
-        # Start tailscaled daemon in background inside the namespace
-        port_args = [
-          "netns",
-          "exec",
-          wg_name,
-          "tailscaled",
-          "--socket=#{socket_path}",
-          "--state=#{state_path}",
-          "--port=41641",
-          "--no-logs-no-support"
-        ]
+        log_path = Path.join(state_dir, "tailscaled.log")
+        _ = File.rm(log_path)
+
+        shell_cmd =
+          "exec ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=41641 --no-logs-no-support > #{log_path} 2>&1"
 
         try do
           # Port is owned by the calling process (PairWorker)
           port =
-            Port.open({:spawn_executable, "/usr/bin/ip"}, [
+            Port.open({:spawn_executable, "/bin/sh"}, [
               :binary,
-              args: port_args
+              args: ["-c", shell_cmd]
             ])
 
           case Port.info(port, :os_pid) do

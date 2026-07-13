@@ -683,20 +683,14 @@ defmodule Hermit.Vpn.DnsWorker do
             nil
           else
             File.rm(socket_path)
+            log_path = Path.join(storage_dir, "tailscaled.log")
+            _ = File.rm(log_path)
 
-            port_args = [
-              "netns",
-              "exec",
-              ns,
-              "tailscaled",
-              "--socket=#{socket_path}",
-              "--state=#{state_path}",
-              "--port=#{41640 + endpoint_id}",
-              "--no-logs-no-support"
-            ]
+            shell_cmd =
+              "exec ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{41640 + endpoint_id} --no-logs-no-support > #{log_path} 2>&1"
 
             try do
-              p = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
+              p = Port.open({:spawn_executable, "/bin/sh"}, [:binary, args: ["-c", shell_cmd]])
 
               case Port.info(p, :os_pid) do
                 {:os_pid, os_pid} -> File.write!(pid_path, "#{os_pid}")

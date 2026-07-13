@@ -64,15 +64,6 @@
               </td>
               <td class="py-4 px-4 text-right">
                 <div class="flex items-center justify-end gap-2">
-                  <%= if profile.type == "tailscale" do %>
-                    <.link
-                      navigate={~p"/inbounds/#{profile.id}?tab=dns"}
-                      id={"configure-dns-#{profile.id}"}
-                      class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs text-[#3ecf8e] px-2.5"
-                    >
-                      Configure DNS
-                    </.link>
-                  <% end %>
                   <.link
                     navigate={~p"/inbounds/#{profile.id}?tab=config"}
                     id={"edit-inbound-#{profile.id}"}
@@ -145,19 +136,6 @@
               class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
             />
           </div>
-
-          <%= if Phoenix.HTML.Form.input_value(f, :type) == "tailscale" do %>
-            <div class="space-y-1.5">
-              <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">DNS Server Profile</label>
-              <.input
-                field={f[:dns_profile_id]}
-                type="select"
-                prompt="Auto-create separate DNS Profile"
-                options={Enum.map(@dns_profiles, &{&1.name, &1.id})}
-                class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-              />
-            </div>
-          <% end %>
 
           <!-- Dynamic Input Fields based on Type -->
           <%= case Phoenix.HTML.Form.input_value(f, :type) do %>

@@ -11,16 +11,24 @@ defmodule Hermit.Vpn.DnsSupervisor do
   end
 
   @doc """
-  Dynamically starts a profile's DNS server and namespace worker.
+  Dynamically starts an endpoint's DNS server and namespace worker.
   """
-  def start_dns(profile_id) do
-    Logger.info("DnsSupervisor: starting DNS worker and server for profile: #{profile_id}")
+  def start_dns(endpoint_id, inbound_profile_id \\ nil) do
+    Logger.info(
+      "DnsSupervisor: starting DNS worker and server for endpoint: #{endpoint_id} (inbound_profile: #{inbound_profile_id})"
+    )
 
-    worker_spec = {Hermit.Vpn.DnsWorker, profile_id: profile_id}
-    port = 5400 + profile_id
-    server_spec = {Hermit.Dns.Server, profile_id: profile_id, port: port}
+    worker_spec =
+      {Hermit.Vpn.DnsWorker, endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id}
 
-    case DynamicSupervisor.start_child(@name, worker_spec) do
+    port = 5400 + endpoint_id
+
+    server_spec =
+      {Hermit.Dns.Server,
+       endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id, port: port}
+
+    # Only start DnsWorker (namespace / Tailscale) if inbound_profile_id is provided (Tailscale endpoint)
+    case start_worker_if_needed(inbound_profile_id, worker_spec, endpoint_id) do
       {:ok, worker_pid} ->
         case DynamicSupervisor.start_child(@name, server_spec) do
           {:ok, server_pid} ->
@@ -30,29 +38,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
             {:ok, {worker_pid, server_pid}}
 
           {:error, reason} ->
-            DynamicSupervisor.terminate_child(@name, worker_pid)
-            {:error, reason}
-        end
-
-      {:ok, worker_pid, _info} ->
-        case DynamicSupervisor.start_child(@name, server_spec) do
-          {:ok, server_pid} ->
-            {:ok, {worker_pid, server_pid}}
-
-          {:error, reason} ->
-            DynamicSupervisor.terminate_child(@name, worker_pid)
-            {:error, reason}
-        end
-
-      {:error, {:already_started, worker_pid}} ->
-        case DynamicSupervisor.start_child(@name, server_spec) do
-          {:ok, server_pid} ->
-            {:ok, {worker_pid, server_pid}}
-
-          {:error, {:already_started, server_pid}} ->
-            {:ok, {worker_pid, server_pid}}
-
-          {:error, reason} ->
+            if worker_pid, do: DynamicSupervisor.terminate_child(@name, worker_pid)
             {:error, reason}
         end
 
@@ -61,13 +47,24 @@ defmodule Hermit.Vpn.DnsSupervisor do
     end
   end
 
-  @doc """
-  Stops the profile's DNS server and namespace worker.
-  """
-  def stop_dns(profile_id) do
-    Logger.info("DnsSupervisor: stopping DNS components for profile: #{profile_id}")
+  defp start_worker_if_needed(nil, _worker_spec, _endpoint_id), do: {:ok, nil}
 
-    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
+  defp start_worker_if_needed(_inbound_profile_id, worker_spec, _endpoint_id) do
+    case DynamicSupervisor.start_child(@name, worker_spec) do
+      {:ok, pid} -> {:ok, pid}
+      {:ok, pid, _info} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Stops the endpoint's DNS server and namespace worker.
+  """
+  def stop_dns(endpoint_id) do
+    Logger.info("DnsSupervisor: stopping DNS components for endpoint: #{endpoint_id}")
+
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
       [{server_pid, _}] ->
         DynamicSupervisor.terminate_child(@name, server_pid)
 
@@ -75,7 +72,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
         :ok
     end
 
-    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, profile_id}) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint_id}) do
       [{worker_pid, _}] ->
         DynamicSupervisor.terminate_child(@name, worker_pid)
 
@@ -87,12 +84,12 @@ defmodule Hermit.Vpn.DnsSupervisor do
   end
 
   @doc """
-  Restarts only the DNS server component for a profile, keeping the worker (Tailscale node) running.
+  Restarts only the DNS server component for an endpoint, keeping the worker (Tailscale node) running.
   """
-  def restart_dns_server(profile_id) do
-    Logger.info("DnsSupervisor: restarting DNS server (only) for profile: #{profile_id}")
+  def restart_dns_server(endpoint_id) do
+    Logger.info("DnsSupervisor: restarting DNS server (only) for endpoint: #{endpoint_id}")
 
-    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
       [{server_pid, _}] ->
         DynamicSupervisor.terminate_child(@name, server_pid)
 
@@ -100,8 +97,13 @@ defmodule Hermit.Vpn.DnsSupervisor do
         :ok
     end
 
-    port = 5400 + profile_id
-    server_spec = {Hermit.Dns.Server, profile_id: profile_id, port: port}
+    port = 5400 + endpoint_id
+    endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
+    inbound_profile_id = endpoint && endpoint.inbound_profile_id
+
+    server_spec =
+      {Hermit.Dns.Server,
+       endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id, port: port}
 
     case DynamicSupervisor.start_child(@name, server_spec) do
       {:ok, pid} -> {:ok, pid}

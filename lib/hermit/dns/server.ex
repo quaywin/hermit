@@ -7,8 +7,8 @@ defmodule Hermit.Dns.Server do
   alias Hermit.Dns.Cache
 
   def start_link(opts) do
-    profile_id = opts[:profile_id]
-    name = {:via, Registry, {Hermit.Vpn.Registry, {:dns_server, profile_id}}}
+    endpoint_id = opts[:endpoint_id] || opts[:profile_id]
+    name = {:via, Registry, {Hermit.Vpn.Registry, {:dns_server, endpoint_id}}}
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
@@ -17,14 +17,23 @@ defmodule Hermit.Dns.Server do
   @impl true
   def init(opts) do
     port = opts[:port]
-    profile_id = opts[:profile_id]
-    config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    endpoint_id = opts[:endpoint_id] || opts[:profile_id]
+    inbound_profile_id = opts[:inbound_profile_id]
+    config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
 
     # Flush cache on startup to ensure we start with a clean slate
-    Cache.clear(profile_id)
+    Cache.clear(endpoint_id)
+
+    # Save endpoint name in ETS cache for Telemetry to access without database hits
+    endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
+    endpoint_name = (endpoint && endpoint.name) || "Unknown"
+
+    if :ets.info(:inbound_profiles_cache) != :undefined do
+      :ets.insert(:inbound_profiles_cache, {{:endpoint_name, endpoint_id}, endpoint_name})
+    end
 
     if :erlang.whereis(Hermit.PubSub) != :undefined do
-      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config:#{profile_id}")
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config:#{endpoint_id}")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_blocklist")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "vpn_pairs")
@@ -70,7 +79,7 @@ defmodule Hermit.Dns.Server do
     proxy_ports_cache = pre_populate_proxy_ports_cache()
 
     # Create dynamic ETS table for pending_queries to allow concurrent read/write
-    pending_table = :"dns_pending_queries_#{profile_id}"
+    pending_table = :"dns_pending_queries_#{endpoint_id}"
 
     :ets.new(pending_table, [
       :set,
@@ -88,7 +97,9 @@ defmodule Hermit.Dns.Server do
       pending_table: pending_table,
       server_pid: self(),
       port: port,
-      profile_id: profile_id,
+      profile_id: endpoint_id,
+      endpoint_id: endpoint_id,
+      inbound_profile_id: inbound_profile_id,
       upstreams: upstreams,
       upstreams_map: upstreams_map,
       active_upstream: active_upstream,
@@ -111,7 +122,23 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp try_bind_socket(%{profile_id: profile_id, port: port} = state) do
+  defp try_bind_socket(%{inbound_profile_id: nil} = state) do
+    if mock?() do
+      do_try_bind_socket(state)
+    else
+      Logger.info(
+        "DNS Server for endpoint #{state.endpoint_id} running in memory (DoH-only mode)"
+      )
+
+      {:ok, state}
+    end
+  end
+
+  defp try_bind_socket(state) do
+    do_try_bind_socket(state)
+  end
+
+  defp do_try_bind_socket(%{profile_id: profile_id, port: port} = state) do
     udp_opts =
       if mock?() do
         [:binary, active: 100, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
@@ -557,13 +584,17 @@ defmodule Hermit.Dns.Server do
   @impl true
   def handle_info(:retry_bind, state) do
     if is_nil(state.socket) do
-      case try_bind_socket(state) do
-        {:ok, new_state} ->
-          {:noreply, new_state}
+      if is_nil(state.inbound_profile_id) and not mock?() do
+        {:noreply, state}
+      else
+        case try_bind_socket(state) do
+          {:ok, new_state} ->
+            {:noreply, new_state}
 
-        {:error, _reason, new_state} ->
-          :erlang.send_after(1000, self(), :retry_bind)
-          {:noreply, new_state}
+          {:error, _reason, new_state} ->
+            :erlang.send_after(1000, self(), :retry_bind)
+            {:noreply, new_state}
+        end
       end
     else
       {:noreply, state}
@@ -714,7 +745,7 @@ defmodule Hermit.Dns.Server do
 
           # 3. Match dynamic blocklists if not matched by custom rules
           {action, redirect_val, proxy_pair_id, block_reason, blocklist_id} =
-            if is_nil(action) and config.enabled do
+            if is_nil(action) do
               blocklists_list =
                 case config.blocklists do
                   %Ecto.Association.NotLoaded{} -> []

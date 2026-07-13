@@ -53,6 +53,13 @@ defmodule HermitWeb.Layouts do
               Tunnels
             </.sidebar_link>
             <.sidebar_link
+              navigate={~p"/dns/endpoints"}
+              active={@active == :dns_endpoints}
+              icon="hero-adjustments-horizontal"
+            >
+              Endpoints
+            </.sidebar_link>
+            <.sidebar_link
               navigate={~p"/inbounds"}
               active={@active == :inbounds}
               icon="hero-arrow-down-left"
@@ -117,6 +124,15 @@ defmodule HermitWeb.Layouts do
                 <.icon name="hero-server-stack" class="size-5 shrink-0" />
               </.link>
               <.link
+                navigate={~p"/dns/endpoints"}
+                class={
+                  if @active == :dns_endpoints, do: "text-emerald-500", else: "text-base-content/60"
+                }
+                title="Endpoints"
+              >
+                <.icon name="hero-adjustments-horizontal" class="size-5 shrink-0" />
+              </.link>
+              <.link
                 navigate={~p"/inbounds"}
                 class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}
                 title="Inbound Profiles"
@@ -139,14 +155,18 @@ defmodule HermitWeb.Layouts do
               </.link>
               <.link
                 navigate={~p"/dns"}
-                class={if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"}
+                class={
+                  if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"
+                }
                 title="DNS Profiles"
               >
                 <.icon name="hero-globe-alt" class="size-5 shrink-0" />
               </.link>
               <.link
                 navigate={~p"/dns/blocklists"}
-                class={if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"}
+                class={
+                  if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"
+                }
                 title="Filters"
               >
                 <.icon name="hero-shield-check" class="size-5 shrink-0" />
@@ -198,6 +218,7 @@ defmodule HermitWeb.Layouts do
         case socket.view do
           HermitWeb.DashboardLive -> :tunnels
           HermitWeb.TunnelDetailLive -> :tunnels
+          HermitWeb.DnsEndpointLive -> :dns_endpoints
           HermitWeb.InboundLive -> :inbounds
           HermitWeb.InboundDetailLive -> :inbounds
           HermitWeb.OutboundLive -> :outbounds

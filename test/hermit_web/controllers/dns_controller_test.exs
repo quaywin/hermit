@@ -10,30 +10,30 @@ defmodule HermitWeb.DNSControllerTest do
   end
 
   test "GET/POST /dns-query/:doh_token returns correct DNS response", %{conn: conn} do
-    # Create inbound profile
-    {:ok, profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "DoH_Test_Profile",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "k_doh_test"},
-        doh_token: "doh_test_token"
-      })
-
-    profile_id = profile.id
-    doh_token = profile.doh_token
     # Create DNS Config
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
-
-    {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
+        name: "DoH_Test_Profile",
         enabled: true,
         upstream_dns: "127.0.0.1",
         custom_rules: [%{"domain" => "blocked.com", "action" => "block"}]
       })
 
+    # Create DNS Endpoint
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "DoH_Test_Endpoint",
+        doh_token: "doh_test_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    endpoint_id = endpoint.id
+    doh_token = endpoint.doh_token
+
     # Start DNS server
-    port = 36363 + profile_id
-    {:ok, _server_pid} = Server.start_link(profile_id: profile_id, port: port)
+    port = 36363 + endpoint_id
+    {:ok, _server_pid} = Server.start_link(endpoint_id: endpoint_id, port: port)
 
     # 1. Populate cache manually for a domain
     domain = "dohcache.com"
@@ -47,7 +47,7 @@ defmodule HermitWeb.DNSControllerTest do
 
     :ets.insert(
       :dns_cache,
-      {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
+      {{endpoint_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
     )
 
     # Test POST method
@@ -87,24 +87,84 @@ defmodule HermitWeb.DNSControllerTest do
     assert <<0, 16, 0x81, 0x83, _rest::binary>> = blocked_resp
   end
 
-  test "GET /dns-query/:doh_token without dns parameter returns helper HTML page", %{conn: conn} do
-    {:ok, profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "DoH_HTML_Profile",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "k_doh_html"},
-        doh_token: "doh_html_token"
+  test "GET/POST /dns-query/:doh_token handles server timeout and returns SERVFAIL", %{conn: conn} do
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
+        name: "Timeout_Test_Profile",
+        enabled: true,
+        upstream_dns: "127.0.0.1",
+        custom_rules: []
       })
 
-    profile_id = profile.id
-    doh_token = profile.doh_token
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Timeout_Test_Endpoint",
+        doh_token: "doh_timeout_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    endpoint_id = endpoint.id
+    doh_token = endpoint.doh_token
+
+    test_pid = self()
+
+    {:ok, _dummy_pid} =
+      Task.start_link(fn ->
+        {:ok, _} = Registry.register(Hermit.Vpn.Registry, {:dns_server, endpoint_id}, nil)
+        send(test_pid, :registered)
+
+        recv_loop = fn rec ->
+          receive do
+            _ -> rec.(rec)
+          end
+        end
+
+        recv_loop.(recv_loop)
+      end)
+
+    receive do
+      :registered -> :ok
+    end
+
+    qname = <<7>> <> "timeout" <> <<3>> <> "com" <> <<0>>
+    query_packet = <<0, 18, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> qname <> <<0, 1, 0, 1>>
+
+    conn_timeout =
+      conn
+      |> put_req_header("content-type", "application/dns-message")
+      |> post(~p"/dns-query/#{doh_token}", query_packet)
+
+    assert conn_timeout.status == 200
+    assert get_resp_header(conn_timeout, "content-type") == ["application/dns-message"]
+    resp_body = response(conn_timeout, 200)
+    assert <<0, 18, 0x81, 0x82, _rest::binary>> = resp_body
+  end
+
+  test "GET /dns-query/:doh_token without dns parameter returns helper HTML page", %{conn: conn} do
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
+        name: "DoH_HTML_Profile",
+        enabled: true,
+        upstream_dns: "127.0.0.1",
+        custom_rules: []
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "DoH_HTML_Endpoint",
+        doh_token: "doh_html_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    doh_token = endpoint.doh_token
 
     conn_html = get(conn, ~p"/dns-query/#{doh_token}")
     assert conn_html.status == 200
     assert get_resp_header(conn_html, "content-type") == ["text/html; charset=utf-8"]
     html_body = response(conn_html, 200)
-    assert html_body =~ "Hermit DNS Profile"
+    assert html_body =~ "Hermit DNS Endpoint"
     assert html_body =~ "iOS / macOS"
     assert html_body =~ "/dns-query/#{doh_token}/mobileconfig"
   end
@@ -112,24 +172,36 @@ defmodule HermitWeb.DNSControllerTest do
   test "GET /dns-query/:doh_token/mobileconfig returns XML profile with correct content type", %{
     conn: conn
   } do
-    {:ok, profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
         name: "DoH_XML_Profile",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "k_doh_xml"},
-        doh_token: "doh_xml_token"
+        enabled: true,
+        upstream_dns: "127.0.0.1",
+        custom_rules: []
       })
 
-    profile_id = profile.id
-    doh_token = profile.doh_token
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "DoH_XML_Endpoint",
+        doh_token: "doh_xml_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    doh_token = endpoint.doh_token
 
     conn_xml = get(conn, ~p"/dns-query/#{doh_token}/mobileconfig")
     assert conn_xml.status == 200
-    assert get_resp_header(conn_xml, "content-type") == ["application/x-apple-aspen-config"]
+
+    assert get_resp_header(conn_xml, "content-type")
+           |> List.first()
+           |> String.starts_with?("application/x-apple-aspen-config")
+
+    # Slugify endpoint name for filename safety
+    safe_name = String.replace(endpoint.name, ~r/[^a-zA-Z0-9_\-]/, "_")
 
     assert get_resp_header(conn_xml, "content-disposition") == [
-             "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\""
+             "attachment; filename=\"hermit_dns_#{safe_name}.mobileconfig\""
            ]
 
     xml_body = response(conn_xml, 200)
@@ -141,30 +213,28 @@ defmodule HermitWeb.DNSControllerTest do
   test "GET/POST /dns-query/:doh_token extracts correct client IP from proxy headers", %{
     conn: conn
   } do
-    # Create inbound profile
-    {:ok, profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
         name: "DoH_IP_Test_Profile",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "k_doh_ip_test"},
-        doh_token: "doh_ip_test_token"
-      })
-
-    profile_id = profile.id
-    doh_token = profile.doh_token
-    # Create DNS Config
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
-
-    {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
         enabled: true,
         upstream_dns: "127.0.0.1",
         custom_rules: []
       })
 
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "DoH_IP_Test_Endpoint",
+        doh_token: "doh_ip_test_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    endpoint_id = endpoint.id
+    doh_token = endpoint.doh_token
+
     # Start DNS server
-    port = 36463 + profile_id
-    {:ok, _server_pid} = Server.start_link(profile_id: profile_id, port: port)
+    port = 36463 + endpoint_id
+    {:ok, _server_pid} = Server.start_link(endpoint_id: endpoint_id, port: port)
 
     domain = "dohip.com"
     qname = <<5>> <> "dohip" <> <<3>> <> "com" <> <<0>>
@@ -177,12 +247,12 @@ defmodule HermitWeb.DNSControllerTest do
 
     :ets.insert(
       :dns_cache,
-      {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
+      {{endpoint_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
     )
 
     # Attach telemetry handler to capture client IP
     test_pid = self()
-    handler_id = "test-doh-ip-handler-#{profile_id}"
+    handler_id = "test-doh-ip-handler-#{endpoint_id}"
 
     :ok =
       :telemetry.attach(
@@ -202,7 +272,7 @@ defmodule HermitWeb.DNSControllerTest do
         |> put_req_header("x-forwarded-for", "192.168.1.100, 10.0.0.1")
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
-      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {192, 168, 1, 100}, nil}}}
+      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {192, 168, 1, 100}, _}}}
 
       # 2. Test X-Real-IP
       _conn2 =
@@ -211,7 +281,7 @@ defmodule HermitWeb.DNSControllerTest do
         |> put_req_header("x-real-ip", "10.0.0.5")
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
-      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {10, 0, 0, 5}, nil}}}
+      assert_receive {:captured_query_metadata, %{client_ip: {:doh, {10, 0, 0, 5}, _}}}
 
       # 3. Test CF-Connecting-IP
       _conn3 =
@@ -221,7 +291,7 @@ defmodule HermitWeb.DNSControllerTest do
         |> post(~p"/dns-query/#{doh_token}", query_packet)
 
       assert_receive {:captured_query_metadata,
-                      %{client_ip: {:doh, {8193, 3512, 0, 0, 0, 0, 0, 1}, nil}}}
+                      %{client_ip: {:doh, {8193, 3512, 0, 0, 0, 0, 0, 1}, _}}}
 
       # 4. Test Device Name Header (e.g. x-device-name)
       _conn4 =
@@ -238,22 +308,30 @@ defmodule HermitWeb.DNSControllerTest do
 
   test "GET /dns-query/:doh_token/mobileconfig automatically generates certs and signs if PHX_HOST is set",
        %{conn: conn} do
-    {:ok, profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
         name: "DoH_Signing_Profile",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "k_doh_sign"},
-        doh_token: "doh_sign_token"
+        enabled: true,
+        upstream_dns: "127.0.0.1",
+        custom_rules: []
       })
 
-    profile_id = profile.id
-    doh_token = profile.doh_token
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "DoH_Signing_Endpoint",
+        doh_token: "doh_sign_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    endpoint_id = endpoint.id
+    doh_token = endpoint.doh_token
 
     original_phx_host = System.get_env("PHX_HOST")
     original_storage = Application.get_env(:hermit, :storage)
 
     System.put_env("PHX_HOST", "signed.example.com")
-    temp_storage_dir = Path.join(System.tmp_dir!(), "hermit_test_storage_#{profile_id}")
+    temp_storage_dir = Path.join(System.tmp_dir!(), "hermit_test_storage_#{endpoint_id}")
 
     Application.put_env(
       :hermit,
@@ -289,36 +367,44 @@ defmodule HermitWeb.DNSControllerTest do
     end
   end
 
-  test "InboundProfile get_by_doh_token is cached and cleared correctly" do
+  test "DnsEndpoint get_by_doh_token is cached and cleared correctly" do
     import Ecto.Query
 
-    {:ok, profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "Cache_Test_Profile",
-        type: "tailscale",
-        config: %{"ts_auth_key" => "k_cache_test"},
-        doh_token: "doh_cache_token"
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
+        name: "Cache_Test_Config",
+        enabled: true,
+        upstream_dns: "127.0.0.1",
+        custom_rules: []
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Cache_Test_Endpoint",
+        doh_token: "doh_cache_token",
+        dns_profile_id: config.id,
+        enabled: true
       })
 
     # First lookup should query the DB and store in ETS cache
-    cached_profile = Hermit.Vpn.InboundProfile.get_by_doh_token("doh_cache_token")
-    assert cached_profile.id == profile.id
+    cached_endpoint = Hermit.Vpn.DnsEndpoint.get_by_doh_token("doh_cache_token")
+    assert cached_endpoint.id == endpoint.id
 
     # Modify in DB directly bypassing cache clear to prove cache returns stale data
     Hermit.Repo.update_all(
-      from(p in Hermit.Vpn.InboundProfile, where: p.id == ^profile.id),
+      from(e in Hermit.Vpn.DnsEndpoint, where: e.id == ^endpoint.id),
       set: [name: "New_Name"]
     )
 
-    # Cache should still return the old profile name
-    cached_profile2 = Hermit.Vpn.InboundProfile.get_by_doh_token("doh_cache_token")
-    assert cached_profile2.name == "Cache_Test_Profile"
+    # Cache should still return the old endpoint name
+    cached_endpoint2 = Hermit.Vpn.DnsEndpoint.get_by_doh_token("doh_cache_token")
+    assert cached_endpoint2.name == "Cache_Test_Endpoint"
 
     # Clear cache
-    Hermit.Vpn.InboundProfile.clear_cache()
+    Hermit.Vpn.DnsEndpoint.clear_cache()
 
     # Now it should fetch the updated name from DB
-    cached_profile3 = Hermit.Vpn.InboundProfile.get_by_doh_token("doh_cache_token")
-    assert cached_profile3.name == "New_Name"
+    cached_endpoint3 = Hermit.Vpn.DnsEndpoint.get_by_doh_token("doh_cache_token")
+    assert cached_endpoint3.name == "New_Name"
   end
 end

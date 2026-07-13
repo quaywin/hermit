@@ -17,9 +17,9 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:ecs_fallback_ip, :string)
 
     # Virtual field to maintain backward compatibility with old tests and code
-    field(:inbound_profile_id, :integer, virtual: true)
+    field(:dns_endpoint_id, :integer, virtual: true)
 
-    has_many(:inbound_profiles, Hermit.Vpn.InboundProfile, foreign_key: :dns_profile_id)
+    has_many(:dns_endpoints, Hermit.Vpn.DnsEndpoint, foreign_key: :dns_profile_id)
 
     many_to_many(:blocklists, Hermit.Dns.Blocklist,
       join_through: "dns_configs_blocklists",
@@ -45,12 +45,11 @@ defmodule Hermit.Vpn.DnsConfig do
       :enable_query_logging,
       :enable_ecs,
       :ecs_fallback_ip,
-      :inbound_profile_id
+      :dns_endpoint_id
     ])
     |> validate_required([:name, :upstream_dns, :custom_rules])
     |> validate_upstream_dns()
     |> validate_custom_rules()
-    |> validate_inbound_profile_presence()
     |> validate_ecs_fallback_ip()
   end
 
@@ -67,27 +66,6 @@ defmodule Hermit.Vpn.DnsConfig do
           {:ok, _} -> changeset
           _ -> add_error(changeset, :ecs_fallback_ip, "must be a valid IP address")
         end
-    end
-  end
-
-  defp validate_inbound_profile_presence(changeset) do
-    enabled = get_field(changeset, :enabled)
-    inbound_profile_id = get_field(changeset, :inbound_profile_id)
-
-    # Chỉ xác thực nếu trường ảo inbound_profile_id thực sự được truyền vào trong params để thay đổi
-    # hoặc khi changeset explicitly muốn kiểm tra liên kết inbound
-    is_profile_validation? =
-      Map.has_key?(changeset.params || %{}, "inbound_profile_id") or
-        Map.has_key?(changeset.params || %{}, :inbound_profile_id)
-
-    if is_profile_validation? and enabled and is_nil(inbound_profile_id) do
-      add_error(
-        changeset,
-        :inbound_profile_id,
-        "must be selected when Global DNS Filtering is enabled"
-      )
-    else
-      changeset
     end
   end
 
@@ -122,7 +100,7 @@ defmodule Hermit.Vpn.DnsConfig do
   end
 
   defp parse_ip_and_port(val) do
-    case Regex.run(~r/^\[(.*)\]:(\d+)$/, val) do
+    case Regex.run(~r/^\\[(.*)\\]:(\\d+)$/, val) do
       [_, ip_str, port_str] ->
         with {:ok, ip} <- :inet.parse_address(String.to_charlist(ip_str)),
              {port, ""} <- Integer.parse(port_str) do
@@ -181,64 +159,60 @@ defmodule Hermit.Vpn.DnsConfig do
 
   defp valid_rule?(_), do: false
 
-  # Profile-specific helpers
-  def get_for_profile(profile_id) do
-    profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
+  # Endpoint-specific helpers
+  def get_for_endpoint(endpoint_id) do
+    endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
 
     cond do
-      is_nil(profile) ->
-        # Trả về config trống nếu profile không tồn tại
+      is_nil(endpoint) ->
         %__MODULE__{blocklists: []}
 
-      is_nil(profile.dns_profile_id) ->
-        # Nếu chưa liên kết DNS Profile nào, tự động tạo một DNS Profile riêng biệt cho Inbound này
-        profile_dns_name = "DNS Profile for Inbound #{profile_id}"
+      is_nil(endpoint.dns_profile_id) ->
+        endpoint_dns_name = "DNS Profile for Endpoint #{endpoint_id}"
 
         new_config =
-          case Hermit.Repo.get_by(__MODULE__, name: profile_dns_name) do
+          case Hermit.Repo.get_by(__MODULE__, name: endpoint_dns_name) do
             nil ->
               %__MODULE__{}
-              |> changeset(%{name: profile_dns_name, custom_rules: []})
+              |> changeset(%{name: endpoint_dns_name, custom_rules: []})
               |> Hermit.Repo.insert!()
 
             config ->
               config
           end
 
-        # Gán dns_profile_id cho inbound profile
-        profile
-        |> Hermit.Vpn.InboundProfile.changeset(%{dns_profile_id: new_config.id})
+        endpoint
+        |> Hermit.Vpn.DnsEndpoint.changeset(%{dns_profile_id: new_config.id})
         |> Hermit.Repo.update!()
 
-        Hermit.Vpn.InboundProfile.clear_cache()
+        Hermit.Vpn.DnsEndpoint.clear_cache()
 
         new_config = Hermit.Repo.preload(new_config, :blocklists)
-        %{new_config | inbound_profile_id: profile_id}
+        %{new_config | dns_endpoint_id: endpoint_id}
 
       true ->
         config =
-          Hermit.Repo.get!(__MODULE__, profile.dns_profile_id) |> Hermit.Repo.preload(:blocklists)
+          Hermit.Repo.get!(__MODULE__, endpoint.dns_profile_id)
+          |> Hermit.Repo.preload(:blocklists)
 
-        %{config | inbound_profile_id: profile_id}
+        %{config | dns_endpoint_id: endpoint_id}
     end
   end
 
-  def update_for_profile(profile_id, attrs) do
-    config = get_for_profile(profile_id)
-    attrs = Map.put(attrs, :inbound_profile_id, profile_id)
-
-    # Đảm bảo trường :name không bị lỗi validate_required nếu attrs không truyền :name
+  def update_for_endpoint(endpoint_id, attrs) do
+    config = get_for_endpoint(endpoint_id)
+    attrs = Map.put(attrs, :dns_endpoint_id, endpoint_id)
     attrs = Map.put_new(attrs, :name, config.name)
 
     case config |> changeset(attrs) |> Hermit.Repo.update() do
       {:ok, updated} ->
         updated = updated |> Hermit.Repo.preload(:blocklists)
-        updated = %{updated | inbound_profile_id: profile_id}
+        updated = %{updated | dns_endpoint_id: endpoint_id}
 
         if :erlang.whereis(Hermit.PubSub) != :undefined do
           Phoenix.PubSub.broadcast(
             Hermit.PubSub,
-            "dns_config:#{profile_id}",
+            "dns_config:#{endpoint_id}",
             {:dns_config_updated, updated}
           )
         end

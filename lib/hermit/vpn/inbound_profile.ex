@@ -6,9 +6,8 @@ defmodule Hermit.Vpn.InboundProfile do
     field(:name, :string)
     field(:type, :string)
     field(:config, :map, default: %{})
-    field(:doh_token, :string)
 
-    belongs_to(:dns_profile, Hermit.Vpn.DnsConfig, foreign_key: :dns_profile_id)
+    has_many(:dns_endpoints, Hermit.Vpn.DnsEndpoint, foreign_key: :inbound_profile_id)
 
     timestamps()
   end
@@ -18,34 +17,10 @@ defmodule Hermit.Vpn.InboundProfile do
     attrs = stringify_config_keys(attrs)
 
     inbound_profile
-    |> cast(attrs, [:name, :type, :config, :dns_profile_id, :doh_token])
-    |> put_doh_token()
-    |> validate_required([:name, :type, :doh_token])
+    |> cast(attrs, [:name, :type, :config])
+    |> validate_required([:name, :type])
     |> validate_inclusion(:type, ["tailscale", "proxy"])
     |> validate_config()
-    |> maybe_clear_dns_profile_id()
-    |> unique_constraint(:doh_token)
-  end
-
-  defp maybe_clear_dns_profile_id(changeset) do
-    case get_field(changeset, :type) do
-      "proxy" ->
-        put_change(changeset, :dns_profile_id, nil)
-
-      _ ->
-        changeset
-    end
-  end
-
-  defp put_doh_token(changeset) do
-    case get_field(changeset, :doh_token) do
-      nil ->
-        token = :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
-        put_change(changeset, :doh_token, token)
-
-      _ ->
-        changeset
-    end
   end
 
   defp stringify_config_keys(attrs) do
@@ -120,35 +95,7 @@ defmodule Hermit.Vpn.InboundProfile do
     end
   end
 
-  @doc """
-  Lấy InboundProfile bằng `doh_token` qua cache ETS.
-  Nếu chưa cache thì truy vấn DB và ghi nhận vào cache.
-  """
-  def get_by_doh_token(doh_token) do
-    try do
-      case :ets.lookup(:inbound_profiles_cache, doh_token) do
-        [{^doh_token, profile}] ->
-          profile
-
-        [] ->
-          case Hermit.Repo.get_by(__MODULE__, doh_token: doh_token) do
-            nil ->
-              nil
-
-            profile ->
-              :ets.insert(:inbound_profiles_cache, {doh_token, profile})
-              profile
-          end
-      end
-    rescue
-      ArgumentError ->
-        Hermit.Repo.get_by(__MODULE__, doh_token: doh_token)
-    end
-  end
-
-  @doc """
-  Xóa sạch cache của InboundProfile (dùng khi thêm/sửa/xóa profile).
-  """
+  # Remove get_by_doh_token as it is moved to DnsEndpoint
   def clear_cache do
     try do
       :ets.delete_all_objects(:inbound_profiles_cache)

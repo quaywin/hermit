@@ -1,33 +1,55 @@
 defmodule HermitWeb.DNSController do
   use HermitWeb, :controller
+  import Bitwise
   require Logger
 
   def query(conn, %{"doh_token" => doh_token} = params) do
-    case Hermit.Vpn.InboundProfile.get_by_doh_token(doh_token) do
+    case Hermit.Vpn.DnsEndpoint.get_by_doh_token(doh_token) do
       nil ->
         conn
         |> put_status(404)
-        |> text("Profile not found")
+        |> text("DNS Endpoint not found")
 
-      profile ->
-        profile_id = profile.id
+      endpoint ->
+        endpoint_id = endpoint.id
 
         case get_dns_packet(conn, params) do
           {:ok, query_packet} ->
-            case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, profile_id}) do
+            case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
               [{pid, _}] ->
                 client_ip = get_client_ip(conn)
                 device_name = get_device_name(conn)
 
-                case GenServer.call(
-                       pid,
-                       {:resolve_query, query_packet, {:doh, client_ip, device_name}},
-                       5000
-                     ) do
+                result =
+                  try do
+                    GenServer.call(
+                      pid,
+                      {:resolve_query, query_packet, {:doh, client_ip, device_name}},
+                      4000
+                    )
+                  catch
+                    :exit, {:timeout, _} ->
+                      Logger.error("DNS query timed out for endpoint: #{endpoint_id}")
+                      {:servfail, build_servfail_packet(query_packet)}
+
+                    :exit, reason ->
+                      Logger.error(
+                        "DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}"
+                      )
+
+                      {:servfail, build_servfail_packet(query_packet)}
+                  end
+
+                case result do
                   {:ok, response_packet} ->
                     conn
                     |> put_resp_header("content-type", "application/dns-message")
                     |> send_resp(200, response_packet)
+
+                  {:servfail, servfail_packet} ->
+                    conn
+                    |> put_resp_header("content-type", "application/dns-message")
+                    |> send_resp(200, servfail_packet)
 
                   {:error, reason} ->
                     Logger.error("DNS Server call failed: #{inspect(reason)}")
@@ -40,15 +62,13 @@ defmodule HermitWeb.DNSController do
               [] ->
                 conn
                 |> put_status(404)
-                |> text("DNS Server not running for profile")
+                |> text("DNS Server not running for endpoint")
             end
 
           {:error, :missing_dns_parameter} ->
-            # Render a friendly helper page for GET requests without dns parameter (browser visits)
-            config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
             port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
             server_url = "https://#{conn.host}#{port_suffix}/dns-query/#{doh_token}"
-            render_mobile_config_page(conn, config, server_url)
+            render_mobile_config_page(conn, endpoint, server_url)
 
           {:error, reason} ->
             Logger.warning("Failed to get DNS packet from request: #{inspect(reason)}")
@@ -61,13 +81,13 @@ defmodule HermitWeb.DNSController do
   end
 
   def mobileconfig(conn, %{"doh_token" => doh_token}) do
-    case Hermit.Vpn.InboundProfile.get_by_doh_token(doh_token) do
+    case Hermit.Vpn.DnsEndpoint.get_by_doh_token(doh_token) do
       nil ->
-        conn |> put_status(404) |> text("Not Found")
+        conn
+        |> put_status(404)
+        |> text("DNS Endpoint not found")
 
-      profile ->
-        profile_id = profile.id
-        config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+      endpoint ->
         port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
         server_url = "https://#{conn.host}#{port_suffix}/dns-query/#{doh_token}"
 
@@ -79,482 +99,331 @@ defmodule HermitWeb.DNSController do
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
-            <key>PayloadContent</key>
-            <array>
-                <dict>
-                    <key>DNSSettings</key>
-                    <dict>
-                        <key>DNSProtocol</key>
-                        <string>HTTPS</string>
-                        <key>ServerURL</key>
-                        <string>#{server_url}</string>
-                    </dict>
-                    <key>PayloadDescription</key>
-                    <string>Configure DNS over HTTPS for Hermit Profile #{config.name}</string>
-                    <key>PayloadDisplayName</key>
-                    <string>Hermit DoH - #{config.name}</string>
-                    <key>PayloadIdentifier</key>
-                    <string>com.hermit.dns.#{profile_id}</string>
-                    <key>PayloadType</key>
-                    <string>com.apple.dnsSettings.managed</string>
-                    <key>PayloadUUID</key>
-                    <string>#{payload_uuid}</string>
-                    <key>PayloadVersion</key>
-                    <integer>1</integer>
-                </dict>
-            </array>
-            <key>PayloadDisplayName</key>
-            <string>Hermit DNS - #{config.name}</string>
-            <key>PayloadIdentifier</key>
-            <string>com.hermit.profile.dns.#{profile_id}</string>
-            <key>PayloadType</key>
-            <string>Configuration</string>
-            <key>PayloadUUID</key>
-            <string>#{profile_uuid}</string>
-            <key>PayloadVersion</key>
-            <integer>1</integer>
+          <key>PayloadContent</key>
+          <array>
+            <dict>
+              <key>DNSSettings</key>
+              <dict>
+                <key>DNSProtocol</key>
+                <string>HTTPS</string>
+                <key>ServerURL</key>
+                <string>#{server_url}</string>
+              </dict>
+              <key>PayloadDescription</key>
+              <string>Configures encrypted DNS-over-HTTPS (DoH) for Hermit DNS Endpoint: #{endpoint.name}</string>
+              <key>PayloadDisplayName</key>
+              <string>Hermit DNS - #{endpoint.name}</string>
+              <key>PayloadIdentifier</key>
+              <string>com.hermit.dns.doh.#{doh_token}</string>
+              <key>PayloadType</key>
+              <string>com.apple.dnsSettings.managed</string>
+              <key>PayloadUUID</key>
+              <string>#{payload_uuid}</string>
+              <key>PayloadVersion</key>
+              <integer>1</integer>
+            </dict>
+          </array>
+          <key>PayloadDescription</key>
+          <string>Encrypted DNS Configuration Profile generated by Hermit.</string>
+          <key>PayloadDisplayName</key>
+          <string>Hermit Encrypted DNS (#{endpoint.name})</string>
+          <key>PayloadIdentifier</key>
+          <string>com.hermit.dns.profile.#{doh_token}</string>
+          <key>PayloadType</key>
+          <string>Configuration</string>
+          <key>PayloadUUID</key>
+          <string>#{profile_uuid}</string>
+          <key>PayloadVersion</key>
+          <integer>1</integer>
         </dict>
         </plist>
         """
 
-        response_data =
-          case sign_profile(xml) do
-            {:ok, signed} -> signed
-            {:error, _} -> xml
-          end
+        # Slugify endpoint name for filename safety
+        safe_name = String.replace(endpoint.name, ~r/[^a-zA-Z0-9_\-]/, "_")
 
         conn
-        |> put_resp_header("content-type", "application/x-apple-aspen-config")
+        |> put_resp_content_type("application/x-apple-aspen-config")
         |> put_resp_header(
           "content-disposition",
-          "attachment; filename=\"hermit-dns-#{profile_id}.mobileconfig\""
+          "attachment; filename=\"hermit_dns_#{safe_name}.mobileconfig\""
         )
-        |> send_resp(200, response_data)
+        |> send_resp(200, sign_profile(xml))
     end
   end
 
   defp sign_profile(xml) do
-    phx_host = System.get_env("PHX_HOST")
+    base_path = Application.get_env(:hermit, :storage)[:base_path] || File.cwd!()
 
-    if phx_host && phx_host not in [nil, "", "localhost", "127.0.0.1"] do
-      storage_dir = Application.get_env(:hermit, :storage)[:base_path] || "/app/storage"
+    phx_host =
+      System.get_env("PHX_HOST") || Application.get_env(:hermit, HermitWeb.Endpoint)[:url][:host] ||
+        "localhost"
 
-      # Check both the root certs/ directory and the site_encrypt domain-specific directory
-      certs_dirs = [
-        Path.join([storage_dir, "certs", phx_host]),
-        Path.join(storage_dir, "certs")
-      ]
+    cert_dir = Path.join([base_path, "certs", phx_host])
 
-      cert_path = find_existing_file_in_dirs(certs_dirs, ["cert.pem", "fullchain.pem"])
-      key_path = find_existing_file_in_dirs(certs_dirs, ["privkey.pem", "key.pem"])
+    key_path = Path.join(cert_dir, "privkey.pem")
+    cert_path = Path.join(cert_dir, "cert.pem")
 
-      {cert_path, key_path} =
-        if cert_path && key_path do
-          {cert_path, key_path}
-        else
-          # Fallback to generating self-signed in the domain directory
-          generate_self_signed_cert(Path.join([storage_dir, "certs", phx_host]), phx_host)
-        end
+    generate_self_signed_cert(cert_dir, phx_host)
 
-      chain_path = find_existing_file_in_dirs(certs_dirs, ["chain.pem"])
+    cond do
+      File.exists?(key_path) and File.exists?(cert_path) ->
+        # Use openssl to sign the plist file as DER format CMS message via a temp file to avoid missing :input option in System.cmd
+        temp_xml_path = Path.join(System.tmp_dir!(), "temp_profile_#{generate_uuid()}.xml")
+        File.write!(temp_xml_path, xml)
 
-      if cert_path && key_path do
-        random_suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-        temp_xml_path = Path.join(System.tmp_dir!(), "temp_profile_#{random_suffix}.xml")
+        chain_path = Path.join(cert_dir, "chain.pem")
 
-        try do
-          File.write!(temp_xml_path, xml)
-
-          args = [
-            "smime",
-            "-sign",
-            "-signer",
-            cert_path,
-            "-inkey",
-            key_path,
-            "-outform",
-            "der",
-            "-nodetach",
-            "-in",
-            temp_xml_path
-          ]
-
-          args = if chain_path, do: args ++ ["-certfile", chain_path], else: args
-
-          case System.cmd("openssl", args) do
-            {signed_binary, 0} ->
-              {:ok, signed_binary}
-
-            {error_msg, status} ->
-              Logger.error(
-                "DNS Server: OpenSSL profile signing failed (status #{status}): #{inspect(error_msg)}"
-              )
-
-              {:error, :signing_failed}
+        openssl_args =
+          if File.exists?(chain_path) do
+            [
+              "smime",
+              "-sign",
+              "-signer",
+              cert_path,
+              "-inkey",
+              key_path,
+              "-certfile",
+              chain_path,
+              "-nodetach",
+              "-outform",
+              "der",
+              "-in",
+              temp_xml_path
+            ]
+          else
+            [
+              "smime",
+              "-sign",
+              "-signer",
+              cert_path,
+              "-inkey",
+              key_path,
+              "-nodetach",
+              "-outform",
+              "der",
+              "-in",
+              temp_xml_path
+            ]
           end
-        rescue
-          exception ->
-            Logger.error(
-              "DNS Server: OpenSSL execution failed during signing: #{inspect(exception)}"
+
+        case System.cmd("openssl", openssl_args) do
+          {signed_der, 0} ->
+            File.rm(temp_xml_path)
+            signed_der
+
+          {error_log, status} ->
+            File.rm(temp_xml_path)
+
+            Logger.warning(
+              "OpenSSL configuration profile signing failed with status #{status}: #{error_log}. Serving unsigned xml instead."
             )
 
-            {:error, :signing_failed}
-        after
-          File.rm(temp_xml_path)
-        end
-      else
-        {:error, :missing_certs}
-      end
-    else
-      {:error, :no_signing_host}
-    end
-  end
-
-  defp generate_self_signed_cert(certs_dir, phx_host) do
-    File.mkdir_p!(certs_dir)
-    cert_path = Path.join(certs_dir, "cert.pem")
-    key_path = Path.join(certs_dir, "privkey.pem")
-
-    cmd_args = [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-keyout",
-      key_path,
-      "-out",
-      cert_path,
-      "-days",
-      "3650",
-      "-nodes",
-      "-subj",
-      "/CN=#{phx_host}"
-    ]
-
-    try do
-      case System.cmd("openssl", cmd_args) do
-        {_, 0} ->
-          Logger.info(
-            "DNS Server: Generated self-signed certificates for #{phx_host} at #{certs_dir}"
-          )
-
-          {cert_path, key_path}
-
-        {error, status} ->
-          Logger.error(
-            "DNS Server: Failed to generate self-signed certificates (status #{status}): #{inspect(error)}"
-          )
-
-          {nil, nil}
-      end
-    rescue
-      exception ->
-        Logger.error(
-          "DNS Server: Failed to execute openssl command for self-signed certificate generation: #{inspect(exception)}"
-        )
-
-        {nil, nil}
-    end
-  end
-
-  defp find_existing_file_in_dirs(dirs, filenames) do
-    Enum.find_value(dirs, fn dir ->
-      Enum.find_value(filenames, fn filename ->
-        path = Path.join(dir, filename)
-        if File.exists?(path), do: path
-      end)
-    end)
-  end
-
-  defp get_dns_packet(conn, params) do
-    cond do
-      conn.method == "POST" ->
-        case read_body(conn) do
-          {:ok, body, _conn} -> {:ok, body}
-          {:more, _body, _conn} -> {:error, :body_too_large}
-        end
-
-      conn.method == "GET" ->
-        dns_param = Map.get(params, "dns")
-
-        if dns_param do
-          # Try decoding base64url without padding first, then with padding
-          case Base.url_decode64(dns_param, padding: false) do
-            {:ok, packet} ->
-              {:ok, packet}
-
-            _ ->
-              case Base.url_decode64(dns_param) do
-                {:ok, packet} -> {:ok, packet}
-                _ -> {:error, :invalid_base64url}
-              end
-          end
-        else
-          {:error, :missing_dns_parameter}
+            xml
         end
 
       true ->
-        {:error, :unsupported_method}
+        xml
     end
   end
 
-  defp render_mobile_config_page(conn, config, server_url) do
-    port_suffix = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
-    logo_url = "https://#{conn.host}#{port_suffix}/images/logo.png"
+  defp generate_self_signed_cert(cert_dir, phx_host) do
+    key_path = Path.join(cert_dir, "privkey.pem")
+    cert_path = Path.join(cert_dir, "cert.pem")
 
-    html = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Hermit DNS - #{config.name}</title>
-      <style>
-        body {
-          font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          background-color: #fafafa;
-          color: #171717;
-          margin: 0;
-          padding: 24px;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          min-height: 80vh;
-        }
-        .card {
-          background-color: #ffffff;
-          border: 1px solid #dfdfdf;
-          border-radius: 12px;
-          padding: 32px 24px;
-          max-width: 480px;
-          width: 100%;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-        }
-        .logo-container {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 24px;
-          border-bottom: 1px solid #dfdfdf;
-          padding-bottom: 16px;
-        }
-        .logo-text {
-          font-weight: 700;
-          font-size: 18px;
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-          color: #171717;
-        }
-        h1 {
-          font-size: 16px;
-          font-weight: 600;
-          margin-top: 0;
-          margin-bottom: 8px;
-          color: #171717;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-        p {
-          font-size: 13px;
-          color: #64748b;
-          line-height: 1.5;
-          margin-top: 0;
-          margin-bottom: 16px;
-        }
-        strong {
-          color: #171717;
-        }
-        .url-box {
-          background-color: #fafafa;
-          border: 1px solid #dfdfdf;
-          border-radius: 6px;
-          padding: 12px;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-          font-size: 12px;
-          word-break: break-all;
-          margin: 12px 0 20px 0;
-          color: #10b981;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-        }
-        .btn {
-          display: block;
-          width: 100%;
-          background-color: #3ecf8e;
-          color: #171717;
-          text-align: center;
-          padding: 12px 0;
-          border-radius: 6px;
-          font-weight: 600;
-          font-size: 13px;
-          text-decoration: none;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin-top: 16px;
-          transition: background-color 0.2s, border-color 0.2s;
-          box-sizing: border-box;
-          border: 1px solid #3ecf8e;
-        }
-        .btn:hover {
-          background-color: #24b47e;
-          border-color: #24b47e;
-        }
-        .btn-copy {
-          background: none;
-          border: none;
-          color: #3ecf8e;
-          cursor: pointer;
-          font-size: 11px;
-          text-transform: uppercase;
-          font-weight: 600;
-          flex-shrink: 0;
-          padding: 0;
-          transition: color 0.2s;
-        }
-        .btn-copy:hover {
-          color: #24b47e;
-        }
-        .section-title {
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #94a3b8;
-          margin-top: 24px;
-          margin-bottom: 8px;
-          font-weight: bold;
-        }
-        ul {
-          padding-left: 20px;
-          margin: 0;
-          font-size: 13px;
-          color: #64748b;
-          line-height: 1.6;
-        }
-        li {
-          margin-bottom: 6px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="logo-container">
-          <img src="#{logo_url}" width="30" height="30" alt="Hermit Logo" />
-          <span class="logo-text">Hermit</span>
-        </div>
+    if not File.exists?(key_path) or not File.exists?(cert_path) do
+      File.mkdir_p!(cert_dir)
 
-        <h1>Hermit DNS Profile</h1>
-        <p>Profile: <strong>#{config.name}</strong></p>
+      Logger.info(
+        "Self-signed configuration profile signing certs not found. Creating dynamic certs in config/certs/..."
+      )
 
-        <div class="section-title">DNS-over-HTTPS (DoH) URL</div>
-        <div class="url-box">
-          <span id="doh-url">#{server_url}</span>
-          <button class="btn-copy" onclick="copyUrl()">Copy</button>
-        </div>
+      custom_cnf = """
+      [req]
+      distinguished_name = req_distinguished_name
+      prompt = no
 
-        <div class="section-title">Apple Devices (iOS / macOS)</div>
-        <p>Install this configuration profile to automatically configure secure DoH settings on your iPhone, iPad, or Mac.</p>
-        <a href="#{server_url}/mobileconfig" class="btn">Download Config Profile</a>
+      [req_distinguished_name]
+      CN = #{phx_host}
+      O = Hermit DNS
+      OU = Secure Provisioning
+      C = US
+      """
 
-        <div class="section-title">Android Settings</div>
-        <ul>
-          <li>Android 13+ supports DoH via custom apps or secure browser settings.</li>
-          <li>For system-wide secure DNS, copy the DoH URL above and paste it into your preferred secure DNS app (e.g. Nebulo or Intra).</li>
-        </ul>
-      </div>
+      cnf_path = Path.join(cert_dir, "openssl.cnf")
+      File.write!(cnf_path, custom_cnf)
 
-      <script>
-        function copyUrl() {
-          const urlText = document.getElementById('doh-url').innerText;
-          navigator.clipboard.writeText(urlText).then(() => {
-            const btn = document.querySelector('.btn-copy');
-            btn.innerText = 'Copied!';
-            setTimeout(() => {
-              btn.innerText = 'Copy';
-            }, 2000);
-          });
-        }
-      </script>
-    </body>
-    </html>
-    """
+      case System.cmd("openssl", [
+             "req",
+             "-new",
+             "-newkey",
+             "rsa:2048",
+             "-days",
+             "3650",
+             "-nodes",
+             "-x509",
+             "-config",
+             cnf_path,
+             "-keyout",
+             key_path,
+             "-out",
+             cert_path
+           ]) do
+        {_output, 0} ->
+          File.rm(cnf_path)
+          Logger.info("Signing certificates generated successfully at config/certs/")
 
+        {err, status} ->
+          File.rm(cnf_path)
+          Logger.error("Failed to generate profile signing certs (code #{status}): #{err}")
+      end
+    end
+  end
+
+  defp get_dns_packet(_conn, %{"dns" => dns_b64} = _params) do
+    # GET method uses base64url query param
+    case Base.url_decode64(dns_b64, padding: false) do
+      {:ok, binary} -> {:ok, binary}
+      _ -> {:error, :bad_base64}
+    end
+  end
+
+  defp get_dns_packet(conn, _params) do
+    # POST method body contains raw binary dns message
+    content_type = get_header(conn, "content-type")
+
+    if content_type == "application/dns-message" do
+      case Plug.Conn.read_body(conn) do
+        {:ok, body, _conn} -> {:ok, body}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :missing_dns_parameter}
+    end
+  end
+
+  defp render_mobile_config_page(conn, endpoint, server_url) do
     conn
     |> put_resp_content_type("text/html")
-    |> send_resp(200, html)
+    |> send_resp(200, """
+    <!DOCTYPE html>
+    <html lang="en" data-theme="dark">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Hermit DNS Endpoint: #{endpoint.name}</title>
+      <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex items-center justify-center p-4">
+      <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+        <div class="text-center space-y-2">
+          <span class="text-4xl">🔒</span>
+          <h2 class="text-xl font-bold tracking-tight text-emerald-400">Hermit DNS Endpoint</h2>
+          <p class="text-xs text-slate-400 font-mono">#{endpoint.name}</p>
+        </div>
+
+        <div class="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80 space-y-3">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Secure DoH Address</h3>
+          <code class="block bg-slate-950 px-3 py-2 rounded text-xs text-emerald-400 break-all font-mono select-all">
+            #{server_url}
+          </code>
+        </div>
+
+        <div class="space-y-3">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">iOS / macOS Auto Setup</h3>
+          <p class="text-xs text-slate-400">
+            Download the Apple Provisioning profile below. Once downloaded, open your Settings app and install the profile to apply system-wide secure DNS filtering.
+          </p>
+          <a href="#{server_url}/mobileconfig" class="block w-full text-center bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-semibold transition-colors cursor-pointer">
+            ⬇️ Download Profile (.mobileconfig)
+          </a>
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 text-center">
+          <p class="text-[10px] text-slate-500">Hermit Encrypted DNS System &bull; v0.1.0-alpha</p>
+        </div>
+      </div>
+    </body>
+    </html>
+    """)
   end
 
   defp generate_uuid() do
-    raw = :crypto.strong_rand_bytes(16)
-    <<u0::48, _v::4, u1::12, _r::2, u2::62>> = raw
-    bin = <<u0::48, 4::4, u1::12, 2::2, u2::62>>
+    # Generates a standard UUID version 4
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+    c = (c &&& 0x0FFF) ||| 0x4000
+    d = (d &&& 0x3FFF) ||| 0x8000
 
-    <<a::32, b::16, c::16, d::16, e::48>> = bin
-
-    :io_lib.format(
-      "~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b",
-      [a, b, c, d, e]
+    List.to_string(
+      :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c, d, e])
     )
-    |> List.to_string()
   end
 
   defp get_client_ip(conn) do
-    cond do
-      cf_ip = get_header(conn, "cf-connecting-ip") ->
-        cf_ip
-
-      forwarded_for = get_header(conn, "x-forwarded-for") ->
-        forwarded_for
-        |> String.split(",")
-        |> List.first()
-        |> String.trim()
-
-      real_ip = get_header(conn, "x-real-ip") ->
-        real_ip
-        |> String.trim()
-
-      true ->
-        nil
-    end
-    |> case do
-      nil ->
-        conn.remote_ip
-
-      ip_str ->
-        case parse_ip(ip_str) do
-          {:ok, ip} -> ip
-          _ -> conn.remote_ip
-        end
-    end
+    with nil <- get_header(conn, "cf-connecting-ip") |> parse_ip(),
+         nil <- get_header(conn, "true-client-ip") |> parse_ip(),
+         nil <- get_header(conn, "x-real-ip") |> parse_ip(),
+         nil <- get_header(conn, "x-forwarded-for") |> parse_xff_header(),
+         do: conn.remote_ip
   end
 
   defp get_header(conn, name) do
-    case get_req_header(conn, name) do
+    case Plug.Conn.get_req_header(conn, name) do
       [value | _] -> value
+      [] -> nil
+    end
+  end
+
+  defp parse_xff_header(nil), do: nil
+
+  defp parse_xff_header(val) do
+    # Format: client, proxy1, proxy2
+    val
+    |> String.split(",")
+    |> List.first()
+    |> String.trim()
+    |> parse_ip()
+  end
+
+  defp parse_ip(ip_str) when is_binary(ip_str) do
+    case :inet.parse_address(String.to_charlist(ip_str)) do
+      {:ok, ip} -> ip
       _ -> nil
     end
   end
 
-  defp parse_ip(ip_str) do
-    ip_str
-    |> String.to_charlist()
-    |> :inet.parse_address()
-  end
+  defp parse_ip(_), do: nil
 
   defp get_device_name(conn) do
-    cond do
-      dev = get_header(conn, "x-device-name") -> dev
-      dev = get_header(conn, "x-client-device") -> dev
-      dev = get_header(conn, "x-dns-device") -> dev
-      dev = get_header(conn, "x-forwarded-device") -> dev
-      dev = get_header(conn, "x-dns-client-id") -> dev
-      dev = get_header(conn, "x-client-id") -> dev
-      true -> nil
+    with nil <- get_header(conn, "x-device-name"),
+         nil <- get_header(conn, "x-device-model") do
+      ua = get_header(conn, "user-agent") || ""
+
+      cond do
+        String.contains?(ua, "iPhone") -> "iPhone"
+        String.contains?(ua, "iPad") -> "iPad"
+        String.contains?(ua, "Macintosh") -> "Mac"
+        String.contains?(ua, "Windows") -> "Windows PC"
+        String.contains?(ua, "Android") -> "Android"
+        String.contains?(ua, "Linux") -> "Linux"
+        true -> "Generic Device"
+      end
     end
-    |> case do
-      nil -> nil
-      str -> String.trim(str)
+  end
+
+  defp build_servfail_packet(query_packet) do
+    case Hermit.Dns.Packet.parse(query_packet) do
+      {:ok, query} ->
+        servfail = Hermit.Dns.Packet.build_nxdomain(query.id, query.query_record)
+        Hermit.Dns.Packet.patch_rcode(servfail, 2)
+
+      _ ->
+        if byte_size(query_packet) >= 12 do
+          <<id::binary-size(2), _::binary>> = query_packet
+          <<id::binary, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+        else
+          <<0x00, 0x00, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+        end
     end
   end
 end

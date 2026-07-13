@@ -1566,7 +1566,7 @@ defmodule Hermit.Vpn.PairWorker do
       storage_dir = Path.join(get_storage_base_path(), String.replace(ns_name, "hermit_wg_", ""))
       File.exists?(storage_dir)
     else
-      case System.cmd("ip", ["netns", "list"]) do
+      case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
         {output, 0} ->
           output
           |> String.split("\n")

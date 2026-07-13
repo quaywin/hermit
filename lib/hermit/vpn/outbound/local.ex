@@ -619,7 +619,7 @@ defmodule Hermit.Vpn.Outbound.Local do
   end
 
   defp netns_exists?(ns_name) do
-    case System.cmd("ip", ["netns", "list"]) do
+    case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
       {output, 0} ->
         output
         |> String.split("\n")

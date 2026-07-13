@@ -3,13 +3,15 @@ defmodule Hermit.Vpn.DnsWorker do
   require Logger
 
   # State:
-  # - :profile_id (integer)
+  # - :endpoint_id (integer)
+  # - :inbound_profile_id (integer | nil)
   # - :status (:stopped | :starting | :running | :error)
   # - :error_reason (nil | string)
   # - :ts_ip (nil | string)
   # - :ts_port (nil | port/pid)
   # - :mock_timer (nil | timer)
-  defstruct profile_id: nil,
+  defstruct endpoint_id: nil,
+            inbound_profile_id: nil,
             status: :stopped,
             error_reason: nil,
             ts_ip: nil,
@@ -20,13 +22,13 @@ defmodule Hermit.Vpn.DnsWorker do
   # --- Client API ---
 
   def start_link(opts) do
-    profile_id = opts[:profile_id]
-    name = {:via, Registry, {Hermit.Vpn.Registry, {:dns_worker, profile_id}}}
+    endpoint_id = opts[:endpoint_id]
+    name = {:via, Registry, {Hermit.Vpn.Registry, {:dns_worker, endpoint_id}}}
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  def sync_state(profile_id) do
-    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, profile_id}) do
+  def sync_state(endpoint_id) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint_id}) do
       [{pid, _}] ->
         try do
           GenServer.call(pid, :sync_state, 45_000)
@@ -39,8 +41,8 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
-  def get_status(profile_id) do
-    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, profile_id}) do
+  def get_status(endpoint_id) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint_id}) do
       [{pid, _}] ->
         try do
           GenServer.call(pid, :get_status)
@@ -58,10 +60,11 @@ defmodule Hermit.Vpn.DnsWorker do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    profile_id = opts[:profile_id]
+    endpoint_id = opts[:endpoint_id]
+    inbound_profile_id = opts[:inbound_profile_id]
     # Perform initial sync on startup
     send(self(), :initial_sync)
-    {:ok, %__MODULE__{profile_id: profile_id}}
+    {:ok, %__MODULE__{endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id}}
   end
 
   @impl true
@@ -87,8 +90,11 @@ defmodule Hermit.Vpn.DnsWorker do
       case result do
         {:ok, ip, port} ->
           # Get current config to check if override is enabled
-          config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
-          profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.profile_id)
+          config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
+
+          profile =
+            if state.inbound_profile_id,
+              do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.inbound_profile_id)
 
           mock_timer =
             if mock?() do
@@ -107,7 +113,7 @@ defmodule Hermit.Vpn.DnsWorker do
               tailscale_override_dns: config.tailscale_override_dns
           }
 
-          if config.tailscale_override_dns do
+          if config.tailscale_override_dns and profile do
             spawn(fn -> update_tailscale_dns_config(ip, profile, config) end)
           end
 
@@ -133,7 +139,7 @@ defmodule Hermit.Vpn.DnsWorker do
   def handle_info(:generate_mock_log, state) do
     if mock?() and state.status == :running do
       spawn(fn ->
-        send_mock_query(state.profile_id)
+        send_mock_query(state.endpoint_id)
       end)
     end
 
@@ -156,8 +162,11 @@ defmodule Hermit.Vpn.DnsWorker do
   @impl true
   def terminate(_reason, state) do
     if state.tailscale_override_dns do
-      profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.profile_id)
-      config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
+      profile =
+        if state.inbound_profile_id,
+          do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.inbound_profile_id)
+
+      config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
 
       if config && profile do
         Task.start(fn -> clear_tailscale_dns_config(profile, config) end)
@@ -170,47 +179,65 @@ defmodule Hermit.Vpn.DnsWorker do
   # --- Internal Lifecycle Management ---
 
   defp do_sync_state(state) do
-    profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.profile_id)
-    config = Hermit.Vpn.DnsConfig.get_for_profile(state.profile_id)
+    profile =
+      if state.inbound_profile_id,
+        do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.inbound_profile_id)
+
+    config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
+    endpoint = Hermit.Repo.get!(Hermit.Vpn.DnsEndpoint, state.endpoint_id)
 
     cond do
-      config.enabled and state.status in [:stopped, :error] ->
+      endpoint.enabled and state.status in [:stopped, :error] ->
+        if is_nil(profile) do
+          Logger.error(
+            "DNS Server is enabled for endpoint #{state.endpoint_id} but inbound profile is nil or not found."
+          )
+
+          {{:error, :profile_not_found},
+           %{state | status: :error, error_reason: "Profile not found"}}
+        else
+          Logger.info(
+            "DNS Server is enabled for endpoint #{state.endpoint_id}. Ensuring Dedicated DNS Node is running..."
+          )
+
+          parent = self()
+          # Spawn the asynchronous bootstrap process
+          spawn_link(fn ->
+            res = start_dns_node_async(state.endpoint_id, profile)
+            send(parent, {:dns_node_start_result, res})
+          end)
+
+          {{:ok, :starting}, %{state | status: :starting, error_reason: nil}}
+        end
+
+      not endpoint.enabled and state.status in [:running, :starting, :error] ->
         Logger.info(
-          "DNS Server is enabled for profile #{state.profile_id}. Ensuring Dedicated DNS Node is running..."
-        )
-
-        parent = self()
-        # Spawn the asynchronous bootstrap process
-        spawn_link(fn ->
-          res = start_dns_node_async(state.profile_id, profile)
-          send(parent, {:dns_node_start_result, res})
-        end)
-
-        {{:ok, :starting}, %{state | status: :starting, error_reason: nil}}
-
-      not config.enabled and state.status in [:running, :starting, :error] ->
-        Logger.info(
-          "DNS Server is disabled for profile #{state.profile_id}. Putting DNS Node offline..."
+          "DNS Server is disabled for endpoint #{state.endpoint_id}. Putting DNS Node offline..."
         )
 
         new_state = stop_dns_node(state)
 
-        if config.tailscale_override_dns or state.tailscale_override_dns == true do
+        if (config.tailscale_override_dns or state.tailscale_override_dns == true) and profile do
           spawn(fn -> clear_tailscale_dns_config(profile, config) end)
         end
 
         {{:ok, :stopped}, %{new_state | tailscale_override_dns: false}}
 
-      config.enabled and state.status == :running ->
+      endpoint.enabled and state.status == :running ->
         if state.tailscale_override_dns != config.tailscale_override_dns do
-          if config.tailscale_override_dns do
+          if config.tailscale_override_dns and profile do
             spawn(fn -> update_tailscale_dns_config(state.ts_ip, profile, config) end)
           else
-            spawn(fn -> clear_tailscale_dns_config(profile, config) end)
+            if profile do
+              spawn(fn -> clear_tailscale_dns_config(profile, config) end)
+            end
           end
 
           {{:ok, :updated_dns_integration},
-           %{state | tailscale_override_dns: config.tailscale_override_dns}}
+           %{
+             state
+             | tailscale_override_dns: config.tailscale_override_dns and not is_nil(profile)
+           }}
         else
           {{:ok, :already_synced}, state}
         end
@@ -231,11 +258,11 @@ defmodule Hermit.Vpn.DnsWorker do
     {auth_key, api_key, tailnet, login_server}
   end
 
-  defp start_dns_node_async(profile_id, profile) do
+  defp start_dns_node_async(endpoint_id, profile) do
     if mock?() do
       {:ok, "100.64.0.100", nil}
     else
-      storage_dir = Path.join(get_storage_base_path(), "dns_#{profile_id}")
+      storage_dir = Path.join(get_storage_base_path(), "dns_#{endpoint_id}")
       File.mkdir_p!(storage_dir)
 
       {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(profile)
@@ -243,7 +270,7 @@ defmodule Hermit.Vpn.DnsWorker do
       if auth_key == "" do
         {:error, "Tailscale auth key not configured"}
       else
-        case bootstrap_namespace(profile_id, storage_dir, auth_key, login_server) do
+        case bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server) do
           {:ok, port, ip} ->
             {:ok, ip, port}
 
@@ -260,11 +287,11 @@ defmodule Hermit.Vpn.DnsWorker do
     if mock?() do
       %{state | status: :stopped, ts_ip: nil, mock_timer: nil}
     else
-      # Thay vì cleanup_namespace(profile_id) và dừng hẳn tailscaled daemon,
+      # Thay vì cleanup_namespace(endpoint_id) và dừng hẳn tailscaled daemon,
       # ta chỉ mang node tailscale down. Namespace và daemon vẫn giữ nguyên.
       # Điều này tối ưu tốc độ kết nối/ngắt kết nối mà không cần tạo/xóa network interface liên tục.
-      ns = "hermit_dns_#{state.profile_id}"
-      socket_path = "/run/tailscaled.dns_#{state.profile_id}.socket"
+      ns = "hermit_dns_endpoint_#{state.endpoint_id}"
+      socket_path = "/run/tailscaled.dns_#{state.endpoint_id}.socket"
 
       if netns_exists?(ns) do
         _ =
@@ -285,17 +312,17 @@ defmodule Hermit.Vpn.DnsWorker do
 
   # --- Namespace Setup & Linux Commands ---
 
-  defp bootstrap_namespace(profile_id, storage_dir, auth_key, login_server) do
-    ns = "hermit_dns_#{profile_id}"
-    host_if = "dns_h_#{profile_id}"
-    ns_if = "dns_n_#{profile_id}"
-    table_id = 1000 + profile_id
-    host_ip = "10.251.#{profile_id}.1"
-    ns_ip = "10.251.#{profile_id}.2"
-    subnet = "10.251.#{profile_id}.0/30"
-    port = 5400 + profile_id
+  defp bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server) do
+    ns = "hermit_dns_endpoint_#{endpoint_id}"
+    host_if = "dns_h_#{endpoint_id}"
+    ns_if = "dns_n_#{endpoint_id}"
+    table_id = 1000 + endpoint_id
+    host_ip = "10.251.#{endpoint_id}.1"
+    ns_ip = "10.251.#{endpoint_id}.2"
+    subnet = "10.251.#{endpoint_id}.0/30"
+    port = 5400 + endpoint_id
 
-    socket_path = "/run/tailscaled.dns_#{profile_id}.socket"
+    socket_path = "/run/tailscaled.dns_#{endpoint_id}.socket"
 
     # Nếu namespace và tailscaled daemon socket đã tồn tại/đang chạy và namespace có thể sử dụng được, ta không cần bootstrap lại từ đầu
     has_existing_env = netns_exists?(ns) and netns_usable?(ns) and File.exists?(socket_path)
@@ -304,7 +331,7 @@ defmodule Hermit.Vpn.DnsWorker do
       if has_existing_env do
         :ok
       else
-        cleanup_namespace(profile_id)
+        cleanup_namespace(endpoint_id)
 
         # Setup isolated resolv.conf for the namespace to prevent tailscaled from overwriting host resolv.conf
         netns_dns_dir = "/etc/netns/#{ns}"
@@ -418,14 +445,15 @@ defmodule Hermit.Vpn.DnsWorker do
                  "dev",
                  "eth0"
                ]),
-             # NAT routing on Host via profile-specific nftables table
-             {:ok, _} <- run_cmd("nft", ["add", "table", "ip", "hermit_dns_#{profile_id}"]),
+             # NAT routing on Host via endpoint-specific nftables table
+             {:ok, _} <-
+               run_cmd("nft", ["add", "table", "ip", "hermit_dns_endpoint_#{endpoint_id}"]),
              {:ok, _} <-
                run_cmd("nft", [
                  "add",
                  "chain",
                  "ip",
-                 "hermit_dns_#{profile_id}",
+                 "hermit_dns_endpoint_#{endpoint_id}",
                  "forward",
                  "{ type filter hook forward priority filter ; }"
                ]),
@@ -434,7 +462,7 @@ defmodule Hermit.Vpn.DnsWorker do
                  "add",
                  "chain",
                  "ip",
-                 "hermit_dns_#{profile_id}",
+                 "hermit_dns_endpoint_#{endpoint_id}",
                  "postrouting",
                  "{ type nat hook postrouting priority srcnat ; }"
                ]),
@@ -443,7 +471,7 @@ defmodule Hermit.Vpn.DnsWorker do
                  "add",
                  "rule",
                  "ip",
-                 "hermit_dns_#{profile_id}",
+                 "hermit_dns_endpoint_#{endpoint_id}",
                  "forward",
                  "ip",
                  "saddr",
@@ -455,7 +483,7 @@ defmodule Hermit.Vpn.DnsWorker do
                  "add",
                  "rule",
                  "ip",
-                 "hermit_dns_#{profile_id}",
+                 "hermit_dns_endpoint_#{endpoint_id}",
                  "forward",
                  "ip",
                  "daddr",
@@ -467,7 +495,7 @@ defmodule Hermit.Vpn.DnsWorker do
                  "add",
                  "rule",
                  "ip",
-                 "hermit_dns_#{profile_id}",
+                 "hermit_dns_endpoint_#{endpoint_id}",
                  "postrouting",
                  "ip",
                  "saddr",
@@ -648,7 +676,7 @@ defmodule Hermit.Vpn.DnsWorker do
               "tailscaled",
               "--socket=#{socket_path}",
               "--state=#{state_path}",
-              "--port=#{41640 + profile_id}",
+              "--port=#{41640 + endpoint_id}",
               "--no-logs-no-support"
             ]
 
@@ -693,7 +721,7 @@ defmodule Hermit.Vpn.DnsWorker do
             "--accept-dns=false",
             "--accept-routes=false",
             "--stateful-filtering=false",
-            "--hostname=hermit-dns-#{profile_id}",
+            "--hostname=hermit-dns-#{endpoint_id}",
             "--timeout=30s"
           ]
 
@@ -758,16 +786,16 @@ defmodule Hermit.Vpn.DnsWorker do
         end
 
       {:error, reason} ->
-        cleanup_namespace(profile_id)
+        cleanup_namespace(endpoint_id)
         {:error, reason}
     end
   end
 
-  defp cleanup_namespace(profile_id) do
-    ns = "hermit_dns_#{profile_id}"
-    host_if = "dns_h_#{profile_id}"
-    table_id = 1000 + profile_id
-    host_ip = "10.251.#{profile_id}.1"
+  defp cleanup_namespace(endpoint_id) do
+    ns = "hermit_dns_endpoint_#{endpoint_id}"
+    host_if = "dns_h_#{endpoint_id}"
+    table_id = 1000 + endpoint_id
+    host_ip = "10.251.#{endpoint_id}.1"
 
     try do
       System.cmd("ip", ["link", "delete", host_if])
@@ -790,14 +818,19 @@ defmodule Hermit.Vpn.DnsWorker do
         to_string(table_id)
       ])
 
-      System.cmd("ip", ["route", "flush", "table", to_string(table_id)])
+      System.cmd("ip", [
+        "route",
+        "flush",
+        "table",
+        to_string(table_id)
+      ])
 
-      # Clean up nftables table for this profile on host
-      System.cmd("nft", ["delete", "table", "ip", "hermit_dns_#{profile_id}"])
+      # Clean up nftables table for this endpoint on host
+      System.cmd("nft", ["delete", "table", "ip", "hermit_dns_endpoint_#{endpoint_id}"])
     rescue
       e ->
         Logger.warning(
-          "Error encountered during DNS namespace cleanup for profile #{profile_id}: #{inspect(e)}"
+          "Error encountered during DNS namespace cleanup for endpoint #{endpoint_id}: #{inspect(e)}"
         )
     end
 
@@ -805,6 +838,10 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   # --- Tailscale DNS Config API Update ---
+
+  def update_tailscale_dns_config(_dns_ip, profile, _dns_config) when is_nil(profile) do
+    {:ok, :noop}
+  end
 
   def update_tailscale_dns_config(dns_ip, profile, _dns_config) do
     cond do
@@ -837,9 +874,15 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   def clear_tailscale_dns_config(dns_config) do
-    profile_id = dns_config.inbound_profile_id
-    profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
+    endpoint_id = dns_config.dns_endpoint_id
+    endpoint = if endpoint_id, do: Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
+    profile_id = endpoint && endpoint.inbound_profile_id
+    profile = if profile_id, do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
     clear_tailscale_dns_config(profile, dns_config)
+  end
+
+  def clear_tailscale_dns_config(profile, _dns_config) when is_nil(profile) do
+    {:ok, :noop}
   end
 
   def clear_tailscale_dns_config(profile, _dns_config) do
@@ -863,6 +906,8 @@ defmodule Hermit.Vpn.DnsWorker do
             _ ->
               :ok
           end
+        else
+          {:ok, :noop}
         end
     end
   end
@@ -932,7 +977,7 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   defp netns_exists?(ns_name) do
-    case System.cmd("ip", ["netns", "list"]) do
+    case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
       {output, 0} ->
         output
         |> String.split("\n")
@@ -984,7 +1029,7 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   # Mock Log Generation Helper
-  defp send_mock_query(profile_id) do
+  defp send_mock_query(endpoint_id) do
     domains = [
       "google.com",
       "github.com",
@@ -1010,7 +1055,7 @@ defmodule Hermit.Vpn.DnsWorker do
       <<0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
         qname <> <<0x00, 0x01, 0x00, 0x01>>
 
-    port = 5400 + profile_id
+    port = 5400 + endpoint_id
 
     case :gen_udp.open(0, [:binary, active: false]) do
       {:ok, socket} ->

@@ -8,6 +8,7 @@ defmodule Hermit.Application do
   @impl true
   def start(_type, _args) do
     enable_host_ip_forwarding()
+    clean_stale_netns()
 
     children = [
       Hermit.Repo,
@@ -71,12 +72,11 @@ defmodule Hermit.Application do
     if Application.get_env(:hermit, :boot_persisted_pairs, true) do
       Task.start(fn ->
         try do
-          inbound_profiles =
-            Hermit.Repo.all(Hermit.Vpn.InboundProfile) |> Hermit.Repo.preload(:dns_profile)
+          endpoints = Hermit.Repo.all(Hermit.Vpn.DnsEndpoint)
 
-          Enum.each(inbound_profiles, fn profile ->
-            if profile.type == "tailscale" && profile.dns_profile && profile.dns_profile.enabled do
-              case Hermit.Vpn.DnsSupervisor.start_dns(profile.id) do
+          Enum.each(endpoints, fn endpoint ->
+            if endpoint.enabled do
+              case Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, endpoint.inbound_profile_id) do
                 {:ok, _} -> :ok
                 _ -> :error
               end
@@ -84,7 +84,7 @@ defmodule Hermit.Application do
           end)
         rescue
           e ->
-            IO.inspect(e, label: "Error booting persisted DNS nodes")
+            IO.inspect(e, label: "Error booting persisted DNS endpoints")
         end
       end)
     else
@@ -268,5 +268,27 @@ defmodule Hermit.Application do
   defp mock? do
     config = Application.get_env(:hermit, :docker, [])
     Keyword.get(config, :mock, false)
+  end
+
+  defp clean_stale_netns do
+    if :os.type() == {:unix, :linux} and not mock?() do
+      IO.puts("Cleaning up stale network namespaces...")
+      netns_dir = "/var/run/netns"
+
+      if File.exists?(netns_dir) do
+        case File.ls(netns_dir) do
+          {:ok, files} ->
+            Enum.each(files, fn file ->
+              if String.starts_with?(file, "hermit_") do
+                _ = System.cmd("ip", ["netns", "del", file], stderr_to_stdout: true)
+                _ = File.rm(Path.join(netns_dir, file))
+              end
+            end)
+
+          _ ->
+            :ok
+        end
+      end
+    end
   end
 end

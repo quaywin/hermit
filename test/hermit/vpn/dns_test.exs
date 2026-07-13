@@ -197,29 +197,14 @@ defmodule Hermit.Vpn.DnsTest do
     assert received_log2_cached["client_name"] == "mock-client"
   end
 
-  test "changeset for proxy inbound profile clears dns_profile_id" do
+  test "changeset for proxy inbound profile" do
     attrs = %{
       name: "Proxy Inbound Test",
       type: "proxy",
-      config: %{"port" => 1080},
-      dns_profile_id: 123
+      config: %{"port" => 1080}
     }
 
     changeset = Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{}, attrs)
     assert changeset.valid?
-    assert Ecto.Changeset.get_field(changeset, :dns_profile_id) == nil
-  end
-
-  test "changeset for tailscale inbound profile preserves dns_profile_id" do
-    attrs = %{
-      name: "Tailscale Inbound Test",
-      type: "tailscale",
-      config: %{"ts_auth_key" => "tskey-auth"},
-      dns_profile_id: 123
-    }
-
-    changeset = Hermit.Vpn.InboundProfile.changeset(%Hermit.Vpn.InboundProfile{}, attrs)
-    assert changeset.valid?
-    assert Ecto.Changeset.get_field(changeset, :dns_profile_id) == 123
   end
 end

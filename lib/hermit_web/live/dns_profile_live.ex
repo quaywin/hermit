@@ -8,7 +8,7 @@ defmodule HermitWeb.DnsProfileLive do
   def mount(_params, _session, socket) do
     dns_profiles =
       Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-      |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+      |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
     vpn_pairs =
       Hermit.Repo.all(
@@ -128,7 +128,7 @@ defmodule HermitWeb.DnsProfileLive do
 
           dns_profiles =
             Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-            |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+            |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
           {:noreply,
            socket
@@ -192,7 +192,7 @@ defmodule HermitWeb.DnsProfileLive do
       {:ok, profile} ->
         dns_profiles =
           Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-          |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+          |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
         {:noreply,
          socket
@@ -226,7 +226,7 @@ defmodule HermitWeb.DnsProfileLive do
         {:ok, _} ->
           dns_profiles =
             Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-            |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+            |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
           next_profile = List.first(dns_profiles)
 
@@ -286,7 +286,7 @@ defmodule HermitWeb.DnsProfileLive do
 
         dns_profiles =
           Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-          |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+          |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
         {:noreply,
          socket
@@ -479,7 +479,7 @@ defmodule HermitWeb.DnsProfileLive do
         {:noreply, socket}
       else
         new_log_entries = Enum.map(logs, &to_log_struct/1)
-        updated_logs = (new_log_entries ++ socket.assigns.dns_logs) |> Enum.take(50)
+        updated_logs = (new_log_entries ++ socket.assigns.dns_logs) |> Enum.take(200)
         metrics = get_metrics(socket.assigns.selected_profile.id, socket.assigns.time_range)
         {:noreply, assign(socket, dns_logs: updated_logs, dns_metrics: metrics)}
       end
@@ -507,7 +507,7 @@ defmodule HermitWeb.DnsProfileLive do
 
       dns_profiles =
         Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-        |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+        |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
       {:noreply, assign(socket, selected_profile: updated_config, dns_profiles: dns_profiles)}
     else
@@ -563,7 +563,7 @@ defmodule HermitWeb.DnsProfileLive do
 
         dns_profiles =
           Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-          |> Hermit.Repo.preload([:inbound_profiles, :blocklists])
+          |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
         {:noreply,
          socket
@@ -587,7 +587,7 @@ defmodule HermitWeb.DnsProfileLive do
         []
 
       _table ->
-        # Lấy tối đa 50 log gần nhất của profile này
+        # Lấy tối đa 200 log gần nhất của profile này
         # Key structure: {{profile_id, timestamp}, log_entry}
         pattern = {{{profile_id, :_}, :"$1"}, [], [:"$1"]}
 
@@ -595,7 +595,7 @@ defmodule HermitWeb.DnsProfileLive do
         |> Enum.map(&to_log_struct/1)
         |> Enum.sort_by(& &1.timestamp, :desc)
         |> Enum.uniq_by(fn log -> {log.timestamp, log.domain, log.client_ip} end)
-        |> Enum.take(50)
+        |> Enum.take(200)
     end
   end
 
@@ -603,6 +603,7 @@ defmodule HermitWeb.DnsProfileLive do
     %{
       client_ip: Map.get(log, "client_ip") || Map.get(log, :client_ip) || "-",
       client_name: Map.get(log, "client_name") || Map.get(log, :client_name) || "-",
+      endpoint_name: Map.get(log, "endpoint_name") || Map.get(log, :endpoint_name) || "Unknown",
       domain: Map.get(log, "domain") || Map.get(log, :domain) || "-",
       qtype: Map.get(log, "type") || Map.get(log, :qtype) || "A",
       status: Map.get(log, "status") || Map.get(log, :status) || "resolved",
@@ -624,9 +625,8 @@ defmodule HermitWeb.DnsProfileLive do
   defp to_datetime(_), do: DateTime.utc_now()
 
   defp profile_active?(profile) do
-    # check if any associated inbound profile has a running dns_worker
-    Enum.any?(profile.inbound_profiles, fn ip ->
-      case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, ip.id}) do
+    Enum.any?(profile.dns_endpoints, fn endpoint ->
+      case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint.id}) do
         [{_pid, _value}] -> true
         _ -> false
       end

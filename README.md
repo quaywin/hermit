@@ -36,23 +36,24 @@ flowchart TD
 
 ### DNS Control Plane
 
-The DNS plane is decoupled from VPN Pairs. Hermit supports **Multi-Profile Dynamic DNS Filtering**, allowing you to pre-configure multiple DNS Server Profiles and assign them dynamically to your Inbound Profiles.
+The DNS plane is fully decoupled from VPN Pairs and Inbound Networks. Hermit supports **DNS Endpoints** and **DNS Profiles** to separate network connection endpoints from routing/filtering logic:
 
-- **Multiple Pre-configured DNS Profiles**: Set up multiple DNS Profiles beforehand, each with its own upstream DNS servers (UDP/DoH), custom routing rules (block/bypass/redirect), and toggleable blocklists.
-- **Dynamic & Easy Switching**: A single Tailscale Inbound Profile can be easily linked to and switched between any of the pre-configured DNS Profiles on the fly. Switching profiles updates the DNS filters and upstream servers instantly without interrupting the main Tailscale connection.
-- **Automated Node Setup**: When a Tailscale Inbound Profile starts, Hermit automatically provisions and boots a dedicated **DNS Node** (running `tailscaled` in an isolated network namespace `hermit_dns_#{profile_id}`) and its associated Elixir DNS resolver.
-- **Automated Global DNS Configuration**: When **Tailscale DNS Override** is enabled, Hermit automatically uses the Tailscale API to register this DNS Node as the global nameserver for your entire tailnet. All devices on your tailnet will use this node automatically without any manual client configuration.
+- **DNS Profiles**: Pre-configure multiple DNS Profiles, each with its own upstream DNS servers (UDP/DoH), custom routing rules (block/bypass/redirect), and toggleable blocklists.
+- **DNS Endpoints (DoH / VPN Nodes)**: Expose access points for your devices. You can create multiple Endpoints:
+  - **DoH Only (Default / Lightweight)**: Runs entirely in-memory using the Phoenix HTTP/HTTPS web port, using 0% extra CPU/RAM. Provides a secure HTTPS DoH URL (`/dns-query/:token`) and automatically generates signed Apple configuration profiles (`.mobileconfig`).
+  - **Tailscale Integration (Optional)**: Link your DNS Endpoint to any Tailscale Inbound Profile. When active, Hermit boots a dedicated **DNS Node** (`tailscaled` inside a network namespace `hermit_dns_endpoint_#{id}`) on your tailnet, allowing client devices to resolve DNS over UDP/TCP 53.
+- **Automated Global DNS Configuration**: When **Tailscale DNS Override** is enabled on a Tailscale Endpoint, Hermit registers the local DNS Node IP as the global nameserver for your entire tailnet. All devices on your tailnet will use this node automatically without manual client configuration.
 
 ```mermaid
 flowchart TD
     Client["Tailnet Device"] -->|"1. DNS Query"| TS
 
-    subgraph DNS_NS["DNS Namespace<br/>(hermit_dns_{profile_id})"]
+    subgraph DNS_NS["DNS Namespace<br/>(hermit_dns_endpoint_{endpoint_id})"]
         TS["Tailscale Node"]
     end
 
     subgraph Host["Host Machine"]
-        Server["DNS Server<br/>(Port 5400 + {profile_id})"]
+        Server["DNS Server<br/>(Port 5400 + {endpoint_id})"]
 
         subgraph Active_DNS["Active DNS Config (Switchable)"]
             Profile["Selected DNS Profile<br/>(Choose from Profile A, B, C...)"]
@@ -90,8 +91,8 @@ When **Tailscale DNS Override** is enabled, the DNS Node registers itself as the
 ### DNS-over-HTTPS (DoH) & Apple Device Provisioning
 
 In addition to Tailscale integration, Hermit includes a built-in **DNS-over-HTTPS (DoH)** server. This allows any device (even those not on your Tailnet) to use your secure, filtered DNS configurations.
-- **Secure DoH Endpoint**: Each Inbound Profile is assigned a unique token, exposing a secure DoH resolver endpoint at `https://<your-host>/dns-query/<doh_token>`.
-- **Apple Configuration Profiles (`.mobileconfig`)**: Hermit can dynamically generate Apple configuration profiles for iOS and macOS. Users can download these profiles from the dashboard to configure system-wide secure DNS with zero manual setup.
+- **Secure DoH Endpoint**: Each DNS Endpoint is assigned a unique token, exposing a secure DoH resolver endpoint at `https://<your-host>/dns-query/<doh_token>`.
+- **Apple Configuration Profiles (`.mobileconfig`)**: Hermit can dynamically generate Apple configuration profiles for iOS and macOS. Users can download these profiles from the dashboard to configure system-wide secure DNS with zero manual setup. All profile descriptions match your custom Endpoint names.
 
 ### EDNS Client Subnet (ECS) & Subnet Spoofing
 Hermit supports **EDNS Client Subnet (ECS, RFC 7871)** to optimize CDN routing (e.g. YouTube, Netflix, Facebook) by forwarding the client's subnet mask (IPv4 `/24` or IPv6 `/48`) to public upstream DNS servers (like Google `8.8.8.8`).

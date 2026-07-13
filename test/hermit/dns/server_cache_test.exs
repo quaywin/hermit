@@ -18,12 +18,19 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test"}
       })
 
-    profile_id = profile.id
-    # Create the config for this profile in database
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    # Create the config for this endpoint in database
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         upstream_dns: "127.0.0.1",
         custom_rules: []
@@ -89,11 +96,18 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_doh"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         upstream_dns: "https://1.1.1.1/dns-query",
         custom_rules: []
@@ -146,11 +160,18 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_split"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         upstream_dns: "1.1.1.1",
         custom_rules: []
@@ -199,11 +220,18 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_ipv6"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         block_ipv6: true,
         upstream_dns: "1.1.1.1",
@@ -221,6 +249,7 @@ defmodule Hermit.Dns.ServerCacheTest do
 
       {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
       query_id = <<0x99, 0x99>>
+
       query_packet =
         query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
 
@@ -230,7 +259,10 @@ defmodule Hermit.Dns.ServerCacheTest do
 
       # Verify response: NOERROR (rcode == 0) and 0 answers
       assert binary_part(response, 0, 2) == query_id
-      <<_id::binary-size(2), flags::binary-size(2), _qdcount::16, ancount::16, _rest::binary>> = response
+
+      <<_id::binary-size(2), flags::binary-size(2), _qdcount::16, ancount::16, _rest::binary>> =
+        response
+
       <<_qr::1, _opcode::4, _aa::1, _tc::1, _rd::1, _ra::1, _z::3, rcode::4>> = flags
 
       assert rcode == 0
@@ -250,9 +282,11 @@ defmodule Hermit.Dns.ServerCacheTest do
     {:ok, {_, mock_port}} = :inet.sockname(mock_sock)
 
     test_pid = self()
-    mock_task = Task.async(fn ->
-      mock_loop(mock_sock, test_pid)
-    end)
+
+    mock_task =
+      Task.async(fn ->
+        mock_loop(mock_sock, test_pid)
+      end)
 
     # Create config pointing to our mock upstream
     {:ok, profile} =
@@ -262,11 +296,18 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_collision"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         upstream_dns: "127.0.0.1:#{mock_port}",
         custom_rules: [],
@@ -280,7 +321,7 @@ defmodule Hermit.Dns.ServerCacheTest do
       # Client 1 query domain1.com
       qname1 = <<7>> <> "domain1" <> <<3>> <> "com" <> <<0>>
       question1 = qname1 <> <<0, 1, 0, 1>>
-      
+
       # Client 2 query domain2.com
       qname2 = <<7>> <> "domain2" <> <<3>> <> "com" <> <<0>>
       question2 = qname2 <> <<0, 1, 0, 1>>
@@ -292,14 +333,16 @@ defmodule Hermit.Dns.ServerCacheTest do
       shared_tx_id = <<0x11, 0x11>>
 
       query_packet1 =
-        shared_tx_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question1
+        shared_tx_id <>
+          <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question1
 
       query_packet2 =
-        shared_tx_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question2
+        shared_tx_id <>
+          <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question2
 
       # Send Query 1 (domain1.com, delay 200ms in upstream)
       :ok = :gen_udp.send(client_sock1, {127, 0, 0, 1}, port, query_packet1)
-      
+
       # Wait a tiny bit (20ms) to ensure it reaches GenServer, then send Query 2 (domain2.com, delay 50ms)
       Process.sleep(20)
       :ok = :gen_udp.send(client_sock2, {127, 0, 0, 1}, port, query_packet2)
@@ -319,6 +362,7 @@ defmodule Hermit.Dns.ServerCacheTest do
     after
       :gen_udp.close(mock_sock)
       Task.shutdown(mock_task)
+
       if Process.alive?(server_pid) do
         GenServer.stop(server_pid)
       end
@@ -331,10 +375,12 @@ defmodule Hermit.Dns.ServerCacheTest do
     {:ok, {_, mock_port}} = :inet.sockname(mock_sock)
 
     test_pid = self()
-    mock_task = Task.async(fn ->
-      # Mock loop does nothing on receive to cause timeout
-      mock_timeout_loop(mock_sock, test_pid)
-    end)
+
+    mock_task =
+      Task.async(fn ->
+        # Mock loop does nothing on receive to cause timeout
+        mock_timeout_loop(mock_sock, test_pid)
+      end)
 
     {:ok, profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
@@ -343,11 +389,18 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_stale"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         upstream_dns: "127.0.0.1:#{mock_port}",
         custom_rules: [],
@@ -368,6 +421,7 @@ defmodule Hermit.Dns.ServerCacheTest do
 
       # Expired 10 seconds ago
       expires_at = System.monotonic_time(:second) - 10
+
       :ets.insert(
         :dns_cache,
         {{profile_id, domain, :A}, mock_response, "resolved", "9.9.9.9", expires_at}
@@ -376,6 +430,7 @@ defmodule Hermit.Dns.ServerCacheTest do
       # 2. Query the server over UDP
       {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
       query_id = <<0xDE, 0xAD>>
+
       query_packet =
         query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
 
@@ -393,6 +448,7 @@ defmodule Hermit.Dns.ServerCacheTest do
     after
       :gen_udp.close(mock_sock)
       Task.shutdown(mock_task)
+
       if Process.alive?(server_pid) do
         GenServer.stop(server_pid)
       end
@@ -408,8 +464,15 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_udp_proxy"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     # We map a forward_proxy rule to pair_id "test_socks5_pair"
     custom_rules = [
@@ -417,7 +480,7 @@ defmodule Hermit.Dns.ServerCacheTest do
     ]
 
     {:ok, _config} =
-      Hermit.Vpn.DnsConfig.update_for_profile(profile_id, %{
+      Hermit.Vpn.DnsConfig.update_for_endpoint(profile_id, %{
         enabled: true,
         upstream_dns: "8.8.8.8",
         custom_rules: custom_rules
@@ -434,6 +497,7 @@ defmodule Hermit.Dns.ServerCacheTest do
 
       {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
       query_id = <<0xCC, 0xCC>>
+
       query_packet =
         query_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> question
 
@@ -464,7 +528,8 @@ defmodule Hermit.Dns.ServerCacheTest do
       {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
     )
 
-    assert {:ok, ^mock_response, "resolved", "1.1.1.1"} = Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+    assert {:ok, ^mock_response, "resolved", "1.1.1.1"} =
+             Hermit.Dns.Cache.lookup(profile_id, domain, :A)
 
     Hermit.Dns.Cache.clear(profile_id)
 
@@ -479,8 +544,15 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_start"}
       })
 
-    profile_id = profile.id
-    _config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    _config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     domain = "start-clear-test.com"
     mock_response = <<1, 2, 3, 4>>
@@ -491,7 +563,8 @@ defmodule Hermit.Dns.ServerCacheTest do
       {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
     )
 
-    assert {:ok, ^mock_response, "resolved", "1.1.1.1"} = Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+    assert {:ok, ^mock_response, "resolved", "1.1.1.1"} =
+             Hermit.Dns.Cache.lookup(profile_id, domain, :A)
 
     # Starting server should clear the cache
     port = 35360
@@ -514,16 +587,24 @@ defmodule Hermit.Dns.ServerCacheTest do
         config: %{"ts_auth_key" => "k_test_blocklist"}
       })
 
-    profile_id = profile.id
-    config = Hermit.Vpn.DnsConfig.get_for_profile(profile_id)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    profile_id = endpoint.id
+    config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
 
     # Create a blocklist and associate it
-    {:ok, blocklist} = Hermit.Repo.insert(%Hermit.Dns.Blocklist{
-      name: "Test List",
-      url: "priv/test_list.txt",
-      format: "domains",
-      enabled: true
-    })
+    {:ok, blocklist} =
+      Hermit.Repo.insert(%Hermit.Dns.Blocklist{
+        name: "Test List",
+        url: "priv/test_list.txt",
+        format: "domains",
+        enabled: true
+      })
 
     # Associate blocklist
     {:ok, _config} = Hermit.Vpn.DnsConfig.update_blocklists(config, [blocklist.id])
@@ -542,7 +623,8 @@ defmodule Hermit.Dns.ServerCacheTest do
         {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
       )
 
-      assert {:ok, ^mock_response, "resolved", "1.1.1.1"} = Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+      assert {:ok, ^mock_response, "resolved", "1.1.1.1"} =
+               Hermit.Dns.Cache.lookup(profile_id, domain, :A)
 
       # Trigger blocklist updated broadcast
       Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_blocklist", {:blocklist_updated, blocklist.id})
@@ -569,9 +651,11 @@ defmodule Hermit.Dns.ServerCacheTest do
     case :gen_udp.recv(sock, 0, 1000) do
       {:ok, {ip, port, packet}} ->
         IO.inspect({ip, port, byte_size(packet)}, label: "Mock Upstream Received UDP Packet")
+
         case Packet.parse(packet) do
           {:ok, %{domain: domain, id: id_bin, query_record: query_rec}} ->
             IO.inspect(domain, label: "Parsed Domain in Mock Upstream")
+
             spawn(fn ->
               delay = if domain == "domain1.com", do: 200, else: 50
               ip_str = if domain == "domain1.com", do: "1.1.1.1", else: "2.2.2.2"
@@ -580,10 +664,12 @@ defmodule Hermit.Dns.ServerCacheTest do
               IO.inspect({ip, port, ip_str}, label: "Mock Upstream sending response back")
               :gen_udp.send(sock, ip, port, response)
             end)
+
           other ->
             IO.inspect(other, label: "Packet.parse failed in Mock Upstream")
             :ok
         end
+
         mock_loop(sock, parent_pid)
 
       {:error, :timeout} ->

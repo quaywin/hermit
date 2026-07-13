@@ -729,24 +729,43 @@
             </div>
           </div>
 
-          <div class="overflow-x-auto max-h-[350px]">
+          <div class="overflow-y-auto overflow-x-auto max-h-[350px]">
             <table class="w-full text-left border-collapse text-xs">
               <thead>
-                <tr class="border-b border-base-300 text-base-content/40 font-semibold uppercase tracking-wider">
-                  <th class="pb-2 min-w-[100px]">Client IP</th>
-                  <th class="pb-2 min-w-[100px]">Device</th>
-                  <th class="pb-2 min-w-[180px]">Domain</th>
-                  <th class="pb-2 min-w-[60px]">Type</th>
-                  <th class="pb-2 min-w-[95px]">Status</th>
-                  <th class="pb-2 min-w-[100px]">Source</th>
-                  <th class="pb-2 min-w-[120px]">Result</th>
-                  <th class="pb-2 text-right min-w-[80px]">Time</th>
+                <tr class="text-base-content/40 font-semibold uppercase tracking-wider">
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[100px] border-b border-base-300 z-10">
+                    Client IP
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[100px] border-b border-base-300 z-10">
+                    Device
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[100px] border-b border-base-300 z-10">
+                    Endpoint
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[180px] border-b border-base-300 z-10">
+                    Domain
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[60px] border-b border-base-300 z-10">
+                    Type
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[95px] border-b border-base-300 z-10">
+                    Status
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[100px] border-b border-base-300 z-10">
+                    Source
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 min-w-[120px] border-b border-base-300 z-10">
+                    Result
+                  </th>
+                  <th class="sticky top-0 bg-base-100 pb-2 text-right min-w-[80px] border-b border-base-300 z-10">
+                    Time
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
                 <%= if @dns_logs == [] do %>
                   <tr>
-                    <td colspan="8" class="py-8 text-center text-base-content/30 italic">
+                    <td colspan="9" class="py-8 text-center text-base-content/30 italic">
                       No logs captured yet. Capture will start when queries begin.
                     </td>
                   </tr>
@@ -762,6 +781,9 @@
                       <% else %>
                         -
                       <% end %>
+                    </td>
+                    <td class="py-2.5 pr-2 font-sans text-base-content/65 truncate max-w-[120px]">
+                      {log.endpoint_name}
                     </td>
                     <td class="py-2.5 pr-2 font-mono truncate max-w-xs">{log.domain}</td>
                     <td class="py-2.5 pr-2 font-mono uppercase text-base-content/65">

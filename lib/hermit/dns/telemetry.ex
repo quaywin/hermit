@@ -293,6 +293,32 @@ defmodule Hermit.Dns.Telemetry do
       pair_id = to_string(profile_id)
       client_ip_str = ip_to_string(client_ip)
 
+      endpoint_id =
+        cond do
+          is_integer(profile_id) ->
+            profile_id
+
+          is_binary(profile_id) ->
+            case Integer.parse(profile_id) do
+              {id, ""} -> id
+              _ -> nil
+            end
+
+          true ->
+            nil
+        end
+
+      endpoint_name =
+        if endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined do
+          case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
+            [{_, name}] -> name
+            _ -> "Unknown"
+          end
+        else
+          # Fallback if table doesn't exist or profile_id is not integer-like
+          "Unknown"
+        end
+
       client_name =
         cond do
           doh_device_name && doh_device_name != "" ->
@@ -306,6 +332,7 @@ defmodule Hermit.Dns.Telemetry do
         "pair_id" => pair_id,
         "client_ip" => client_ip_str,
         "client_name" => client_name || client_ip_str,
+        "endpoint_name" => endpoint_name,
         "domain" => domain,
         "type" => Packet.qtype_to_string(qtype),
         "status" => status,

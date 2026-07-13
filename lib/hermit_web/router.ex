@@ -19,6 +19,7 @@ defmodule HermitWeb.Router do
     pipe_through :browser
 
     live "/", DashboardLive
+    live "/dns/endpoints", DnsEndpointLive
     live "/inbounds", InboundLive
     live "/outbounds", OutboundLive
     live "/providers", ProviderImportLive

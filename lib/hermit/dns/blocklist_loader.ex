@@ -260,23 +260,23 @@ defmodule Hermit.Dns.BlocklistLoader do
   defp clear_cache_for_blocklist(blocklist_id) do
     clear_filter_cache()
     import Ecto.Query
-    # Find all inbound profiles using a DNS config that contains this blocklist
-    inbound_profile_ids =
+    # Find all DNS endpoints using a DNS config that contains this blocklist
+    endpoint_ids =
       Repo.all(
-        from(ip in Hermit.Vpn.InboundProfile,
-          join: dc in assoc(ip, :dns_profile),
+        from(e in Hermit.Vpn.DnsEndpoint,
+          join: dc in assoc(e, :dns_profile),
           join: b in assoc(dc, :blocklists),
           where: b.id == ^blocklist_id,
-          select: ip.id
+          select: e.id
         )
       )
 
-    Enum.each(inbound_profile_ids, fn ip_id ->
+    Enum.each(endpoint_ids, fn endpoint_id ->
       Logger.info(
-        "Blocklist #{blocklist_id} updated/unloaded. Clearing DNS cache for inbound profile #{ip_id}."
+        "Blocklist #{blocklist_id} updated/unloaded. Clearing DNS cache for endpoint #{endpoint_id}."
       )
 
-      Hermit.Dns.Cache.clear(ip_id)
+      Hermit.Dns.Cache.clear(endpoint_id)
     end)
   rescue
     e ->

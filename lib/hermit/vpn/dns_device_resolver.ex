@@ -19,6 +19,8 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
         name
 
       [] ->
+        # New IP! Trigger a background update of the Tailscale node cache
+        GenServer.cast(__MODULE__, {:trigger_update, profile_id})
         nil
     end
   end

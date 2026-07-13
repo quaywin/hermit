@@ -323,9 +323,24 @@ defmodule Hermit.Vpn.DnsWorker do
     port = 5400 + endpoint_id
 
     socket_path = "/run/tailscaled.dns_#{endpoint_id}.socket"
+    pid_path = Path.join(storage_dir, "tailscaled.pid")
+
+    daemon_running =
+      case File.read(pid_path) do
+        {:ok, pid_str} ->
+          pid = String.trim(pid_str)
+          File.exists?("/proc/#{pid}")
+
+        _ ->
+          false
+      end
 
     # Nếu namespace và tailscaled daemon socket đã tồn tại/đang chạy và namespace có thể sử dụng được, ta không cần bootstrap lại từ đầu
-    has_existing_env = netns_exists?(ns) and netns_usable?(ns) and File.exists?(socket_path)
+    has_existing_env =
+      netns_exists?(ns) and
+        netns_usable?(ns) and
+        File.exists?(socket_path) and
+        daemon_running
 
     setup_result =
       if has_existing_env do
@@ -777,6 +792,7 @@ defmodule Hermit.Vpn.DnsWorker do
             {:error, reason} ->
               if not has_existing_env do
                 stop_tailscaled_by_pid(pid_path)
+                File.rm(socket_path)
               end
 
               {:error, {:tailscale_up_failed, reason}}
@@ -1067,7 +1083,7 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
-  defp wait_for_dns_resolve(ns, hosts, retries \\ 10)
+  defp wait_for_dns_resolve(ns, hosts, retries \\ 30)
   defp wait_for_dns_resolve(_ns, _hosts, 0), do: :ok
 
   defp wait_for_dns_resolve(ns, hosts, retries) do

@@ -28,7 +28,7 @@ defmodule Hermit.Repo.Migrations.CreateDnsEndpoints do
         token = doh_token || (:crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false))
         repo().query!(
           "INSERT INTO dns_endpoints (name, doh_token, dns_profile_id, inbound_profile_id, enabled, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-          ["Endpoint for #{name}", token, dns_profile_id, id, true]
+          ["Endpoint for #{name}", token, dns_profile_id, id, 1]
         )
       end)
     end

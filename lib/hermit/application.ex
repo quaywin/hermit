@@ -10,6 +10,8 @@ defmodule Hermit.Application do
     enable_host_ip_forwarding()
     clean_stale_netns()
 
+    run_migrations()
+
     children = [
       Hermit.Repo,
       {Phoenix.PubSub, name: Hermit.PubSub},
@@ -29,7 +31,6 @@ defmodule Hermit.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
-        run_migrations()
         Hermit.Dns.Telemetry.restore_metrics()
         seed_default_local_profile()
         boot_vpn_pairs()
@@ -43,7 +44,14 @@ defmodule Hermit.Application do
 
   defp run_migrations do
     path = Application.app_dir(:hermit, "priv/repo/migrations")
-    Ecto.Migrator.run(Hermit.Repo, path, :up, all: true)
+
+    case Ecto.Migrator.with_repo(Hermit.Repo, &Ecto.Migrator.run(&1, path, :up, all: true)) do
+      {:ok, _, _} ->
+        :ok
+
+      {:error, reason} ->
+        IO.inspect(reason, label: "Failed to run SQLite migrations on startup")
+    end
   rescue
     e ->
       IO.inspect(e, label: "Failed to run SQLite migrations on startup")

@@ -141,11 +141,11 @@ defmodule Hermit.Dns.Server do
   defp do_try_bind_socket(%{profile_id: profile_id, port: port} = state) do
     udp_opts =
       if mock?() do
-        [:binary, active: 100, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
+        [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
       else
         [
           :binary,
-          active: 100,
+          active: 1000,
           reuseaddr: true,
           ip: {10, 251, profile_id, 1},
           recbuf: 1024 * 1024,
@@ -603,8 +603,8 @@ defmodule Hermit.Dns.Server do
 
   @impl true
   def handle_info({:udp_passive, socket}, state) do
-    Logger.info("DNS Server: UDP socket went passive, re-enabling active: 100")
-    :inet.setopts(socket, active: 100)
+    Logger.debug("DNS Server: UDP socket went passive, re-enabling active: 1000")
+    :inet.setopts(socket, active: 1000)
     {:noreply, state}
   end
 

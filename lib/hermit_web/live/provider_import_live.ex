@@ -25,6 +25,7 @@ defmodule HermitWeb.ProviderImportLive do
      |> assign(nord_selected_country_name: "")
      |> assign(show_nord_dropdown: false)
      |> assign(nord_servers: [])
+     |> assign(best_nord_server_id: nil)
      |> assign(selected_nord_servers: MapSet.new())
      |> assign(nord_prefix: "NordVPN")
      |> assign(nord_limit: 15)
@@ -106,6 +107,7 @@ defmodule HermitWeb.ProviderImportLive do
      |> assign(nord_country_search: "")
      # Clear previously fetched servers
      |> assign(nord_servers: [])
+     |> assign(best_nord_server_id: nil)
      |> assign(selected_nord_servers: MapSet.new())}
   end
 
@@ -514,11 +516,30 @@ defmodule HermitWeb.ProviderImportLive do
 
   @impl true
   def handle_info({:do_fetch_nord_servers, country_id, limit}, socket) do
-    servers = Provider.fetch_nordvpn_servers(country_id, limit)
+    servers =
+      Provider.fetch_nordvpn_servers(country_id, limit)
+      |> Provider.measure_pings()
+      |> Enum.sort(fn a, b ->
+        cond do
+          # a has ping, b has no ping
+          is_integer(a[:ping]) and is_nil(b[:ping]) -> true
+          # a has no ping, b has ping
+          is_nil(a[:ping]) and is_integer(b[:ping]) -> false
+          # both have no ping, compare load
+          is_nil(a[:ping]) and is_nil(b[:ping]) -> a.load <= b.load
+          # both have ping, compare ping first, then load if pings are equal
+          a.ping == b.ping -> a.load <= b.load
+          true -> a.ping < b.ping
+        end
+      end)
+
+    best_server = Enum.find(servers, fn s -> is_integer(s[:ping]) end)
+    best_server_id = if best_server, do: best_server.id, else: nil
 
     socket =
       socket
       |> assign(nord_servers: servers)
+      |> assign(best_nord_server_id: best_server_id)
       |> assign(nord_loading: false)
 
     socket =

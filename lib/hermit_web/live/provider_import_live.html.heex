@@ -180,8 +180,9 @@
                       </th>
                       <th class="py-2.5 px-4 min-w-[140px]">Server Name</th>
                       <th class="py-2.5 px-4 min-w-[130px]">Endpoint IP</th>
+                      <th class="py-2.5 px-4 min-w-[90px]">Ping</th>
                       <th class="py-2.5 px-4 min-w-[110px]">Load Status</th>
-                      <th class="py-2.5 px-4 min-w-[250px]">Public Key</th>
+                      <th class="py-2.5 px-4 min-w-[120px]">City</th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-base-300 text-xs font-mono">
@@ -199,9 +200,28 @@
                         />
                       </td>
                       <td class="py-3 px-4 font-semibold font-sans text-base-content">
-                        {server.name}
+                        <div class="flex items-center gap-2">
+                          <span>{server.name}</span>
+                          <%= if Map.get(assigns, :best_nord_server_id) == server.id do %>
+                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                              ⚡ Best Match
+                            </span>
+                          <% end %>
+                        </div>
                       </td>
                       <td class="py-3 px-4 text-base-content/60">{server.endpoint}</td>
+                      <td class="py-3 px-4 font-sans font-semibold">
+                        <%= cond do %>
+                          <% is_nil(Map.get(server, :ping)) -> %>
+                            <span class="text-base-content/40">N/A</span>
+                          <% server.ping < 50 -> %>
+                            <span class="text-emerald-500">{server.ping} ms</span>
+                          <% server.ping < 150 -> %>
+                            <span class="text-amber-500">{server.ping} ms</span>
+                          <% true -> %>
+                            <span class="text-error">{server.ping} ms</span>
+                        <% end %>
+                      </td>
                       <td class="py-3 px-4 font-sans font-semibold">
                         <%= cond do %>
                           <% server.load < 30 -> %>
@@ -221,8 +241,8 @@
                             </span>
                         <% end %>
                       </td>
-                      <td class="py-3 px-4 text-base-content/50 truncate max-w-xs">
-                        {server.pubkey}
+                      <td class="py-3 px-4 text-base-content/75 font-sans font-medium">
+                        {Map.get(server, :city) || "N/A"}
                       </td>
                     </tr>
                   </tbody>

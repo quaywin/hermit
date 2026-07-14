@@ -87,7 +87,8 @@ defmodule Hermit.Vpn.Provider do
           endpoint: "1.1.1.1:51820",
           pubkey: "nord_pubkey_1",
           hostname: "us1.nordvpn.com",
-          load: 15
+          load: 15,
+          city: "New York"
         },
         %{
           id: 2,
@@ -95,7 +96,8 @@ defmodule Hermit.Vpn.Provider do
           endpoint: "2.2.2.2:51820",
           pubkey: "nord_pubkey_2",
           hostname: "us2.nordvpn.com",
-          load: 75
+          load: 75,
+          city: "Los Angeles"
         }
       ]
     else
@@ -115,6 +117,12 @@ defmodule Hermit.Vpn.Provider do
             station = Map.get(server, "station")
             hostname = Map.get(server, "hostname")
             load = Map.get(server, "load", 0)
+
+            city =
+              case Map.get(server, "locations", []) do
+                [%{"country" => %{"city" => %{"name" => city_name}}} | _] -> city_name
+                _ -> nil
+              end
 
             # Find WireGuard public key from technologies list
             pubkey =
@@ -142,7 +150,8 @@ defmodule Hermit.Vpn.Provider do
                 endpoint: "#{station}:51820",
                 pubkey: pubkey,
                 hostname: hostname,
-                load: load
+                load: load,
+                city: city
               }
             else
               nil
@@ -249,6 +258,70 @@ defmodule Hermit.Vpn.Provider do
     failure_count = length(results) - success_count
 
     {:ok, %{success: success_count, failure: failure_count}}
+  end
+
+  @doc """
+  Measures latency (ping) in parallel to a list of servers.
+  Returns the list of servers with a `:ping` field populated.
+  """
+  def measure_pings(servers) do
+    if mock?() do
+      Enum.map(servers, fn server ->
+        # Return mock pings instantly based on ID
+        Map.put(server, :ping, server.id * 15)
+      end)
+    else
+      results =
+        servers
+        |> Task.async_stream(
+          fn server ->
+            [ip, _] = String.split(server.endpoint, ":")
+            ping_val = measure_ping(ip)
+            Map.put(server, :ping, ping_val)
+          end,
+          max_concurrency: 15,
+          timeout: 2500,
+          on_timeout: :kill_task
+        )
+        |> Enum.to_list()
+
+      Enum.zip_with(servers, results, fn original_server, result ->
+        case result do
+          {:ok, updated_server} -> updated_server
+          _ -> Map.put(original_server, :ping, nil)
+        end
+      end)
+    end
+  end
+
+  defp measure_ping(ip) do
+    try do
+      case System.cmd(
+             "curl",
+             [
+               "-o",
+               "/dev/null",
+               "-s",
+               "-w",
+               "%{time_connect}",
+               "--connect-timeout",
+               "2",
+               "http://#{ip}"
+             ],
+             stderr_to_stdout: false
+           ) do
+        {output, _exit_code} ->
+          case Float.parse(String.trim(output)) do
+            {val, _} when val > 0.0 -> round(val * 1000)
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+    rescue
+      _ -> nil
+    end
   end
 
   # Fallback country list for NordVPN if their API is offline

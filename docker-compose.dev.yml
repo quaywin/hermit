@@ -10,7 +10,7 @@ services:
       - "41642:41641/udp" # Tailscale UDP port
     privileged: true
     env_file:
-      - ${HOME}/.hermit/env
+      - .env
     volumes:
       # Mount the whole project directory so code updates are hot-reloaded
       - .:/app

@@ -58,7 +58,7 @@
             <div class="space-y-1.5 md:col-span-2">
               <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">NordVPN Access Token</label>
               <input
-                type="text"
+                type="password"
                 name="access_token"
                 value={@nord_access_token}
                 placeholder="Paste your NordVPN Access Token"
@@ -100,12 +100,32 @@
                       phx-value-id={c.id}
                       class="px-4 py-2.5 hover:bg-emerald-500/10 hover:text-emerald-500 cursor-pointer transition-colors"
                     >
-                      {c.name} ({c.code})
+                      {c.name} ({c.code})<%= if Map.get(c, :server_count, 0) > 0 do %>
+                        - {c.server_count} servers
+                      <% end %>
                     </li>
                   <% end %>
                 </ul>
               <% end %>
             </div>
+
+            <%= if length(@nord_cities) > 1 do %>
+              <div class="space-y-1.5">
+                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Target City</label>
+                <select
+                  name="city_id"
+                  phx-change="select_nord_city"
+                  class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                >
+                  <option value="">All Cities</option>
+                  <%= for city <- @nord_cities do %>
+                    <option value={city.id} selected={@selected_nord_city == city.id}>
+                      {city.name} ({city.server_count} servers)
+                    </option>
+                  <% end %>
+                </select>
+              </div>
+            <% end %>
 
             <div class="space-y-1.5">
               <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Outbound Name Prefix</label>

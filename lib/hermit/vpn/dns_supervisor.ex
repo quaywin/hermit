@@ -67,6 +67,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
     case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
       [{server_pid, _}] ->
         DynamicSupervisor.terminate_child(@name, server_pid)
+        wait_until_unregistered({:dns_server, endpoint_id})
 
       [] ->
         :ok
@@ -75,6 +76,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
     case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint_id}) do
       [{worker_pid, _}] ->
         DynamicSupervisor.terminate_child(@name, worker_pid)
+        wait_until_unregistered({:dns_worker, endpoint_id})
 
       [] ->
         :ok
@@ -92,6 +94,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
     case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
       [{server_pid, _}] ->
         DynamicSupervisor.terminate_child(@name, server_pid)
+        wait_until_unregistered({:dns_server, endpoint_id})
 
       [] ->
         :ok
@@ -109,6 +112,21 @@ defmodule Hermit.Vpn.DnsSupervisor do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp wait_until_unregistered(key, retries \\ 20) do
+    case Registry.lookup(Hermit.Vpn.Registry, key) do
+      [] ->
+        :ok
+
+      _ ->
+        if retries > 0 do
+          Process.sleep(50)
+          wait_until_unregistered(key, retries - 1)
+        else
+          {:error, :timeout}
+        end
     end
   end
 

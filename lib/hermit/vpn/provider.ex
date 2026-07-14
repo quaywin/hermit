@@ -13,8 +13,25 @@ defmodule Hermit.Vpn.Provider do
   def list_nordvpn_countries do
     if mock?() do
       [
-        %{id: 228, name: "United States", code: "US"},
-        %{id: 194, name: "Singapore", code: "SG"}
+        %{
+          id: 228,
+          name: "United States",
+          code: "US",
+          server_count: 10,
+          cities: [
+            %{id: 9_128_402, name: "Seattle", server_count: 5},
+            %{id: 456_494, name: "New York", server_count: 5}
+          ]
+        },
+        %{
+          id: 194,
+          name: "Singapore",
+          code: "SG",
+          server_count: 4,
+          cities: [
+            %{id: 19401, name: "Singapore", server_count: 4}
+          ]
+        }
       ]
     else
       url = "https://api.nordvpn.com/v1/servers/countries"
@@ -23,12 +40,35 @@ defmodule Hermit.Vpn.Provider do
         {:ok, %{status: 200, body: body}} when is_list(body) ->
           countries =
             body
-            |> Enum.map(fn
-              %{"id" => id, "name" => name, "code" => code} ->
-                %{id: id, name: name, code: code}
+            |> Enum.map(fn country ->
+              id = Map.get(country, "id")
+              name = Map.get(country, "name")
+              code = Map.get(country, "code")
+              server_count = Map.get(country, "serverCount", 0)
 
-              _ ->
+              cities =
+                country
+                |> Map.get("cities", [])
+                |> Enum.map(fn city ->
+                  %{
+                    id: Map.get(city, "id"),
+                    name: Map.get(city, "name"),
+                    server_count: Map.get(city, "serverCount", 0)
+                  }
+                end)
+                |> Enum.sort_by(& &1.name)
+
+              if id && name && code do
+                %{
+                  id: id,
+                  name: name,
+                  code: code,
+                  server_count: server_count,
+                  cities: cities
+                }
+              else
                 nil
+              end
             end)
             |> Enum.reject(&is_nil/1)
 
@@ -88,7 +128,8 @@ defmodule Hermit.Vpn.Provider do
           pubkey: "nord_pubkey_1",
           hostname: "us1.nordvpn.com",
           load: 15,
-          city: "New York"
+          city: "New York",
+          city_id: 456_494
         },
         %{
           id: 2,
@@ -97,7 +138,8 @@ defmodule Hermit.Vpn.Provider do
           pubkey: "nord_pubkey_2",
           hostname: "us2.nordvpn.com",
           load: 75,
-          city: "Los Angeles"
+          city: "Los Angeles",
+          city_id: 9_128_402
         }
       ]
     else
@@ -121,6 +163,12 @@ defmodule Hermit.Vpn.Provider do
             city =
               case Map.get(server, "locations", []) do
                 [%{"country" => %{"city" => %{"name" => city_name}}} | _] -> city_name
+                _ -> nil
+              end
+
+            city_id =
+              case Map.get(server, "locations", []) do
+                [%{"country" => %{"city" => %{"id" => id}}} | _] -> id
                 _ -> nil
               end
 
@@ -151,7 +199,8 @@ defmodule Hermit.Vpn.Provider do
                 pubkey: pubkey,
                 hostname: hostname,
                 load: load,
-                city: city
+                city: city,
+                city_id: city_id
               }
             else
               nil
@@ -161,6 +210,113 @@ defmodule Hermit.Vpn.Provider do
 
         error ->
           Logger.error("Failed to fetch NordVPN recommended servers: #{inspect(error)}")
+          []
+      end
+    end
+  end
+
+  @doc """
+  Fetches all WireGuard servers for a country from /v1/servers with optimized fields.
+  """
+  def fetch_nordvpn_servers_all(country_id) do
+    if mock?() do
+      [
+        %{
+          id: 1,
+          name: "United States #1",
+          endpoint: "1.1.1.1:51820",
+          pubkey: "nord_pubkey_1",
+          hostname: "us1.nordvpn.com",
+          load: 15,
+          city: "New York",
+          city_id: 456_494
+        },
+        %{
+          id: 2,
+          name: "United States #2",
+          endpoint: "2.2.2.2:51820",
+          pubkey: "nord_pubkey_2",
+          hostname: "us2.nordvpn.com",
+          load: 75,
+          city: "Los Angeles",
+          city_id: 9_128_402
+        }
+      ]
+    else
+      url = "https://api.nordvpn.com/v1/servers"
+
+      params = [
+        {"filters[country_id]", to_string(country_id)},
+        {"filters[servers_technologies][identifier]", "wireguard_udp"},
+        {"limit", "4000"},
+        {"fields[id]", ""},
+        {"fields[name]", ""},
+        {"fields[hostname]", ""},
+        {"fields[station]", ""},
+        {"fields[load]", ""},
+        {"fields[locations]", ""},
+        {"fields[technologies]", ""}
+      ]
+
+      case Req.get(url, params: params, retry: false, receive_timeout: 10000) do
+        {:ok, %{status: 200, body: body}} when is_list(body) ->
+          body
+          |> Enum.map(fn server ->
+            name = Map.get(server, "name", "NordVPN Server")
+            station = Map.get(server, "station")
+            hostname = Map.get(server, "hostname")
+            load = Map.get(server, "load", 0)
+
+            city =
+              case Map.get(server, "locations", []) do
+                [%{"country" => %{"city" => %{"name" => city_name}}} | _] -> city_name
+                _ -> nil
+              end
+
+            c_id =
+              case Map.get(server, "locations", []) do
+                [%{"country" => %{"city" => %{"id" => id}}} | _] -> id
+                _ -> nil
+              end
+
+            # Find WireGuard public key from technologies list
+            pubkey =
+              server
+              |> Map.get("technologies", [])
+              |> Enum.find(fn tech -> Map.get(tech, "identifier") == "wireguard_udp" end)
+              |> case do
+                nil ->
+                  nil
+
+                tech ->
+                  tech
+                  |> Map.get("metadata", [])
+                  |> Enum.find(fn meta -> Map.get(meta, "name") == "public_key" end)
+                  |> case do
+                    nil -> nil
+                    meta -> Map.get(meta, "value")
+                  end
+              end
+
+            if station && pubkey do
+              %{
+                id: Map.get(server, "id"),
+                name: name,
+                endpoint: "#{station}:51820",
+                pubkey: pubkey,
+                hostname: hostname,
+                load: load,
+                city: city,
+                city_id: c_id
+              }
+            else
+              nil
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        error ->
+          Logger.error("Failed to fetch NordVPN servers: #{inspect(error)}")
           []
       end
     end
@@ -279,7 +435,7 @@ defmodule Hermit.Vpn.Provider do
             ping_val = measure_ping(ip)
             Map.put(server, :ping, ping_val)
           end,
-          max_concurrency: 15,
+          max_concurrency: 10,
           timeout: 2500,
           on_timeout: :kill_task
         )
@@ -327,17 +483,17 @@ defmodule Hermit.Vpn.Provider do
   # Fallback country list for NordVPN if their API is offline
   defp fallback_countries do
     [
-      %{id: 228, name: "United States", code: "US"},
-      %{id: 227, name: "United Kingdom", code: "GB"},
-      %{id: 81, name: "Germany", code: "DE"},
-      %{id: 108, name: "Japan", code: "JP"},
-      %{id: 194, name: "Singapore", code: "SG"},
-      %{id: 38, name: "Canada", code: "CA"},
-      %{id: 74, name: "France", code: "FR"},
-      %{id: 153, name: "Netherlands", code: "NL"},
-      %{id: 13, name: "Australia", code: "AU"},
-      %{id: 97, name: "Hong Kong", code: "HK"},
-      %{id: 208, name: "South Korea", code: "KR"}
+      %{id: 228, name: "United States", code: "US", server_count: 0, cities: []},
+      %{id: 227, name: "United Kingdom", code: "GB", server_count: 0, cities: []},
+      %{id: 81, name: "Germany", code: "DE", server_count: 0, cities: []},
+      %{id: 108, name: "Japan", code: "JP", server_count: 0, cities: []},
+      %{id: 194, name: "Singapore", code: "SG", server_count: 0, cities: []},
+      %{id: 38, name: "Canada", code: "CA", server_count: 0, cities: []},
+      %{id: 74, name: "France", code: "FR", server_count: 0, cities: []},
+      %{id: 153, name: "Netherlands", code: "NL", server_count: 0, cities: []},
+      %{id: 13, name: "Australia", code: "AU", server_count: 0, cities: []},
+      %{id: 97, name: "Hong Kong", code: "HK", server_count: 0, cities: []},
+      %{id: 208, name: "South Korea", code: "KR", server_count: 0, cities: []}
     ]
   end
 

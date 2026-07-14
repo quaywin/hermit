@@ -21,6 +21,8 @@ defmodule HermitWeb.ProviderImportLive do
      |> assign(nord_address: "10.5.0.2/32")
      |> assign(nord_dns: "10.5.0.1")
      |> assign(nord_countries: [])
+     |> assign(nord_cities: [])
+     |> assign(selected_nord_city: "")
      |> assign(selected_nord_country: "")
      |> assign(nord_selected_country_name: "")
      |> assign(show_nord_dropdown: false)
@@ -96,15 +98,41 @@ defmodule HermitWeb.ProviderImportLive do
     country_id = String.to_integer(country_id)
     country = Enum.find(socket.assigns.nord_countries, fn c -> c.id == country_id end)
     code = if country, do: country.code, else: "VPN"
-    name = if country, do: "#{country.name} (#{country.code})", else: ""
+
+    name =
+      if country do
+        server_cnt_str =
+          if country[:server_count] > 0, do: " - #{country.server_count} servers", else: ""
+
+        "#{country.name} (#{country.code})#{server_cnt_str}"
+      else
+        ""
+      end
+
+    cities = if country, do: country[:cities] || [], else: []
 
     {:noreply,
      socket
      |> assign(selected_nord_country: country_id)
      |> assign(nord_selected_country_name: name)
+     |> assign(nord_cities: cities)
+     |> assign(selected_nord_city: "")
      |> assign(nord_prefix: "NordVPN - #{code}")
      |> assign(show_nord_dropdown: false)
      |> assign(nord_country_search: "")
+     # Clear previously fetched servers
+     |> assign(nord_servers: [])
+     |> assign(best_nord_server_id: nil)
+     |> assign(selected_nord_servers: MapSet.new())}
+  end
+
+  @impl true
+  def handle_event("select_nord_city", %{"city_id" => city_id_str}, socket) do
+    selected_city_id = if city_id_str == "", do: "", else: String.to_integer(city_id_str)
+
+    {:noreply,
+     socket
+     |> assign(selected_nord_city: selected_city_id)
      # Clear previously fetched servers
      |> assign(nord_servers: [])
      |> assign(best_nord_server_id: nil)
@@ -165,6 +193,7 @@ defmodule HermitWeb.ProviderImportLive do
     country_id = socket.assigns.selected_nord_country
     access_token = socket.assigns.nord_access_token
     limit = socket.assigns.nord_limit
+    selected_city_id = socket.assigns.selected_nord_city
 
     cond do
       country_id == "" or is_nil(country_id) ->
@@ -182,7 +211,7 @@ defmodule HermitWeb.ProviderImportLive do
         case Provider.fetch_nordvpn_private_key(access_token) do
           {:ok, private_key} ->
             socket = assign(socket, nord_private_key: private_key)
-            send(self(), {:do_fetch_nord_servers, country_id, limit})
+            send(self(), {:do_fetch_nord_servers, country_id, limit, selected_city_id})
             {:noreply, socket}
 
           {:error, reason} ->
@@ -502,36 +531,93 @@ defmodule HermitWeb.ProviderImportLive do
     default_country = List.first(countries)
     default_country_id = if default_country, do: default_country.id, else: ""
     default_country_code = if default_country, do: default_country.code, else: ""
+    default_cities = if default_country, do: default_country[:cities] || [], else: []
 
     default_country_name =
-      if default_country, do: "#{default_country.name} (#{default_country.code})", else: ""
+      if default_country do
+        server_cnt_str =
+          if default_country[:server_count] > 0,
+            do: " - #{default_country.server_count} servers",
+            else: ""
+
+        "#{default_country.name} (#{default_country.code})#{server_cnt_str}"
+      else
+        ""
+      end
 
     {:noreply,
      socket
      |> assign(nord_countries: countries)
      |> assign(selected_nord_country: default_country_id)
      |> assign(nord_selected_country_name: default_country_name)
+     |> assign(nord_cities: default_cities)
+     |> assign(selected_nord_city: "")
      |> assign(nord_prefix: "NordVPN - #{default_country_code}")}
   end
 
   @impl true
-  def handle_info({:do_fetch_nord_servers, country_id, limit}, socket) do
+  def handle_info({:do_fetch_nord_servers, country_id, limit, selected_city_id}, socket) do
+    all_servers = Provider.fetch_nordvpn_servers_all(country_id)
+
+    # Filter by city if a specific city is selected
+    pool =
+      if selected_city_id != "" and selected_city_id != nil do
+        Enum.filter(all_servers, fn s -> s.city_id == selected_city_id end)
+      else
+        all_servers
+      end
+
+    # Group by subnet /24 (first 3 octets of IP) — same subnet = same datacenter = same ping
+    # Pick 1 representative (lowest load) per subnet, cap at 80 representatives max
+    representatives =
+      pool
+      |> Enum.group_by(fn s ->
+        [ip, _] = String.split(s.endpoint, ":")
+        ip |> String.split(".") |> Enum.take(3) |> Enum.join(".")
+      end)
+      |> Enum.map(fn {_subnet, list} -> Enum.min_by(list, & &1.load) end)
+      |> Enum.sort_by(& &1.load)
+      |> Enum.take(80)
+
+    # Ping representatives (concurrency=10, safe for accurate measurements)
+    pinged_reps = Provider.measure_pings(representatives)
+
+    # Build lookup: subnet /24 -> measured ping
+    subnet_ping_map =
+      pinged_reps
+      |> Enum.reduce(%{}, fn rep, acc ->
+        [ip, _] = String.split(rep.endpoint, ":")
+        subnet = ip |> String.split(".") |> Enum.take(3) |> Enum.join(".")
+        Map.put(acc, subnet, rep[:ping])
+      end)
+
+    # Assign subnet-level ping to ALL servers in the pool, then sort by ping -> load
     servers =
-      Provider.fetch_nordvpn_servers(country_id, limit)
-      |> Provider.measure_pings()
+      pool
+      |> Enum.map(fn s ->
+        [ip, _] = String.split(s.endpoint, ":")
+        subnet = ip |> String.split(".") |> Enum.take(3) |> Enum.join(".")
+        Map.put(s, :ping, Map.get(subnet_ping_map, subnet))
+      end)
       |> Enum.sort(fn a, b ->
         cond do
-          # a has ping, b has no ping
           is_integer(a[:ping]) and is_nil(b[:ping]) -> true
-          # a has no ping, b has ping
           is_nil(a[:ping]) and is_integer(b[:ping]) -> false
-          # both have no ping, compare load
           is_nil(a[:ping]) and is_nil(b[:ping]) -> a.load <= b.load
-          # both have ping, compare ping first, then load if pings are equal
           a.ping == b.ping -> a.load <= b.load
           true -> a.ping < b.ping
         end
       end)
+      # All Cities: keep only the best server per city for diversity
+      # Specific City: show multiple servers from that city
+      |> then(fn sorted ->
+        if selected_city_id == "" or is_nil(selected_city_id) do
+          Enum.uniq_by(sorted, & &1.city_id)
+        else
+          sorted
+        end
+      end)
+      |> Enum.take(limit)
 
     best_server = Enum.find(servers, fn s -> is_integer(s[:ping]) end)
     best_server_id = if best_server, do: best_server.id, else: nil
@@ -544,7 +630,7 @@ defmodule HermitWeb.ProviderImportLive do
 
     socket =
       if servers == [] do
-        put_flash(socket, :error, "No recommended servers found or failed to fetch.")
+        put_flash(socket, :error, "No recommended servers found for this selection.")
       else
         socket
       end

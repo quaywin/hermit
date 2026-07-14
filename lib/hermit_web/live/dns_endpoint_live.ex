@@ -306,26 +306,30 @@ defmodule HermitWeb.DnsEndpointLive do
     dns_profile_id =
       if dns_profile_id_str == "", do: nil, else: String.to_integer(dns_profile_id_str)
 
-    case endpoint
-         |> DnsEndpoint.changeset(%{dns_profile_id: dns_profile_id})
-         |> Hermit.Repo.update() do
-      {:ok, updated_endpoint} ->
-        DnsEndpoint.clear_cache()
+    if dns_profile_id == endpoint.dns_profile_id do
+      {:noreply, socket}
+    else
+      case endpoint
+           |> DnsEndpoint.changeset(%{dns_profile_id: dns_profile_id})
+           |> Hermit.Repo.update() do
+        {:ok, updated_endpoint} ->
+          DnsEndpoint.clear_cache()
 
-        # Restart DNS server with new profile if it's currently running
-        {status, _, _} = DnsWorker.get_status(endpoint_id)
+          # Restart DNS server with new profile if it's currently running
+          {status, _, _} = DnsWorker.get_status(endpoint_id)
 
-        if status == :running do
-          Hermit.Vpn.DnsSupervisor.restart_dns_server(endpoint_id)
-        end
+          if status == :running do
+            Hermit.Vpn.DnsSupervisor.restart_dns_server(endpoint_id)
+          end
 
-        {:noreply,
-         socket
-         |> put_flash(:info, "DNS Profile for '#{updated_endpoint.name}' updated successfully.")
-         |> assign(endpoints: get_endpoints())}
+          {:noreply,
+           socket
+           |> put_flash(:info, "DNS Profile for '#{updated_endpoint.name}' updated successfully.")
+           |> assign(endpoints: get_endpoints())}
 
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to update DNS profile.")}
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to update DNS profile.")}
+      end
     end
   end
 
@@ -341,38 +345,42 @@ defmodule HermitWeb.DnsEndpointLive do
     inbound_profile_id =
       if inbound_profile_id_str == "", do: nil, else: String.to_integer(inbound_profile_id_str)
 
-    # Nếu đang chạy node cũ, ta tự động dừng nó trước khi chuyển đổi profile mạng
-    {status, _, _} = DnsWorker.get_status(endpoint_id)
+    if inbound_profile_id == endpoint.inbound_profile_id do
+      {:noreply, socket}
+    else
+      # Nếu đang chạy node cũ, ta tự động dừng nó trước khi chuyển đổi profile mạng
+      {status, _, _} = DnsWorker.get_status(endpoint_id)
 
-    if status in [:running, :starting] do
-      # Xóa override config cũ nếu có
-      config = DnsConfig.get_for_endpoint(endpoint_id)
+      if status in [:running, :starting] do
+        # Xóa override config cũ nếu có
+        config = DnsConfig.get_for_endpoint(endpoint_id)
 
-      if config && config.tailscale_override_dns do
-        Task.start(fn -> DnsWorker.clear_tailscale_dns_config(config) end)
-        DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
+        if config && config.tailscale_override_dns do
+          Task.start(fn -> DnsWorker.clear_tailscale_dns_config(config) end)
+          DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
+        end
+
+        Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
       end
 
-      Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
-    end
+      case endpoint
+           |> DnsEndpoint.changeset(%{inbound_profile_id: inbound_profile_id, enabled: false})
+           |> Hermit.Repo.update() do
+        {:ok, updated_endpoint} ->
+          DnsEndpoint.clear_cache()
 
-    case endpoint
-         |> DnsEndpoint.changeset(%{inbound_profile_id: inbound_profile_id, enabled: false})
-         |> Hermit.Repo.update() do
-      {:ok, updated_endpoint} ->
-        DnsEndpoint.clear_cache()
+          {:noreply,
+           socket
+           |> put_flash(
+             :info,
+             "Network Connection for '#{updated_endpoint.name}' updated. Node is currently stopped."
+           )
+           |> assign(endpoints: get_endpoints())
+           |> update_all_dns_statuses()}
 
-        {:noreply,
-         socket
-         |> put_flash(
-           :info,
-           "Network Connection for '#{updated_endpoint.name}' updated. Node is currently stopped."
-         )
-         |> assign(endpoints: get_endpoints())
-         |> update_all_dns_statuses()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to update Network Connection.")}
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to update Network Connection.")}
+      end
     end
   end
 

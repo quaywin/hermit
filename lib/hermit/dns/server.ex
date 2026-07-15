@@ -253,6 +253,11 @@ defmodule Hermit.Dns.Server do
   def handle_info({:dns_config_updated, updated_config}, state) do
     updated_config = Hermit.Repo.preload(updated_config, :blocklists)
     upstreams = parse_upstreams(updated_config.upstream_dns)
+
+    Logger.info(
+      "DNS Server (endpoint #{state.endpoint_id}): configuration updated for profile #{updated_config.id}. Upstreams: #{inspect(upstreams)}"
+    )
+
     new_state = sync_upstreams_config(state, upstreams)
     custom_rules = Rules.precompile(updated_config.custom_rules)
 
@@ -631,9 +636,7 @@ defmodule Hermit.Dns.Server do
   # --- DNS Core Processing ---
 
   defp sync_upstreams_config(state, upstreams) do
-    existing_keys = Map.keys(state.upstreams_map)
-
-    if Enum.sort(existing_keys) == Enum.sort(upstreams) do
+    if state.upstreams == upstreams do
       state
     else
       upstreams_map =

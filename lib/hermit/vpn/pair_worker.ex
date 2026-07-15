@@ -627,10 +627,33 @@ defmodule Hermit.Vpn.PairWorker do
     state.inbound_module.cleanup(state.id, state.storage_dir)
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
+    # Allow OS kernel to clean up netns and interfaces
+    Process.sleep(1000)
+
     updated_state = %{state | ts_port: nil}
     updated_state = broadcast_update(updated_state)
 
     {:noreply, updated_state, {:continue, :bootstrap}}
+  end
+
+  @impl true
+  def handle_continue(:restart_wg_cleanup, state) do
+    Logger.info("Running restart WG cleanup for VPN pair: #{state.id}")
+
+    if state.ts_port do
+      stop_inbound_process(state.ts_port)
+    end
+
+    state.inbound_module.cleanup(state.id, state.storage_dir)
+    state.outbound_module.cleanup(state.id, state.storage_dir)
+
+    # Allow OS kernel to clean up netns and interfaces
+    Process.sleep(1000)
+
+    updated_state = %{state | ts_port: nil}
+    updated_state = broadcast_update(updated_state)
+
+    {:noreply, updated_state, {:continue, :bootstrap_wg}}
   end
 
   @impl true
@@ -833,14 +856,6 @@ defmodule Hermit.Vpn.PairWorker do
 
     state = maybe_shutdown_bootstrap_task(state)
 
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
-
-    state.inbound_module.cleanup(state.id, state.storage_dir)
-
-    state.outbound_module.cleanup(state.id, state.storage_dir)
-
     updated_state =
       %{
         state
@@ -848,7 +863,6 @@ defmodule Hermit.Vpn.PairWorker do
           ts_status: :starting,
           wg_error_reason: nil,
           ts_error_reason: nil,
-          ts_port: nil,
           started_at: nil,
           wg_retry_count: 0,
           ts_retry_count: 0,
@@ -857,7 +871,7 @@ defmodule Hermit.Vpn.PairWorker do
       |> cancel_metrics_poll()
 
     updated_state = broadcast_update(updated_state)
-    {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_wg}}
+    {:reply, {:ok, updated_state}, updated_state, {:continue, :restart_wg_cleanup}}
   end
 
   @impl true

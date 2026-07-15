@@ -121,7 +121,7 @@ defmodule HermitWeb.DnsProfileLive do
           if :erlang.whereis(Hermit.PubSub) != :undefined do
             Phoenix.PubSub.broadcast(
               Hermit.PubSub,
-              "dns_config:#{profile.id}",
+              "dns_config_profile:#{profile.id}",
               {:dns_config_updated, updated}
             )
           end

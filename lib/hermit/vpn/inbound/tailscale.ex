@@ -242,8 +242,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             _ -> false
           end
 
-        ts_auth_key = Map.get(config, :ts_auth_key) || Map.get(config, "ts_auth_key") || ""
-
         advertise_routes =
           Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
 
@@ -263,13 +261,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
           "--timeout=30s"
         ]
-
-        ts_up_args =
-          if ts_auth_key != "" do
-            ts_up_args ++ ["--authkey=#{ts_auth_key}"]
-          else
-            ts_up_args
-          end
 
         ts_up_args =
           if login_server && login_server != "" do
@@ -299,6 +290,53 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           else
             ts_up_args ++ ["--advertise-routes="]
           end
+
+        if advertise_connector do
+          tag = get_connector_tag(pair_id, config)
+
+          domains_str =
+            Map.get(config, "advertise_connector_domains") ||
+              Map.get(config, :advertise_connector_domains) || ""
+
+          domains =
+            String.split(domains_str, [",", "\n"])
+            |> Enum.map(&String.trim/1)
+            |> Enum.reject(&(&1 == ""))
+
+          pair =
+            case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id) do
+              nil -> nil
+              p -> Hermit.Repo.preload(p, :inbound_profile)
+            end
+
+          api_key =
+            Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
+              (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
+              Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+          tailnet =
+            Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+              (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
+              Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+          if ((api_key && api_key != "") and tailnet) && tailnet != "" do
+            Logger.info(
+              "Pre-updating Tailscale App Connector ACL for domains: #{inspect(domains)}"
+            )
+
+            case do_update_app_connector_acl(api_key, tailnet, tag, domains) do
+              {:ok, _} ->
+                Logger.info("Tailscale ACL pre-updated successfully.")
+
+              {:error, reason} ->
+                Logger.warning("Failed to pre-update Tailscale ACL: #{inspect(reason)}")
+            end
+          else
+            Logger.warning(
+              "Tailscale API credentials not configured. Skipping pre-update of ACL."
+            )
+          end
+        end
 
         case run_cmd("ip", ts_up_args) do
           {:ok, _} ->

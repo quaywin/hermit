@@ -25,6 +25,8 @@ defmodule Hermit.Vpn.VpnPair do
   end
 
   def changeset(vpn_pair, attrs) do
+    attrs = stringify_config_keys(attrs)
+
     vpn_pair
     |> cast(attrs, [
       :pair_id,
@@ -62,6 +64,37 @@ defmodule Hermit.Vpn.VpnPair do
       changeset
     end
   end
+
+  defp stringify_config_keys(attrs) do
+    attrs =
+      case attrs do
+        %{"inbound_config" => config} when is_map(config) ->
+          Map.put(attrs, "inbound_config", stringify_keys(config))
+
+        %{inbound_config: config} when is_map(config) ->
+          Map.put(attrs, :inbound_config, stringify_keys(config))
+
+        _ ->
+          attrs
+      end
+
+    case attrs do
+      %{"outbound_config" => config} when is_map(config) ->
+        Map.put(attrs, "outbound_config", stringify_keys(config))
+
+      %{outbound_config: config} when is_map(config) ->
+        Map.put(attrs, :outbound_config, stringify_keys(config))
+
+      _ ->
+        attrs
+    end
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
+  end
+
+  defp stringify_keys(val), do: val
 
   @doc """
   Checks if the given outbound profile is already in use by another active tunnel.

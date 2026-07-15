@@ -4,13 +4,14 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
   @impl true
   def bootstrap(pair_id, _outbound_if, storage_dir, config) do
+    config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
     wg_name = "hermit_wg_#{pair_id}"
     ts_name = "hermit_ts_#{pair_id}"
-    ts_auth_key = Map.get(config, :ts_auth_key) || Map.get(config, "ts_auth_key") || ""
-    login_server = Map.get(config, :login_server) || Map.get(config, "login_server")
+    ts_auth_key = Map.get(config, "ts_auth_key") || ""
+    login_server = Map.get(config, "login_server")
 
     advertise_exit_node =
-      case Map.get(config, :advertise_exit_node) || Map.get(config, "advertise_exit_node") do
+      case Map.get(config, "advertise_exit_node") do
         false -> false
         "false" -> false
         nil -> true
@@ -18,16 +19,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       end
 
     advertise_connector =
-      case Map.get(config, :advertise_connector) || Map.get(config, "advertise_connector") do
+      case Map.get(config, "advertise_connector") do
         true -> true
         "true" -> true
         _ -> false
       end
 
-    advertise_routes =
-      Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
+    advertise_routes = Map.get(config, "advertise_routes") || ""
 
-    dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode) || "default"
+    dns_mode = Map.get(config, "dns_mode") || "default"
 
     cond do
       err = get_mock_error() ->
@@ -112,12 +112,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               ts_up_args ++ ["--advertise-exit-node=false"]
             end
 
+          tag = get_connector_tag(pair_id, config)
+
           ts_up_args =
             if advertise_connector do
-              tag = get_connector_tag(pair_id, config)
               ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
             else
-              ts_up_args ++ ["--advertise-connector=false"]
+              ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
             end
 
           ts_up_args =
@@ -130,9 +131,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           if advertise_connector do
             tag = get_connector_tag(pair_id, config)
 
-            domains_str =
-              Map.get(config, "advertise_connector_domains") ||
-                Map.get(config, :advertise_connector_domains) || ""
+            domains_str = Map.get(config, "advertise_connector_domains") || ""
 
             domains =
               String.split(domains_str, [",", "\n"])
@@ -140,11 +139,11 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               |> Enum.reject(&(&1 == ""))
 
             api_key =
-              Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
+              Map.get(config, "ts_api_key") ||
                 Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
 
             tailnet =
-              Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+              Map.get(config, "ts_tailnet") ||
                 Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
 
             if ((api_key && api_key != "") and tailnet) && tailnet != "" do
@@ -168,8 +167,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           case run_cmd("ip", ts_up_args) do
             {:ok, _} ->
-              dns_resolvers = Map.get(config, "dns_resolvers") || Map.get(config, :dns_resolvers)
-              dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode)
+              dns_resolvers = Map.get(config, "dns_resolvers")
+              dns_mode = Map.get(config, "dns_mode")
 
               should_update_dns =
                 cond do
@@ -224,11 +223,12 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         {:ok, :updated}
 
       true ->
+        config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
         socket_path = "/run/tailscaled.#{pair_id}.socket"
-        login_server = Map.get(config, :login_server) || Map.get(config, "login_server")
+        login_server = Map.get(config, "login_server")
 
         advertise_exit_node =
-          case Map.get(config, :advertise_exit_node) || Map.get(config, "advertise_exit_node") do
+          case Map.get(config, "advertise_exit_node") do
             false -> false
             "false" -> false
             nil -> true
@@ -236,16 +236,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           end
 
         advertise_connector =
-          case Map.get(config, :advertise_connector) || Map.get(config, "advertise_connector") do
+          case Map.get(config, "advertise_connector") do
             true -> true
             "true" -> true
             _ -> false
           end
 
-        advertise_routes =
-          Map.get(config, :advertise_routes) || Map.get(config, "advertise_routes") || ""
+        advertise_routes = Map.get(config, "advertise_routes") || ""
 
-        dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode) || "default"
+        dns_mode = Map.get(config, "dns_mode") || "default"
 
         ts_up_args = [
           "netns",
@@ -276,12 +275,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             ts_up_args ++ ["--advertise-exit-node=false"]
           end
 
+        tag = get_connector_tag(pair_id, config)
+
         ts_up_args =
           if advertise_connector do
-            tag = get_connector_tag(pair_id, config)
             ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
           else
-            ts_up_args ++ ["--advertise-connector=false"]
+            ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
           end
 
         ts_up_args =
@@ -294,9 +294,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         if advertise_connector do
           tag = get_connector_tag(pair_id, config)
 
-          domains_str =
-            Map.get(config, "advertise_connector_domains") ||
-              Map.get(config, :advertise_connector_domains) || ""
+          domains_str = Map.get(config, "advertise_connector_domains") || ""
 
           domains =
             String.split(domains_str, [",", "\n"])
@@ -310,12 +308,12 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             end
 
           api_key =
-            Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
+            Map.get(config, "ts_api_key") ||
               (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
               Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
 
           tailnet =
-            Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+            Map.get(config, "ts_tailnet") ||
               (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
               Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
 
@@ -340,8 +338,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
         case run_cmd("ip", ts_up_args) do
           {:ok, _} ->
-            dns_resolvers = Map.get(config, "dns_resolvers") || Map.get(config, :dns_resolvers)
-            dns_mode = Map.get(config, "dns_mode") || Map.get(config, :dns_mode)
+            dns_resolvers = Map.get(config, "dns_resolvers")
+            dns_mode = Map.get(config, "dns_mode")
 
             should_update_dns =
               cond do
@@ -1517,9 +1515,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   defp get_connector_tag(pair_id, config) do
-    tag =
-      Map.get(config, "advertise_connector_tag") ||
-        Map.get(config, :advertise_connector_tag)
+    tag = Map.get(config, "advertise_connector_tag")
 
     default_tag = "tag:connector-#{String.replace(pair_id, "_", "-")}"
 
@@ -1543,16 +1539,19 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   defp get_inbound_config(pair) do
-    cond do
-      pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
-        pair.inbound_config
+    config =
+      cond do
+        pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
+          pair.inbound_config
 
-      pair && pair.inbound_profile ->
-        pair.inbound_profile.config || %{}
+        pair && pair.inbound_profile ->
+          pair.inbound_profile.config || %{}
 
-      true ->
-        %{}
-    end
+        true ->
+          %{}
+      end
+
+    Map.new(config, fn {k, v} -> {to_string(k), v} end)
   end
 
   defp clean_routes(nil), do: ""

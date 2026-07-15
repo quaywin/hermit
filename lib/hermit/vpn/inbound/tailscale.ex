@@ -113,12 +113,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             end
 
           tag = get_connector_tag(pair_id, config)
+          current_tags = get_current_tags(wg_name, socket_path)
 
           ts_up_args =
             if advertise_connector do
               ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
             else
-              ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
+              if tag in current_tags do
+                ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
+              else
+                ts_up_args ++ ["--advertise-connector=false"]
+              end
             end
 
           ts_up_args =
@@ -276,12 +281,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           end
 
         tag = get_connector_tag(pair_id, config)
+        current_tags = get_current_tags(wg_name, socket_path)
 
         ts_up_args =
           if advertise_connector do
             ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
           else
-            ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
+            if tag in current_tags do
+              ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
+            else
+              ts_up_args ++ ["--advertise-connector=false"]
+            end
           end
 
         ts_up_args =
@@ -1536,6 +1546,38 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       end
 
     if String.starts_with?(resolved_tag, "tag:"), do: resolved_tag, else: "tag:#{resolved_tag}"
+  end
+
+  defp get_current_tags(wg_name, socket_path) do
+    if File.exists?(socket_path) do
+      case System.cmd(
+             "ip",
+             [
+               "netns",
+               "exec",
+               wg_name,
+               "tailscale",
+               "--socket=#{socket_path}",
+               "status",
+               "--json"
+             ],
+             stderr_to_stdout: true
+           ) do
+        {output, 0} ->
+          case Jason.decode(output) do
+            {:ok, %{"Self" => %{"Tags" => tags}}} when is_list(tags) ->
+              tags
+
+            _ ->
+              []
+          end
+
+        _ ->
+          []
+      end
+    else
+      []
+    end
   end
 
   defp get_inbound_config(pair) do

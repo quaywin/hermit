@@ -608,11 +608,14 @@ defmodule HermitWeb.ProviderImportLive do
           true -> a.ping < b.ping
         end
       end)
-      # All Cities: keep only the best server per city for diversity
-      # Specific City: show multiple servers from that city
+      # All Cities: round-robin interleave servers from different cities for both diversity and full limit usage
+      # Specific City: show multiple servers from that city directly
       |> then(fn sorted ->
         if selected_city_id == "" or is_nil(selected_city_id) do
-          Enum.uniq_by(sorted, & &1.city_id)
+          cities_in_order = sorted |> Enum.map(& &1.city_id) |> Enum.uniq()
+          grouped_by_city = Enum.group_by(sorted, & &1.city_id)
+          lists = Enum.map(cities_in_order, fn c_id -> Map.get(grouped_by_city, c_id) end)
+          interleave_lists(lists)
         else
           sorted
         end
@@ -639,6 +642,19 @@ defmodule HermitWeb.ProviderImportLive do
   end
 
   # --- Helpers ---
+
+  # Interleaves a list of lists of servers, picking one from each list in round-robin fashion.
+  defp interleave_lists(lists) do
+    lists = Enum.reject(lists, &(&1 == []))
+
+    if lists == [] do
+      []
+    else
+      heads = Enum.map(lists, &hd/1)
+      tails = Enum.map(lists, &tl/1)
+      heads ++ interleave_lists(tails)
+    end
+  end
 
   defp handle_progress(:wg_files, entry, socket) do
     if entry.done? do

@@ -23,14 +23,21 @@ end
 config :hermit, HermitWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "3000"))]
 
-if config_env() == :prod do
+if config_env() in [:dev, :prod] do
+  database_name = if config_env() == :dev, do: "hermit_dev.db", else: "hermit_prod.db"
+
+  storage_default =
+    if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: "/app/storage"
+
   database_path =
     System.get_env("DATABASE_PATH") ||
-      Path.join(System.get_env("STORAGE_BASE_PATH", "/app/storage"), "hermit_prod.db")
+      Path.join(System.get_env("STORAGE_BASE_PATH", storage_default), database_name)
 
-  config :hermit, Hermit.Repo,
-    database: database_path,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE", "5"))
+  config :hermit, Hermit.Repo, database: database_path
+
+  if config_env() == :prod do
+    config :hermit, Hermit.Repo, pool_size: String.to_integer(System.get_env("POOL_SIZE", "5"))
+  end
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # We read it from the environment variable SECRET_KEY_BASE, or check the storage directory

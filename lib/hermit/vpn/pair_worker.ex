@@ -1160,12 +1160,17 @@ defmodule Hermit.Vpn.PairWorker do
                     case res do
                       {:ok, port_or_pid} ->
                         if is_port(port_or_pid) do
-                          Port.connect(port_or_pid, parent)
+                          try do
+                            Port.connect(port_or_pid, parent)
+                            send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
+                          rescue
+                            ArgumentError ->
+                              send(parent, {:bootstrap_result, self(), {:error, :port_closed}})
+                          end
                         else
                           Process.unlink(port_or_pid)
+                          send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
                         end
-
-                        send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
 
                       other ->
                         send(parent, {:bootstrap_result, self(), other})

@@ -54,7 +54,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         _ = File.rm(log_path)
 
         shell_cmd =
-          "exec ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=41641 --no-logs-no-support > #{log_path} 2>&1"
+          "ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=41641 --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
 
         try do
           # Port is owned by the calling process (PairWorker)
@@ -63,14 +63,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               :binary,
               args: ["-c", shell_cmd]
             ])
-
-          case Port.info(port, :os_pid) do
-            {:os_pid, os_pid} ->
-              File.write!(pid_path, "#{os_pid}")
-
-            _ ->
-              :ok
-          end
 
           # Wait up to 2 seconds for socket creation
           wait_for_socket(socket_path)

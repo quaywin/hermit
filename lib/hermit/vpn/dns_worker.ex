@@ -687,15 +687,10 @@ defmodule Hermit.Vpn.DnsWorker do
             _ = File.rm(log_path)
 
             shell_cmd =
-              "exec ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{41640 + endpoint_id} --no-logs-no-support > #{log_path} 2>&1"
+              "ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{41640 + endpoint_id} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
 
             try do
               p = Port.open({:spawn_executable, "/bin/sh"}, [:binary, args: ["-c", shell_cmd]])
-
-              case Port.info(p, :os_pid) do
-                {:os_pid, os_pid} -> File.write!(pid_path, "#{os_pid}")
-                _ -> :ok
-              end
 
               wait_for_socket(socket_path)
               p

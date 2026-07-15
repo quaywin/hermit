@@ -958,6 +958,54 @@ defmodule Hermit.Vpn.PairWorkerTest do
     GenServer.stop(pid)
   end
 
+  test "gracefully handles closed port during bootstrap without crashing" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+      File.rm_rf!(Path.expand("storage/test_pair_closed_port", File.cwd!()))
+    end)
+
+    args = %{
+      id: "test_pair_closed_port",
+      wg_config: "[Interface]\nPrivateKey = wgpkey\n",
+      ts_auth_key: "tskey-12345"
+    }
+
+    # Start the worker
+    {:ok, pid} = PairWorker.start_link(args)
+
+    # Use sys to replace the inbound module with ClosedPortInbound
+    :sys.replace_state(pid, fn state ->
+      %{state | inbound_module: ClosedPortInbound}
+    end)
+
+    # Set state back to :starting for Tailscale and clear bootstrap_task to trigger a new bootstrap
+    :sys.replace_state(pid, fn state ->
+      %{state | wg_status: :running, ts_status: :starting, bootstrap_task: nil}
+    end)
+
+    # Trigger health check/bootstrap
+    send(pid, {:check_wg_health, 10})
+
+    # Wait for the Task to start, execute, and complete
+    Process.sleep(200)
+
+    # Check that ts_status transitioned to :error instead of crashing the process
+    state = GenServer.call(pid, :get_state)
+    assert state.ts_status == :error
+    assert state.ts_error_reason =~ "Tailscale failed: :port_closed"
+
+    GenServer.stop(pid)
+  end
+
   defp wait_until_status(pid, target_status, attempts \\ 300)
 
   defp wait_until_status(_pid, target_status, 0) do
@@ -974,4 +1022,31 @@ defmodule Hermit.Vpn.PairWorkerTest do
       wait_until_status(pid, target_status, attempts - 1)
     end
   end
+end
+
+defmodule ClosedPortInbound do
+  @behaviour Hermit.Vpn.Inbound
+
+  @impl true
+  def bootstrap(_id, _outbound_if, _storage_dir, _config) do
+    # Open a dummy port and close it to simulate a closed port
+    port = Port.open({:spawn, "true"}, [:binary])
+    Port.close(port)
+    {:ok, port}
+  end
+
+  @impl true
+  def cleanup(_id, _storage_dir), do: :ok
+
+  @impl true
+  def get_status(_id, _storage_dir), do: :stopped
+
+  @impl true
+  def get_network_info(_id, _storage_dir), do: %{}
+
+  @impl true
+  def approve_exit_node(_id), do: :ok
+
+  @impl true
+  def update_settings(_id, _config), do: {:ok, :updated}
 end

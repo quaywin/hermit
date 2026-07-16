@@ -156,7 +156,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                 "Pre-updating Tailscale App Connector ACL for domains: #{inspect(domains)}"
               )
 
-              case do_update_app_connector_acl(api_key, tailnet, tag, domains) do
+              access_sources = parse_access_sources(config)
+
+              case do_update_app_connector_acl(
+                     api_key,
+                     tailnet,
+                     tag,
+                     domains,
+                     access_sources,
+                     true
+                   ) do
                 {:ok, _} ->
                   Logger.info("Tailscale ACL pre-updated successfully.")
 
@@ -332,7 +341,9 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               "Pre-updating Tailscale App Connector ACL for domains: #{inspect(domains)}"
             )
 
-            case do_update_app_connector_acl(api_key, tailnet, tag, domains) do
+            access_sources = parse_access_sources(config)
+
+            case do_update_app_connector_acl(api_key, tailnet, tag, domains, access_sources, true) do
               {:ok, _} ->
                 Logger.info("Tailscale ACL pre-updated successfully.")
 
@@ -394,6 +405,9 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     else
       # 1. Attempt to delete the device from Tailscale tailnet via API
       try_delete_via_api(pair_id)
+
+      # 1b. Attempt to clean up ACL from Tailscale via API
+      try_cleanup_acl_via_api(pair_id)
 
       pid_path = Path.join([storage_dir, "tailscale", "tailscaled.pid"])
       Logger.info("Stopping Tailscale daemon for pair: hermit_ts_#{pair_id}")
@@ -519,6 +533,64 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   rescue
     e ->
       Logger.error("Error during try_delete_via_api: #{inspect(e)}")
+      :ok
+  end
+
+  defp try_cleanup_acl_via_api(pair_id) do
+    case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id) do
+      nil ->
+        Logger.info("VpnPair #{pair_id} not found in DB during cleanup. Skipping ACL cleanup.")
+        :ok
+
+      pair ->
+        pair = Hermit.Repo.preload(pair, [:inbound_profile])
+        config = pair.inbound_config || %{}
+        profile_config = (pair.inbound_profile && pair.inbound_profile.config) || %{}
+
+        api_key =
+          Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
+            Map.get(profile_config, "ts_api_key") || Map.get(profile_config, :ts_api_key) ||
+            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+
+        tailnet =
+          Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+            Map.get(profile_config, "ts_tailnet") || Map.get(profile_config, :ts_tailnet) ||
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+
+        if ((api_key && api_key != "") and tailnet) && tailnet != "" do
+          tag = get_connector_tag(pair_id, config)
+          access_sources = parse_access_sources(config)
+          Logger.info("Attempting to clean up Tailscale ACL for App Connector tag #{tag}...")
+
+          try do
+            case do_update_app_connector_acl(api_key, tailnet, tag, [], access_sources, false) do
+              {:ok, _} ->
+                Logger.info("Successfully cleaned up Tailscale ACL for tag #{tag}")
+                :ok
+
+              {:error, reason} ->
+                Logger.error(
+                  "Failed to clean up Tailscale ACL for tag #{tag}: #{inspect(reason)}"
+                )
+
+                {:error, reason}
+            end
+          rescue
+            e ->
+              Logger.error(
+                "Exception raised during Tailscale ACL cleanup for tag #{tag}: #{inspect(e)}"
+              )
+
+              {:error, {:exception, e}}
+          end
+        else
+          Logger.info("Tailscale API credentials not configured. Skipping API ACL cleanup.")
+          :ok
+        end
+    end
+  rescue
+    e ->
+      Logger.error("Error during try_cleanup_acl_via_api: #{inspect(e)}")
       :ok
   end
 
@@ -732,7 +804,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "Updating Tailscale App Connector ACL for domains: #{inspect(domains)} (tag: #{tag})"
           )
 
-          connector_res = do_update_app_connector_acl(api_key, tailnet, tag, domains)
+          access_sources = parse_access_sources(config)
+
+          connector_res =
+            do_update_app_connector_acl(
+              api_key,
+              tailnet,
+              tag,
+              domains,
+              access_sources,
+              advertise_connector
+            )
 
           case {routes_res, connector_res} do
             {{:error, r_err}, {:error, c_err}} -> {:error, {:multiple_errors, r_err, c_err}}
@@ -908,8 +990,10 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           {:error, :missing_credentials}
         else
+          access_sources = parse_access_sources(config)
+
           try do
-            do_update_app_connector_acl(api_key, tailnet, tag, domains)
+            do_update_app_connector_acl(api_key, tailnet, tag, domains, access_sources, true)
           rescue
             e ->
               Logger.error("Exception raised during Tailscale ACL update: #{inspect(e)}")
@@ -1032,8 +1116,11 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         {:error, :missing_credentials}
 
       true ->
+        config = Map.new(profile.config || %{}, fn {k, v} -> {to_string(k), v} end)
+        access_sources = parse_access_sources(config)
+
         try do
-          do_update_app_connector_acl(api_key, tailnet, tag, domains)
+          do_update_app_connector_acl(api_key, tailnet, tag, domains, access_sources, true)
         rescue
           e ->
             Logger.error("Exception raised during Tailscale ACL update: #{inspect(e)}")
@@ -1042,7 +1129,19 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     end
   end
 
-  defp do_update_app_connector_acl(api_key, tailnet, tag, domains) do
+  defp do_update_app_connector_acl(api_key, tailnet, tag, domains, access_sources, enabled) do
+    do_update_app_connector_acl(api_key, tailnet, tag, domains, access_sources, enabled, 3)
+  end
+
+  defp do_update_app_connector_acl(
+         api_key,
+         tailnet,
+         tag,
+         domains,
+         access_sources,
+         enabled,
+         retries
+       ) do
     acl_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/acl"
 
     case Req.get(acl_url,
@@ -1083,14 +1182,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             tag = if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
             domains = Enum.map(domains, &String.trim/1) |> Enum.reject(&(&1 == ""))
 
-            if domains == [] and not has_connector_tag?(acl_map, tag) do
+            if domains == [] and not enabled and not has_connector_tag?(acl_map, tag) do
               Logger.info(
                 "Connector tag #{tag} not present in Tailscale ACL and no domains provided. Skipping ACL update."
               )
 
               {:ok, :skipped_no_change}
             else
-              updated_acl_map = update_acl_for_app_connector(acl_map, tag, domains)
+              updated_acl_map =
+                update_acl_for_app_connector(acl_map, tag, domains, access_sources, enabled)
+
               hujson_str = "// Hermit App Connector Update\n" <> Jason.encode!(updated_acl_map)
 
               req_opts =
@@ -1120,6 +1221,23 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                   Logger.info("Successfully updated Tailscale ACL for App Connector tag #{tag}")
                   {:ok, :updated}
 
+                {:ok, %{status: 412, body: _body}} when retries > 0 ->
+                  Logger.warning(
+                    "Tailscale ACL update conflict (HTTP 412 ETag mismatch). Retrying in 500ms... (Attempts left: #{retries})"
+                  )
+
+                  Process.sleep(500)
+
+                  do_update_app_connector_acl(
+                    api_key,
+                    tailnet,
+                    tag,
+                    domains,
+                    access_sources,
+                    enabled,
+                    retries - 1
+                  )
+
                 {:ok, %{status: status, body: body}} ->
                   Logger.error(
                     "Failed to update Tailscale ACL (HTTP #{status}): #{inspect(body)}"
@@ -1148,9 +1266,19 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   def update_acl_for_app_connector(acl_map, tag, domains) do
+    enabled = domains != []
+    update_acl_for_app_connector(acl_map, tag, domains, nil, enabled)
+  end
+
+  def update_acl_for_app_connector(acl_map, tag, domains, access_sources) do
+    enabled = domains != []
+    update_acl_for_app_connector(acl_map, tag, domains, access_sources, enabled)
+  end
+
+  def update_acl_for_app_connector(acl_map, tag, domains, access_sources, enabled) do
     tag = if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
 
-    if domains == [] do
+    if not enabled do
       tag_owners = Map.get(acl_map, "tagOwners", %{})
       updated_tag_owners = Map.delete(tag_owners, tag)
 
@@ -1207,7 +1335,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       updated_auto_approvers = Map.put(auto_approvers, "routes", updated_routes)
 
       grants = Map.get(acl_map, "grants", [])
-      updated_grants = update_grants(grants, tag)
+      updated_grants = update_grants(grants, tag, access_sources)
 
       acl_map
       |> Map.put("tagOwners", updated_tag_owners)
@@ -1336,34 +1464,44 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         conn
       end
     end)
-    |> Enum.reject(fn conn ->
-      Map.get(conn, "domains", []) == [] and current_tag not in Map.get(conn, "connectors", [])
-    end)
   end
 
-  defp update_grants(grants, tag) do
-    existing_grant_index =
-      Enum.find_index(grants, fn grant ->
-        Map.get(grant, "src") == ["autogroup:member"] and
-          Map.get(grant, "dst") == [tag]
-      end)
+  defp update_grants(grants, tag, access_sources) do
+    existing_grant = Enum.find(grants, fn grant -> Map.get(grant, "dst") == [tag] end)
 
-    if existing_grant_index do
-      grant = Enum.at(grants, existing_grant_index)
-      ip_list = Map.get(grant, "ip", [])
-      updated_ip = ip_list
-      updated_ip = if "tcp:53" in updated_ip, do: updated_ip, else: updated_ip ++ ["tcp:53"]
-      updated_ip = if "udp:53" in updated_ip, do: updated_ip, else: updated_ip ++ ["udp:53"]
-      updated_grant = Map.put(grant, "ip", updated_ip)
-      List.replace_at(grants, existing_grant_index, updated_grant)
+    sources =
+      cond do
+        is_list(access_sources) and access_sources != [] ->
+          access_sources
+
+        existing_grant ->
+          Map.get(existing_grant, "src", ["autogroup:member"])
+
+        true ->
+          ["autogroup:member"]
+      end
+
+    grants = Enum.reject(grants, fn grant -> Map.get(grant, "dst") == [tag] end)
+
+    new_grant = %{
+      "src" => sources,
+      "dst" => [tag],
+      "ip" => ["tcp:53", "udp:53"]
+    }
+
+    grants ++ [new_grant]
+  end
+
+  defp parse_access_sources(config) do
+    mode = Map.get(config, "advertise_connector_access_mode") || "all"
+    sources_str = Map.get(config, "advertise_connector_access_sources") || ""
+
+    if mode == "custom" and String.trim(sources_str) != "" do
+      String.split(sources_str, [",", "\n"])
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
     else
-      new_grant = %{
-        "src" => ["autogroup:member"],
-        "dst" => [tag],
-        "ip" => ["tcp:53", "udp:53"]
-      }
-
-      grants ++ [new_grant]
+      ["autogroup:member"]
     end
   end
 
@@ -1524,7 +1662,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     end
   end
 
-  defp get_connector_tag(pair_id, config) do
+  def get_connector_tag(pair_id, config) do
     tag = Map.get(config, "advertise_connector_tag")
 
     default_tag = "tag:connector-#{String.replace(pair_id, "_", "-")}"

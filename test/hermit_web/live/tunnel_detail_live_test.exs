@@ -378,7 +378,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Tailscale routes and DNS settings updated"
+    assert html =~ "Tailscale network settings updated"
 
     # Verify DB was updated with DNS resolvers and advertise routes
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "toggle_test")
@@ -396,7 +396,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Tailscale routes and DNS settings updated"
+    assert html =~ "Tailscale network settings updated"
 
     # Verify DB has default DNS settings
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "toggle_test")

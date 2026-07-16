@@ -227,6 +227,20 @@ If you need to change this port to a different one (e.g., `41643`):
    ```
 3. Open the corresponding port on your firewall instead.
 
+#### Tailscale Performance Optimization (Highly Recommended)
+
+Hermit automatically implements the high-performance network tuning recommended by Tailscale:
+- **UDP Buffer & Queue Scaling**: Hermit automatically configures network sysctls (`rmem_max`, `wmem_max`, `udp_mem`, and `netdev_max_backlog`) at startup.
+- **Namespace UDP GRO Offloading**: Hermit automatically runs `ethtool` to enable `rx-udp-gro-forwarding` and disable `rx-gro-list` on all virtual interfaces inside the isolated network namespaces.
+
+**Host-level Optimization (Manual):**
+Because Hermit runs in an isolated container (especially when using **Sysbox**), it cannot modify the host's physical network hardware. To get the maximum throughput:
+1. Ensure your host system runs Linux Kernel **6.2** or later.
+2. Manually enable UDP GRO on your host's primary physical network interface (this single-line command auto-detects the interface and works on all shells including Bash, Zsh, and Fish):
+   ```bash
+   sudo sh -c 'ethtool -K $(ip -o route get 8.8.8.8 | cut -f 5 -d " ") rx-udp-gro-forwarding on rx-gro-list off'
+   ```
+
 ---
 
 ## Why Docker?

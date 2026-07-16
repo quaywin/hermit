@@ -80,6 +80,31 @@ else
   fi
 fi
 
+# 3.5 Host-level Tailscale Performance Optimization (Optional but Recommended)
+if command -v ethtool >/dev/null 2>&1; then
+  echo ""
+  echo "=== Tailscale UDP GRO Performance Optimization ==="
+  NETDEV=$(ip -o route get 8.8.8.8 | cut -f 5 -d " " 2>/dev/null || echo "")
+  if [ -n "$NETDEV" ]; then
+    echo "Detected primary network interface: $NETDEV"
+    read -p "Do you want to enable UDP GRO optimization on this interface and make it persist on boot? (y/N): " gro_choice < /dev/tty
+    if [[ "$gro_choice" =~ ^[Yy]$ ]]; then
+      echo "➜ Applying host-level ethtool optimization..."
+      sudo ethtool -K "$NETDEV" rx-udp-gro-forwarding on rx-gro-list off || echo "⚠️  Failed to apply ethtool optimization immediately (requires sudo privileges or card/driver support)."
+      
+      echo "➜ Making optimization persistent on boot via crontab..."
+      (sudo crontab -l 2>/dev/null | grep -v "rx-udp-gro-forwarding" || true; echo "@reboot ethtool -K $NETDEV rx-udp-gro-forwarding on rx-gro-list off") | sudo crontab -
+      echo "✓ Added reboot task to root's crontab."
+    else
+      echo "➜ Skipping host-level network optimization."
+    fi
+  fi
+else
+  echo ""
+  echo "⚠️  Note: 'ethtool' is not installed on the host. Skipping automatic host-level network optimization."
+  echo "   To optimize Tailscale throughput later, install 'ethtool' and run the recommended commands in the README."
+fi
+
 # 4. Launch the application
 echo "=== Starting Container ==="
 docker compose up -d

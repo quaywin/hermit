@@ -300,3 +300,25 @@ If you are looking for other tools to manage VPNs or WireGuard tunnels, here is 
 | **Hermit** | Multi-tunnel orchestrator | Web Dashboard | Yes | Yes | Yes (isolated `netns`) |
 | **[wireproxy](https://github.com/octeep/wireproxy)** | Userspace WireGuard proxy | CLI / Config | Yes | No | No (userspace proxy) |
 | **[Gluetun](https://github.com/qdm12/gluetun)** | Docker-focused VPN client | CLI / Config | Yes | No | No (uses Docker network links) |
+
+---
+
+## Inspiration & Origins
+
+The development of **Hermit** was shaped by a few core ideas and existing tools:
+
+* **Tailscale Exit Nodes + Mullvad VPN**: The initial spark came from wanting a clean way to combine the ease of Tailscale’s mesh networking with the privacy of Mullvad VPN. The goal was to dynamically route traffic from Tailscale devices through isolated Mullvad WireGuard tunnels.
+* **Self-hosted DNS inside Tailnet**: Instead of relying on external DNS services, the author set out to run a dedicated DNS Resolver node directly inside the Tailnet. The early Erlang/Elixir DNS implementation was built with reference to the **`dns_erlang`** specification and Kip Cole's **[dns](https://github.com/kipcole9/dns)** library.
+* **Evolution into a Control D Alternative**: Once a basic DNS server was operational inside the Tailnet, we saw the potential of dynamic, multi-tenant DNS routing. Inspired by the architecture of commercial services like **Control D**, Hermit evolved to support multiple isolated **DNS Endpoints** (each with dedicated DoH tokens or Tailscale Node IPs) mapped to custom **DNS Profiles** (blocking, bypassing, or redirecting domains through specific VPN Pairs).
+
+---
+
+## Acknowledgments & Credits
+
+Hermit is built on top of and inspired by several amazing open-source projects:
+
+* **[WireGuard](https://www.wireguard.com/)** - For the extremely fast, modern, and secure VPN protocol.
+* **[Tailscale](https://tailscale.com/)** - For making private networking easy and secure.
+* **[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)** & **[GoodbyeAds](https://github.com/jerryn70/GoodbyeAds)** - For providing the blocklists that power our DNS control plane.
+* **[dns](https://github.com/kipcole9/dns)** - The Elixir DNS library that helped shape our query parser and packet builder.
+* **Elixir & Phoenix LiveView** - For enabling a real-time system dashboard with minimal overhead.

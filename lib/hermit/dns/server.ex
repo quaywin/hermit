@@ -81,13 +81,15 @@ defmodule Hermit.Dns.Server do
     # Create dynamic ETS table for pending_queries to allow concurrent read/write
     pending_table = :"dns_pending_queries_#{endpoint_id}"
 
-    :ets.new(pending_table, [
-      :set,
-      :public,
-      :named_table,
-      read_concurrency: true,
-      write_concurrency: :auto
-    ])
+    if :ets.info(pending_table) == :undefined do
+      :ets.new(pending_table, [
+        :set,
+        :public,
+        :named_table,
+        read_concurrency: true,
+        write_concurrency: :auto
+      ])
+    end
 
     state = %{
       socket: nil,
@@ -139,6 +141,8 @@ defmodule Hermit.Dns.Server do
   end
 
   defp do_try_bind_socket(%{profile_id: profile_id, port: port} = state) do
+    octet = div(profile_id, 250) |> rem(250)
+
     udp_opts =
       if mock?() do
         [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
@@ -147,7 +151,7 @@ defmodule Hermit.Dns.Server do
           :binary,
           active: 1000,
           reuseaddr: true,
-          ip: {10, 251, profile_id, 1},
+          ip: {10, 251, octet, 1},
           recbuf: 1024 * 1024,
           read_packets: 1000
         ]
@@ -157,7 +161,7 @@ defmodule Hermit.Dns.Server do
       if mock?() do
         [:binary, packet: 2, active: false, reuseaddr: true]
       else
-        [:binary, packet: 2, active: false, reuseaddr: true, ip: {10, 251, profile_id, 1}]
+        [:binary, packet: 2, active: false, reuseaddr: true, ip: {10, 251, octet, 1}]
       end
 
     case :gen_udp.open(port, udp_opts) do

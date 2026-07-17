@@ -85,8 +85,21 @@ defmodule Hermit.Application do
           Enum.each(endpoints, fn endpoint ->
             if endpoint.enabled do
               case Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, endpoint.inbound_profile_id) do
-                {:ok, _} -> :ok
-                _ -> :error
+                {:ok, _} ->
+                  :ok
+
+                error ->
+                  IO.inspect(error,
+                    label: "Failed to boot DNS endpoint #{endpoint.id} on startup"
+                  )
+
+                  try do
+                    endpoint
+                    |> Ecto.Changeset.change(%{enabled: false})
+                    |> Hermit.Repo.update()
+                  rescue
+                    _ -> :ok
+                  end
               end
             end
           end)
@@ -118,6 +131,14 @@ defmodule Hermit.Application do
 
                 error ->
                   IO.inspect(error, label: "Failed to boot VPN pair #{pair.pair_id} on startup")
+
+                  try do
+                    pair
+                    |> Ecto.Changeset.change(%{status: "error"})
+                    |> Hermit.Repo.update()
+                  rescue
+                    _ -> :ok
+                  end
               end
             end
           end)

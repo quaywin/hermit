@@ -317,9 +317,10 @@ defmodule Hermit.Vpn.DnsWorker do
     host_if = "dns_h_#{endpoint_id}"
     ns_if = "dns_n_#{endpoint_id}"
     table_id = 1000 + endpoint_id
-    host_ip = "10.251.#{endpoint_id}.1"
-    ns_ip = "10.251.#{endpoint_id}.2"
-    subnet = "10.251.#{endpoint_id}.0/30"
+    octet = div(endpoint_id, 250) |> rem(250)
+    host_ip = "10.251.#{octet}.1"
+    ns_ip = "10.251.#{octet}.2"
+    subnet = "10.251.#{octet}.0/30"
     port = 5400 + endpoint_id
 
     socket_path = "/run/tailscaled.dns_#{endpoint_id}.socket"
@@ -800,7 +801,8 @@ defmodule Hermit.Vpn.DnsWorker do
     ns = "hermit_dns_endpoint_#{endpoint_id}"
     host_if = "dns_h_#{endpoint_id}"
     table_id = 1000 + endpoint_id
-    host_ip = "10.251.#{endpoint_id}.1"
+    octet = div(endpoint_id, 250) |> rem(250)
+    host_ip = "10.251.#{octet}.1"
 
     try do
       System.cmd("ip", ["link", "delete", host_if], stderr_to_stdout: true)

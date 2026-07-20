@@ -1561,6 +1561,87 @@ defmodule Hermit.Vpn.PairWorker do
     Keyword.get(config, :mock, false)
   end
 
+  defp diagnose_wg_handshake_failure(state) do
+    config_content = state.wg_config_content || ""
+
+    endpoint_host =
+      case Regex.run(~r/^\s*Endpoint\s*=\s*(\[[^\]]+\]|[^:\s]+)\s*:\s*\d+/mi, config_content) do
+        [_, host] ->
+          host
+          |> String.trim_leading("[")
+          |> String.trim_trailing("]")
+
+        _ ->
+          nil
+      end
+
+    private_key =
+      case Regex.run(~r/^\s*PrivateKey\s*=\s*([^\s#\n\r]+)/m, config_content) do
+        [_, key] -> String.trim(key)
+        _ -> nil
+      end
+
+    endpoint_ip =
+      if endpoint_host do
+        case resolve_host(endpoint_host) do
+          {:ok, ip_str} -> ip_str
+          _ -> endpoint_host
+        end
+      else
+        nil
+      end
+
+    ping_ok =
+      if endpoint_ip && not mock?() do
+        case System.cmd("ping", ["-c", "1", "-W", "1", endpoint_ip], stderr_to_stdout: true) do
+          {_, 0} -> true
+          _ -> false
+        end
+      else
+        true
+      end
+
+    duplicate_pair_id =
+      if private_key && private_key != "" do
+        find_duplicate_private_key_pair(private_key, state.id)
+      else
+        nil
+      end
+
+    cond do
+      duplicate_pair_id ->
+        "Handshake Refused: Duplicate PrivateKey detected with active tunnel '#{duplicate_pair_id}'. VPN providers (NordVPN/Mullvad) drop duplicate key connections. Please use a unique PrivateKey for this profile."
+
+      not ping_ok and endpoint_ip != nil ->
+        "Endpoint Unreachable: Cannot connect to #{endpoint_host} (#{endpoint_ip}). Packet loss 100%. IP address may be blocked by ISP/firewall or server is offline. Try selecting a different server/region."
+
+      true ->
+        "WireGuard Handshake Refused: Server #{endpoint_ip || endpoint_host || "endpoint"} is reachable but rejected UDP handshake. Verify PrivateKey and PublicKey validity."
+    end
+  end
+
+  defp find_duplicate_private_key_pair(private_key, current_pair_id) do
+    all_pairs = list_pairs()
+
+    conflicting =
+      Enum.find(all_pairs, fn pair ->
+        pair.id != current_pair_id and
+          pair.wg_status in [:running, :starting] and
+          get_pair_private_key(pair) == private_key
+      end)
+
+    if conflicting, do: conflicting.id, else: nil
+  end
+
+  defp get_pair_private_key(pair) do
+    config_content = pair.wg_config_content || ""
+
+    case Regex.run(~r/^\s*PrivateKey\s*=\s*([^\s#\n\r]+)/m, config_content) do
+      [_, key] -> String.trim(key)
+      _ -> nil
+    end
+  end
+
   defp trigger_handshake(wg_name) do
     if not mock?() do
       Task.start(fn ->
@@ -1602,16 +1683,17 @@ defmodule Hermit.Vpn.PairWorker do
   defp retry_health_check(0, state) do
     Logger.error("WireGuard tunnel handshake timeout for pair: #{state.id}")
 
+    diagnostic_reason = diagnose_wg_handshake_failure(state)
+
     error_state = %{
       state
       | wg_status: :error,
-        wg_error_reason: "WireGuard handshake timeout",
+        wg_error_reason: diagnostic_reason,
         ts_status: if(state.ts_status == :starting, do: :stopped, else: state.ts_status),
         ts_error_reason: nil
     }
 
     updated_state = broadcast_update(error_state)
-    maybe_schedule_wg_recovery(updated_state)
     updated_state = schedule_metrics_poll(updated_state)
     {:noreply, updated_state}
   end

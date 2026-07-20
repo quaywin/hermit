@@ -355,7 +355,11 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
             {:ok, "wg0"}
 
           {:error, reason} ->
-            System.cmd("ip", ["link", "delete", host_if_name])
+            case System.cmd("ip", ["link", "show", host_if_name], stderr_to_stdout: true) do
+              {_, 0} -> System.cmd("ip", ["link", "delete", host_if_name])
+              _ -> :ok
+            end
+
             System.cmd("ip", ["netns", "del", wg_name])
             File.rm_rf(netns_dns_dir)
             {:error, reason}
@@ -380,8 +384,11 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
       Logger.info("Stopping WireGuard netns: #{wg_name}")
 
       try do
-        # Delete host interface if any
-        System.cmd("ip", ["link", "delete", host_if_name])
+        # Delete host interface if it exists on host
+        case System.cmd("ip", ["link", "show", host_if_name], stderr_to_stdout: true) do
+          {_, 0} -> System.cmd("ip", ["link", "delete", host_if_name])
+          _ -> :ok
+        end
 
         # Delete the namespace
         if netns_exists?(wg_name) do

@@ -61,8 +61,11 @@ defmodule Hermit.Vpn.Inbound.Proxy do
         end
       end)
 
-      # 2. Delete host veth interface
-      System.cmd("ip", ["link", "delete", vh_name])
+      # 2. Delete host veth interface if it exists
+      case System.cmd("ip", ["link", "show", vh_name], stderr_to_stdout: true) do
+        {_, 0} -> System.cmd("ip", ["link", "delete", vh_name])
+        _ -> :ok
+      end
 
       # 3. Clean up config/info files
       File.rm(Path.join(storage_dir, "proxy_info.json"))

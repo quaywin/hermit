@@ -40,7 +40,10 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
     active_profile_ids =
       try do
         import Ecto.Query
-        Hermit.Repo.all(from(i in Hermit.Vpn.InboundProfile, select: i.id))
+
+        Hermit.Repo.all(
+          from(i in Hermit.Vpn.InboundProfile, where: i.type == "tailscale", select: i.id)
+        )
       rescue
         _ -> []
       end
@@ -105,67 +108,71 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
         {{profile_id, "100.64.0.5"}, "mock-client", now}
       ])
     else
-      dns_socket = "/run/tailscaled.dns_#{profile_id}.socket"
+      profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
 
-      pair_sockets =
-        try do
-          import Ecto.Query
+      if profile && profile.type == "tailscale" do
+        dns_socket = "/run/tailscaled.dns_#{profile_id}.socket"
 
-          Hermit.Repo.all(
-            from(p in Hermit.Vpn.VpnPair, where: p.inbound_profile_id == ^profile_id)
-          )
-          |> Enum.map(fn pair -> "/run/tailscaled.#{pair.pair_id}.socket" end)
-        rescue
-          _ -> []
-        end
+        pair_sockets =
+          try do
+            import Ecto.Query
 
-      candidate_sockets = [dns_socket | pair_sockets]
-      # Always insert local mappings
-      :ets.insert(@table, [
-        {{profile_id, "127.0.0.1"}, "localhost", now}
-      ])
-
-      # Try candidate sockets sequentially until one succeeds
-      result =
-        Enum.find_value(candidate_sockets, fn socket ->
-          if File.exists?(socket) do
-            case query_tailscale_status(socket) do
-              {:ok, data} -> {:ok, socket, data}
-              _ -> nil
-            end
-          else
-            nil
+            Hermit.Repo.all(
+              from(p in Hermit.Vpn.VpnPair, where: p.inbound_profile_id == ^profile_id)
+            )
+            |> Enum.map(fn pair -> "/run/tailscaled.#{pair.pair_id}.socket" end)
+          rescue
+            _ -> []
           end
-        end)
 
-      case result do
-        {:ok, _socket, data} ->
-          nodes = extract_nodes(data)
+        candidate_sockets = [dns_socket | pair_sockets]
+        # Always insert local mappings
+        :ets.insert(@table, [
+          {{profile_id, "127.0.0.1"}, "localhost", now}
+        ])
 
-          entries =
-            Enum.flat_map(nodes, fn node ->
-              dns_name = Map.get(node, "DNSName")
-              hostname = Map.get(node, "HostName")
-              ips = Map.get(node, "TailscaleIPs") || []
-              device_name = get_device_name(dns_name, hostname)
-
-              if device_name do
-                Enum.map(ips, fn ip ->
-                  {{profile_id, ip}, device_name, now}
-                end)
-              else
-                []
+        # Try candidate sockets sequentially until one succeeds
+        result =
+          Enum.find_value(candidate_sockets, fn socket ->
+            if File.exists?(socket) do
+              case query_tailscale_status(socket) do
+                {:ok, data} -> {:ok, socket, data}
+                _ -> nil
               end
-            end)
+            else
+              nil
+            end
+          end)
 
-          if length(entries) > 0 do
-            :ets.insert(@table, entries)
-          end
+        case result do
+          {:ok, _socket, data} ->
+            nodes = extract_nodes(data)
 
-        _ ->
-          Logger.warning(
-            "DnsDeviceResolver: Failed to query Tailscale status on any candidate sockets for profile #{profile_id}"
-          )
+            entries =
+              Enum.flat_map(nodes, fn node ->
+                dns_name = Map.get(node, "DNSName")
+                hostname = Map.get(node, "HostName")
+                ips = Map.get(node, "TailscaleIPs") || []
+                device_name = get_device_name(dns_name, hostname)
+
+                if device_name do
+                  Enum.map(ips, fn ip ->
+                    {{profile_id, ip}, device_name, now}
+                  end)
+                else
+                  []
+                end
+              end)
+
+            if length(entries) > 0 do
+              :ets.insert(@table, entries)
+            end
+
+          _ ->
+            Logger.warning(
+              "DnsDeviceResolver: Failed to query Tailscale status on any candidate sockets for profile #{profile_id}"
+            )
+        end
       end
     end
   end

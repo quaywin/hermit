@@ -12,6 +12,10 @@
   <a href="https://phoenixframework.org"><img src="https://img.shields.io/badge/framework-Phoenix-orange.svg" alt="Framework"></a>
 </p>
 
+<p align="center">
+  <img src="priv/static/images/screenshot.png" alt="Hermit Dashboard Preview" width="100%" />
+</p>
+
 ---
 
 Hermit is a modular multi-tunnel orchestrator and manager for VPN connection pairs running inside isolated network namespaces (`netns`). It decouples configurations into reusable **Inbound Profiles** (e.g., SOCKS5/HTTP Proxy, Tailscale) and **Outbound Profiles** (e.g., WireGuard, Local), allowing you to easily pair, share configurations, and manage multiple tunnels side-by-side.

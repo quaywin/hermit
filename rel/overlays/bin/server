@@ -31,6 +31,19 @@ fi
 
 cd -P -- "$(dirname -- "$0")"
 
+# Setup 512MB swap memory if permitted and not active
+if [ -w /proc/sys/vm/swappiness ] && [ "$(swapon --show | wc -l)" -le 1 ]; then
+  if [ ! -f /swapfile ]; then
+    echo "Creating and activating 512MB swap file..."
+    (fallocate -l 512M /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=512) 2>/dev/null || true
+    chmod 0600 /swapfile 2>/dev/null || true
+    mkswap /swapfile 2>/dev/null || true
+  fi
+  swapon /swapfile 2>/dev/null || true
+  sysctl -w vm.swappiness=10 2>/dev/null || true
+  sysctl -w vm.overcommit_memory=1 2>/dev/null || true
+fi
+
 # Apply host-level performance tunings if running with sufficient privileges
 if [ -w /proc/sys/net/core/rmem_max ]; then
   echo "Applying network performance tuning..."

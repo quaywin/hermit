@@ -14,6 +14,7 @@ defmodule HermitWeb.DnsProfileLiveTest do
 
     adguard = Hermit.Repo.get_by!(Hermit.Dns.Blocklist, name: "AdGuard DNS Filter")
     goodbye = Hermit.Repo.get_by!(Hermit.Dns.Blocklist, name: "GoodbyeAds Filter")
+    {:ok, goodbye} = goodbye |> Ecto.Changeset.change(%{enabled: true}) |> Hermit.Repo.update()
     adult = Hermit.Repo.get_by!(Hermit.Dns.Blocklist, name: "Adult Content Filter")
 
     {:ok, default_profile: default_profile, adguard: adguard, goodbye: goodbye, adult: adult}

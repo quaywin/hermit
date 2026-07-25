@@ -31,7 +31,7 @@ defmodule Hermit.Repo.Migrations.CreateDnsBlocklists do
 
     execute """
     INSERT INTO dns_blocklists (name, url, enabled, description, format, rules_count, inserted_at, updated_at)
-    VALUES ('GoodbyeAds Filter', 'https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Hosts/GoodbyeAds.txt', 1, 'Blocks aggressive mobile trackers, ads, and telemetry.', 'hosts', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    VALUES ('GoodbyeAds Filter', 'https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Hosts/GoodbyeAds.txt', 0, 'Blocks aggressive mobile trackers, ads, and telemetry.', 'hosts', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     """
 
     # Migrate existing configurations:

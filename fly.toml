@@ -7,7 +7,7 @@ app = 'hermit'
 primary_region = 'sin'
 
 [vm]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
 

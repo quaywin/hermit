@@ -190,6 +190,18 @@ docker compose -f docker-compose.dev.yml up -d
 > [!TIP]
 > Modifying source code on the host machine instantly triggers incremental compilation in less than 0.5 seconds. Subsequent starts are nearly instantaneous because dependency compilation and build artifacts are cached.
 
+### 3. Deploying to Cloud (Fly.io)
+
+Hermit can be deployed seamlessly to [Fly.io](https://fly.io) MicroVMs with persistent storage. See the detailed [Fly.io Deployment Guide](docs/FLY_DEPLOYMENT.md) for full setup instructions.
+
+```bash
+# Quick Launch
+fly launch --no-deploy
+fly volumes create hermit_data --size 1
+fly secrets set PHX_HOST="your-app.fly.dev" SECRET_KEY_BASE=$(openssl rand -base64 48)
+fly deploy
+```
+
 ### Customizing the Web Port
 
 By default, the dashboard runs on port `3000`. To use a different port, set `HERMIT_PORT`:

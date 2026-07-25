@@ -1006,6 +1006,29 @@ defmodule Hermit.Vpn.PairWorkerTest do
     GenServer.stop(pid)
   end
 
+  test "diagnose_wg_handshake_failure handles missing ping without crashing process" do
+    args = %{
+      id: "test_pair_diag",
+      wg_config: """
+      [Interface]
+      PrivateKey = wgpkey123
+      [Peer]
+      PublicKey = peerkey123
+      Endpoint = 1.2.3.4:51820
+      """,
+      ts_auth_key: "tskey-12345"
+    }
+
+    {:ok, pid} = PairWorker.start_link(args)
+    send(pid, {:check_wg_health, 0})
+    Process.sleep(100)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :error
+    assert state.wg_error_reason =~ "Endpoint Unreachable" or state.wg_error_reason =~ "Handshake Refused"
+    GenServer.stop(pid)
+  end
+
   defp wait_until_status(pid, target_status, attempts \\ 300)
 
   defp wait_until_status(_pid, target_status, 0) do

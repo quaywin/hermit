@@ -1593,9 +1593,15 @@ defmodule Hermit.Vpn.PairWorker do
 
     ping_ok =
       if endpoint_ip && not mock?() do
-        case System.cmd("ping", ["-c", "1", "-W", "1", endpoint_ip], stderr_to_stdout: true) do
-          {_, 0} -> true
+        try do
+          case System.cmd("ping", ["-c", "1", "-W", "1", endpoint_ip], stderr_to_stdout: true) do
+            {_, 0} -> true
+            _ -> false
+          end
+        rescue
           _ -> false
+        catch
+          _, _ -> false
         end
       else
         true
@@ -1681,9 +1687,16 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp retry_health_check(0, state) do
-    Logger.error("WireGuard tunnel handshake timeout for pair: #{state.id}")
+    diagnostic_reason =
+      try do
+        diagnose_wg_handshake_failure(state)
+      rescue
+        e ->
+          Logger.warning("Error during WireGuard handshake failure diagnosis: #{inspect(e)}")
+          "WireGuard Handshake Timeout: Tunnel failed to establish connection within 10 seconds."
+      end
 
-    diagnostic_reason = diagnose_wg_handshake_failure(state)
+    Logger.error("WireGuard tunnel handshake timeout for pair #{state.id}: #{diagnostic_reason}")
 
     error_state = %{
       state

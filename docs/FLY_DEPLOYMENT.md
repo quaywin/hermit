@@ -57,13 +57,16 @@ fly secrets set SECRET_KEY_BASE=$(openssl rand -base64 48)
 fly secrets set HERMIT_BASIC_AUTH_USER="admin" HERMIT_BASIC_AUTH_PASS="your_secure_password"
 ```
 
-### 4. Scale Memory Resources (Recommended)
+### 4. Scale Memory Resources & Auto-Swap
 
-Because Hermit creates Linux network namespaces (`netns`) and orchestrates WireGuard and Tailscale tunnels concurrently, we recommend allocating at least **512MB RAM**:
+Hermit is optimized to run on **512MB RAM** paired with an automated **512MB Swap space** (creating a 1GB combined virtual memory pool for $0/month):
 
 ```bash
 fly scale memory 512
 ```
+
+> [!TIP]
+> The server entrypoint script automatically initializes and mounts a 512MB `/swapfile` inside the container if RAM pressure increases, protecting the process from Out-Of-Memory (OOM) termination.
 
 ### 5. Deploy to Fly.io
 
@@ -91,10 +94,11 @@ fly open
   ```bash
   fly ssh console
   ```
-- **Check Running Network Namespaces**:
+- **Check Running Network Namespaces & Swap**:
   Inside `fly ssh console`:
   ```bash
   ip netns list
+  free -m
   ```
 
 ---
@@ -102,4 +106,5 @@ fly open
 ## Important Architectural Notes for Fly.io
 
 - **Firecracker MicroVM Privileges**: Fly.io runs containers inside isolated microVMs with full root privileges and kernel access (`CAP_NET_ADMIN`), enabling `ip netns`, `wireguard-tools`, `tailscale`, and `nftables` without requiring Sysbox or Docker-in-Docker setups.
+- **Dedicated Unauthenticated Health Check Endpoint (`/up`)**: A lightweight `/up` health check route bypasses Basic Authentication to ensure smooth, zero-downtime rolling deployments on Fly.io when `HERMIT_BASIC_AUTH_USER` is configured.
 - **DoH / HTTPS Endpoints**: The Phoenix HTTP server runs on port `8080` internally, while `fly-proxy` handles public TLS termination on port `443`. Secure DoH URLs (`/dns-query/:token`) work natively over Fly.io HTTPS endpoints.

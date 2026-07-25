@@ -192,13 +192,14 @@ docker compose -f docker-compose.dev.yml up -d
 
 ### 3. Deploying to Cloud (Fly.io)
 
-Hermit can be deployed seamlessly to [Fly.io](https://fly.io) MicroVMs with persistent storage. See the detailed [Fly.io Deployment Guide](docs/FLY_DEPLOYMENT.md) for full setup instructions.
+Hermit can be deployed seamlessly to [Fly.io](https://fly.io) MicroVMs with persistent storage and **512MB Swap** safety buffer ($0/month under free credit allowance). See the detailed [Fly.io Deployment Guide](docs/FLY_DEPLOYMENT.md) for full setup instructions.
 
 ```bash
-# Quick Launch
+# Quick Launch on Fly.io
 fly launch --no-deploy
-fly volumes create hermit_data --size 1
+fly volumes create hermit_data --size 1 --region sin
 fly secrets set PHX_HOST="your-app.fly.dev" SECRET_KEY_BASE=$(openssl rand -base64 48)
+fly scale memory 512
 fly deploy
 ```
 

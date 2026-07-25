@@ -145,6 +145,9 @@ defmodule Hermit.Dns.BlocklistLoader do
         # Load blocklists in parallel with max concurrency of 4 to utilize cores and reduce I/O time
         |> Task.async_stream(&load_blocklist/1, max_concurrency: 4, timeout: 120_000)
         |> Stream.run()
+
+        # Reclaim memory for the main loader task after parallel stream finishes
+        :erlang.garbage_collect()
       else
         Logger.warning("No DNS blocklists found in database to load.")
       end
@@ -212,6 +215,9 @@ defmodule Hermit.Dns.BlocklistLoader do
 
         # Store metadata in ETS
         :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
+
+        # Reclaim temporary heap memory after building bloom filter
+        :erlang.garbage_collect()
 
       {:error, reason} ->
         Logger.error("Failed to load Blocklist '#{blocklist.name}': #{inspect(reason)}")

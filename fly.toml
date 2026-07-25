@@ -18,6 +18,9 @@ primary_region = 'sin'
   MIX_ENV = 'prod'
   PORT = '8080'
   STORAGE_BASE_PATH = '/app/storage'
+  ERL_FLAGS = '+sbwt none +sbwtdcpu none +sbwtdio none +sub true'
+  POOL_SIZE = '2'
+  ERL_CRASH_DUMP = '/dev/null'
 
 [[mounts]]
   source = 'hermit_data'

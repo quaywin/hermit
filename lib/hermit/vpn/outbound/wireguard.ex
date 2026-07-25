@@ -20,6 +20,26 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         _ -> nil
       end
 
+    {endpoint_ip, config_content} =
+      if endpoint_host != nil and not ip_address?(endpoint_host) do
+        case resolve_host(endpoint_host) do
+          {:ok, ip_str} ->
+            resolved =
+              Regex.replace(
+                ~r/^\s*Endpoint\s*=\s*(\[[^\]]+\]|[^:\s]+)\s*:\s*(\d+)/mi,
+                config_content,
+                "Endpoint = #{ip_str}:\\2"
+              )
+
+            {ip_str, resolved}
+
+          _ ->
+            {nil, config_content}
+        end
+      else
+        {endpoint_host, config_content}
+      end
+
     cond do
       err = get_mock_error() ->
         {:error, err}
@@ -28,7 +48,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         Logger.info("Mock: Creating WireGuard tunnel #{wg_name} with storage #{storage_dir}")
         {:ok, "wg0"}
 
-      endpoint_host != nil and not ip_address?(endpoint_host) ->
+      endpoint_host != nil and endpoint_ip == nil ->
         {:error, "Temporary failure in name resolution: #{endpoint_host}"}
 
       true ->
@@ -680,6 +700,35 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
       _ ->
         false
     end
+  end
+
+  defp resolve_host(host) do
+    clean_host =
+      host
+      |> String.trim_leading("[")
+      |> String.trim_trailing("]")
+
+    charlist_host = String.to_charlist(clean_host)
+
+    case :inet.getaddr(charlist_host, :inet) do
+      {:ok, ip_tuple} ->
+        {:ok, ip_tuple_to_string(ip_tuple)}
+
+      _ ->
+        case :inet.getaddr(charlist_host, :inet6) do
+          {:ok, ip_tuple} -> {:ok, ip_tuple_to_string(ip_tuple)}
+          error -> error
+        end
+    end
+  end
+
+  defp ip_tuple_to_string(ip_tuple) when tuple_size(ip_tuple) == 8 do
+    ip_str = ip_tuple |> :inet.ntoa() |> List.to_string()
+    "[#{ip_str}]"
+  end
+
+  defp ip_tuple_to_string(ip_tuple) do
+    ip_tuple |> :inet.ntoa() |> List.to_string()
   end
 
   defp ip_address?(host) do

@@ -11,6 +11,9 @@ primary_region = 'sin'
   cpu_kind = 'shared'
   cpus = 1
 
+[swap]
+  size_mb = 512
+
 [build]
   dockerfile = 'Dockerfile'
 

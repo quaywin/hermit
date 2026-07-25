@@ -15,6 +15,10 @@ defmodule HermitWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/up" do
+    get "/", HermitWeb.Plugs.HealthPlug, []
+  end
+
   scope "/", HermitWeb do
     pipe_through :browser
 
@@ -62,6 +66,19 @@ defmodule HermitWeb.Router do
     else
       conn
     end
+  end
+end
+
+defmodule HermitWeb.Plugs.HealthPlug do
+  import Plug.Conn
+
+  def init(opts), do: opts
+
+  def call(conn, _opts) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(200, "OK")
+    |> halt()
   end
 end
 

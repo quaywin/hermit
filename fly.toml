@@ -7,10 +7,10 @@ app = 'hermit'
 primary_region = 'sin'
 
 [vm]
-  size = 'shared-cpu-2x'
+  size = 'shared-cpu-1x'
   memory = '512mb'
   cpu_kind = 'shared'
-  cpus = 2
+  cpus = 1
 
 [swap]
   size_mb = 512

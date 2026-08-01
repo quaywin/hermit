@@ -229,18 +229,18 @@ HERMIT_BASIC_AUTH_PASS=your_secure_password
 
 ### Tailscale UDP Port & VPS Firewall Configuration
 
-By default, Hermit binds port `41642/udp` on the host machine (mapped to `41641/udp` inside the container). This avoids conflicts with any Tailscale daemon running directly on your host machine, which typically uses port `41641/udp`.
+By default, Hermit maps UDP port range `41641-41700` 1-to-1 on the host machine to allow multiple Tailscale nodes to establish direct, peer-to-peer (P2P) connections.
 
 If you are deploying Hermit on a VPS:
-- **Recommended**: Open port `41642/udp` in your VPS firewall to allow Tailscale to establish direct, peer-to-peer (P2P) connections, ensuring optimal speed and the lowest latency.
+- **Recommended**: Open UDP port range `41641-41700/udp` in your VPS firewall.
 
-If you need to change this port to a different one (e.g., `41643`):
+If you need to change this port range:
 1. Open `docker-compose.yml` (and/or `docker-compose.dev.yml`).
 2. Change the host-side port mapping:
    ```yaml
    ports:
      - "${HERMIT_PORT:-3000}:3000"
-     - "41643:41641/udp"
+     - "41641-41700:41641-41700/udp"
    ```
 3. Open the corresponding port on your firewall instead.
 

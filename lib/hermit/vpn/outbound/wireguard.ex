@@ -351,6 +351,28 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                 )
             end
 
+            # Route VPN endpoint directly via eth0 to prevent routing loop
+            if endpoint_ip do
+              hash = :erlang.phash2(pair_id, 250) + 1
+              gw = "10.200.#{hash}.1"
+
+              run_cmd("ip", [
+                "netns", "exec", wg_name, "ip", "route", "replace", endpoint_ip, "via", gw, "dev", "eth0"
+              ])
+            end
+
+            # Force tailscaled traffic (fwmark 0x80000) through Table 200 (eth0)
+            # Priority 5209 takes precedence over Tailscale's own rule at 5210 (main table → wg0)
+            run_cmd("ip", [
+              "netns", "exec", wg_name, "ip", "rule", "del", "fwmark", "0x80000/0xff0000",
+              "lookup", "200", "priority", "5209"
+            ])
+
+            run_cmd("ip", [
+              "netns", "exec", wg_name, "ip", "rule", "add", "fwmark", "0x80000/0xff0000",
+              "lookup", "200", "priority", "5209"
+            ])
+
             {:ok, "wg0"}
           else
             {:error, reason} ->

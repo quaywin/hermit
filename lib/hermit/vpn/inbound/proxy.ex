@@ -49,9 +49,19 @@ defmodule Hermit.Vpn.Inbound.Proxy do
             {:ok, content} ->
               pid = String.trim(content)
               Logger.info("Killing process #{pid}")
-              System.cmd("kill", [pid])
-              Process.sleep(50)
-              System.cmd("kill", ["-9", pid])
+
+              case System.cmd("kill", [pid], stderr_to_stdout: true) do
+                {_, 0} ->
+                  Process.sleep(50)
+
+                  case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+                    {_, 0} -> System.cmd("kill", ["-9", pid], stderr_to_stdout: true)
+                    _ -> :ok
+                  end
+
+                _ ->
+                  :ok
+              end
 
             _ ->
               :ok

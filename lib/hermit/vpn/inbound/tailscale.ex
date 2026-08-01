@@ -1643,9 +1643,18 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           Logger.info("Killing tailscaled process: #{pid}")
 
           try do
-            System.cmd("kill", [pid])
-            Process.sleep(200)
-            System.cmd("kill", ["-9", pid])
+            case System.cmd("kill", [pid], stderr_to_stdout: true) do
+              {_, 0} ->
+                Process.sleep(200)
+
+                case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+                  {_, 0} -> System.cmd("kill", ["-9", pid], stderr_to_stdout: true)
+                  _ -> :ok
+                end
+
+              _ ->
+                :ok
+            end
           rescue
             e ->
               Logger.warning("Failed to kill tailscaled process with PID #{pid}: #{inspect(e)}")

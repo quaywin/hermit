@@ -14,7 +14,7 @@ defmodule Hermit.Vpn.Nat do
 
     try do
       # 1. Clean up any existing table to avoid duplicate rules
-      System.cmd("nft", ["delete", "table", "ip", table_name])
+      System.cmd("nft", ["delete", "table", "ip", table_name], stderr_to_stdout: true)
 
       # 2. Create fresh table and core chains
       System.cmd("nft", ["add", "table", "ip", table_name])
@@ -70,7 +70,7 @@ defmodule Hermit.Vpn.Nat do
   """
   def cleanup_nat(table_name) when is_binary(table_name) do
     try do
-      System.cmd("nft", ["delete", "table", "ip", table_name])
+      System.cmd("nft", ["delete", "table", "ip", table_name], stderr_to_stdout: true)
       :ok
     rescue
       _ -> :ok

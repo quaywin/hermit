@@ -72,15 +72,19 @@ if config_env() in [:dev, :prod] do
         end
       )
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  if config_env() == :prod do
+    host = System.get_env("PHX_HOST") || "example.com"
+
+    config :hermit, HermitWeb.Endpoint,
+      url: [host: host, port: 443, scheme: "https"],
+      check_origin: [
+        "https://#{host}",
+        "http://#{host}",
+        "//#{host}"
+      ]
+  end
 
   config :hermit, HermitWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
-    check_origin: [
-      "https://#{host}",
-      "http://#{host}",
-      "//#{host}"
-    ],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

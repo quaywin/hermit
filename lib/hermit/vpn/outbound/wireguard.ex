@@ -361,16 +361,27 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
               ])
             end
 
-            # Force tailscaled traffic (fwmark 0x80000) through Table 200 (eth0)
-            # Priority 5209 takes precedence over Tailscale's own rule at 5210 (main table → wg0)
+            # Mark only Tailscale UDP STUN/DISCO packets (ports 41641-41700) with 0x200
+            # to route through Table 200 (eth0), while allowing Exit Node traffic to
+            # use rule 5210 (main table → wg0)
             run_cmd("ip", [
-              "netns", "exec", wg_name, "ip", "rule", "del", "fwmark", "0x80000/0xff0000",
-              "lookup", "200", "priority", "5209"
+              "netns", "exec", wg_name, "nft", "add", "chain", "inet", "hermit_ns", "output",
+              "{ type route hook output priority mangle ; }"
             ])
 
             run_cmd("ip", [
-              "netns", "exec", wg_name, "ip", "rule", "add", "fwmark", "0x80000/0xff0000",
-              "lookup", "200", "priority", "5209"
+              "netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "output",
+              "udp", "sport", "41641-41700", "mark", "set", "0x200"
+            ])
+
+            run_cmd("ip", [
+              "netns", "exec", wg_name, "ip", "rule", "del", "fwmark", "0x200/0xff0000",
+              "lookup", "200", "priority", "5208"
+            ])
+
+            run_cmd("ip", [
+              "netns", "exec", wg_name, "ip", "rule", "add", "fwmark", "0x200/0xff0000",
+              "lookup", "200", "priority", "5208"
             ])
 
             {:ok, "wg0"}

@@ -31,6 +31,8 @@ defmodule Hermit.Vpn.Outbound.Local do
         local_ip =
           Map.get(config, "local_ip") || Map.get(config, :local_ip) || "10.200.#{hash}.2/30"
 
+        ns_ip = String.split(local_ip, "/") |> hd()
+
         host_ip = Map.get(config, "host_ip") || Map.get(config, :host_ip) || "10.200.#{hash}.1/30"
         gateway = String.split(host_ip, "/") |> hd()
 
@@ -245,62 +247,7 @@ defmodule Hermit.Vpn.Outbound.Local do
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
                {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
-               # Setup profile-specific nftables table on host
-               {:ok, _} <- run_cmd("nft", ["add", "table", "ip", "hermit_local_#{pair_id}"]),
-               {:ok, _} <-
-                 run_cmd("nft", [
-                   "add",
-                   "chain",
-                   "ip",
-                   "hermit_local_#{pair_id}",
-                   "forward",
-                   "{ type filter hook forward priority filter ; }"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("nft", [
-                   "add",
-                   "chain",
-                   "ip",
-                   "hermit_local_#{pair_id}",
-                   "postrouting",
-                   "{ type nat hook postrouting priority srcnat ; }"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("nft", [
-                   "add",
-                   "rule",
-                   "ip",
-                   "hermit_local_#{pair_id}",
-                   "forward",
-                   "ip",
-                   "saddr",
-                   subnet,
-                   "accept"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("nft", [
-                   "add",
-                   "rule",
-                   "ip",
-                   "hermit_local_#{pair_id}",
-                   "forward",
-                   "ip",
-                   "daddr",
-                   subnet,
-                   "accept"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("nft", [
-                   "add",
-                   "rule",
-                   "ip",
-                   "hermit_local_#{pair_id}",
-                   "postrouting",
-                   "ip",
-                   "saddr",
-                   subnet,
-                   "masquerade"
-                 ]) do
+               :ok <- Hermit.Vpn.Nat.setup_nat("hermit_local_#{pair_id}", subnet, ns_ip) do
             # Setup network namespace DNS
             dns_servers =
               (Map.get(config, "dns_servers") || Map.get(config, :dns_servers) || [])
@@ -406,8 +353,8 @@ defmodule Hermit.Vpn.Outbound.Local do
         # Clean up netns DNS config
         File.rm_rf("/etc/netns/#{wg_name}")
 
-        # Clean up nftables host rules
-        System.cmd("nft", ["delete", "table", "ip", "hermit_local_#{pair_id}"])
+        # Clean up nftables host rules via Hermit.Vpn.Nat
+        Hermit.Vpn.Nat.cleanup_nat("hermit_local_#{pair_id}")
       rescue
         e ->
           Logger.warning(

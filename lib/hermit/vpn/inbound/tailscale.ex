@@ -1893,42 +1893,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   Sets up inbound DNAT and port-preserving outbound SNAT rules on the container default namespace for pair_id.
   """
   def setup_tailscale_host_nat(pair_id, ts_port) when is_integer(ts_port) and ts_port > 0 do
-    table_name = "hermit_ts_nat_#{pair_id}"
     ns = "hermit_wg_#{pair_id}"
+    table_name = "hermit_local_#{pair_id}"
 
     case System.cmd("ip", ["netns", "exec", ns, "ip", "-o", "-4", "addr", "show"]) do
       {output, 0} ->
         case Regex.run(~r/inet\s+(10\.\d+\.\d+\.\d+)/, output) do
           [_, ns_ip] ->
-            # Ensure table is clean before setup
-            System.cmd("nft", ["delete", "table", "ip", table_name])
-            System.cmd("nft", ["add", "table", "ip", table_name])
-            System.cmd("nft", ["add", "chain", "ip", table_name, "prerouting", "{ type nat hook prerouting priority dstnat ; }"])
-            System.cmd("nft", ["add", "chain", "ip", table_name, "postrouting", "{ type nat hook postrouting priority srcnat ; }"])
-            System.cmd("nft", ["add", "chain", "ip", table_name, "forward", "{ type filter hook forward priority filter ; }"])
-            System.cmd("nft", ["add", "rule", "ip", table_name, "forward", "ip", "daddr", ns_ip, "accept"])
-            System.cmd("nft", ["add", "rule", "ip", table_name, "forward", "ip", "saddr", ns_ip, "accept"])
-
-            System.cmd("nft", [
-              "add", "rule", "ip", table_name, "prerouting",
-              "udp", "dport", to_string(ts_port),
-              "dnat", "to", "#{ns_ip}:#{ts_port}"
-            ])
-
-            container_ip = get_container_ip()
-
-            snat_args =
-              if container_ip do
-                ["snat", "to", "#{container_ip}:#{ts_port}"]
-              else
-                ["masquerade", "to", ":#{ts_port}"]
-              end
-
-            System.cmd("nft", [
-              "add", "rule", "ip", table_name, "postrouting",
-              "ip", "saddr", ns_ip,
-              "udp", "sport", to_string(ts_port)
-            ] ++ snat_args)
+            subnet = Regex.replace(~r/\.\d+$/, ns_ip, ".0") <> "/30"
+            Hermit.Vpn.Nat.setup_nat(table_name, subnet, ns_ip, ts_port)
+            Hermit.Vpn.Nat.cleanup_nat("hermit_ts_nat_#{pair_id}")
             :ok
 
           _ -> :ok
@@ -1943,8 +1917,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   def setup_tailscale_host_nat(_pair_id, _ts_port), do: :ok
 
   def cleanup_tailscale_host_nat(pair_id) do
-    table_name = "hermit_ts_nat_#{pair_id}"
-    System.cmd("nft", ["delete", "table", "ip", table_name])
+    Hermit.Vpn.Nat.cleanup_nat("hermit_local_#{pair_id}")
+    Hermit.Vpn.Nat.cleanup_nat("hermit_ts_nat_#{pair_id}")
   rescue
     _ -> :ok
   end

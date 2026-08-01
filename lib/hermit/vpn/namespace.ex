@@ -1,7 +1,7 @@
 defmodule Hermit.Vpn.Namespace do
   @moduledoc """
   Dedicated module for managing Linux Network Namespace lifecycles, veth pair interfaces (`eth0`),
-  and integrating container host NAT forwarding across Hermit VPN Tunnels and Endpoints.
+  and integrating container host NAT forwarding across Hermit VPN Tunnels and DNS Endpoints.
   """
   require Logger
 
@@ -105,6 +105,91 @@ defmodule Hermit.Vpn.Namespace do
   end
 
   def destroy_pair_namespace(_), do: :ok
+
+  @doc """
+  Ensures an isolated network namespace exists for a DNS endpoint_id with a standard `eth0` veth interface
+  connected to the container host, and sets up host NAT forwarding.
+  """
+  def create_endpoint_namespace(endpoint_id, ts_port \\ nil) do
+    ns = "hermit_dns_endpoint_#{endpoint_id}"
+
+    if mock?() do
+      Logger.info("Mock: Created endpoint namespace #{ns}")
+      {:ok, %{ns: ns, ns_ip: "10.251.0.2", subnet: "10.251.0.0/30", host_if: "dns_h_#{endpoint_id}"}}
+    else
+      # Calculate dynamic subnet based on endpoint_id hash
+      hash = :erlang.phash2(endpoint_id, 250) + 1
+      ns_ip = "10.251.#{hash}.2"
+      local_ip = "10.251.#{hash}.2/30"
+      host_ip = "10.251.#{hash}.1/30"
+      subnet = "10.251.#{hash}.0/30"
+
+      veth_host_if = "dns_h_#{endpoint_id}"
+      veth_ns_temp_if = "dns_n_#{endpoint_id}"
+
+      try do
+        unless netns_exists?(ns) do
+          run_cmd("ip", ["netns", "add", ns])
+        end
+
+        unless link_exists?(veth_host_if) do
+          run_cmd("ip", ["link", "add", veth_host_if, "type", "veth", "peer", "name", veth_ns_temp_if])
+          run_cmd("ip", ["link", "set", veth_ns_temp_if, "netns", ns])
+
+          run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", veth_ns_temp_if, "name", "eth0"])
+          run_cmd("ip", ["netns", "exec", ns, "ip", "addr", "add", local_ip, "dev", "eth0"])
+          run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"])
+
+          run_cmd("ip", ["addr", "add", host_ip, "dev", veth_host_if])
+          run_cmd("ip", ["link", "set", veth_host_if, "up"])
+          run_cmd("sysctl", ["-w", "net.ipv4.conf.#{veth_host_if}.rp_filter=0"])
+        end
+
+        run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"])
+
+        table_name = "hermit_dns_endpoint_#{endpoint_id}"
+        Hermit.Vpn.Nat.setup_nat(table_name, subnet, ns_ip, ts_port)
+
+        {:ok, %{ns: ns, ns_ip: ns_ip, subnet: subnet, host_if: veth_host_if}}
+      rescue
+        e ->
+          Logger.warning("Failed to create endpoint namespace #{ns}: #{inspect(e)}")
+          {:error, e}
+      end
+    end
+  end
+
+  @doc """
+  Tears down the network namespace, veth interfaces, and host NAT rules for a DNS endpoint_id.
+  """
+  def destroy_endpoint_namespace(endpoint_id) do
+    ns = "hermit_dns_endpoint_#{endpoint_id}"
+
+    if mock?() do
+      Logger.info("Mock: Destroyed endpoint namespace #{ns}")
+      :ok
+    else
+      veth_host_if = "dns_h_#{endpoint_id}"
+
+      try do
+        if link_exists?(veth_host_if) do
+          run_cmd("ip", ["link", "delete", veth_host_if])
+        end
+
+        if netns_exists?(ns) do
+          run_cmd("ip", ["netns", "del", ns])
+        end
+
+        File.rm_rf("/etc/netns/#{ns}")
+        Hermit.Vpn.Nat.cleanup_nat("hermit_dns_endpoint_#{endpoint_id}")
+        :ok
+      rescue
+        e ->
+          Logger.warning("Error destroying endpoint namespace #{ns}: #{inspect(e)}")
+          :ok
+      end
+    end
+  end
 
   # Private Helpers
 

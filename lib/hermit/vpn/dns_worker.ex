@@ -316,11 +316,9 @@ defmodule Hermit.Vpn.DnsWorker do
   defp bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server, profile_config) do
     ns = "hermit_dns_endpoint_#{endpoint_id}"
     host_if = "dns_h_#{endpoint_id}"
-    ns_if = "dns_n_#{endpoint_id}"
     table_id = 1000 + endpoint_id
     octet = div(endpoint_id, 250) |> rem(250)
     host_ip = "10.251.#{octet}.1"
-    ns_ip = "10.251.#{octet}.2"
     subnet = "10.251.#{octet}.0/30"
     port = 5400 + endpoint_id
     ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
@@ -374,31 +372,19 @@ defmodule Hermit.Vpn.DnsWorker do
           )
         end
 
-        with {:ok, _} <- run_cmd("ip", ["netns", "add", ns]),
-             {:ok, _} <-
-               run_cmd("ip", ["link", "add", host_if, "type", "veth", "peer", "name", ns_if]),
-             {:ok, _} <- run_cmd("ip", ["link", "set", ns_if, "netns", ns]),
-             {:ok, _} <-
-               run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", ns_if, "name", "eth0"]),
-             {:ok, _} <- run_cmd("ip", ["addr", "add", "#{host_ip}/30", "dev", host_if]),
+        with {:ok, %{ns_ip: ns_ip}} <- Hermit.Vpn.Namespace.create_endpoint_namespace(endpoint_id, ts_port),
              {:ok, _} <-
                run_cmd("ip", [
                  "netns",
                  "exec",
                  ns,
                  "ip",
-                 "addr",
-                 "add",
-                 "#{ns_ip}/30",
-                 "dev",
-                 "eth0"
+                 "link",
+                 "set",
+                 "eth0",
+                 "mtu",
+                 "1400"
                ]),
-             {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "up"]),
-             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"]),
-             {:ok, _} <- run_cmd("ip", ["link", "set", host_if, "mtu", "1400"]),
-             {:ok, _} <-
-               run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "mtu", "1400"]),
-             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]),
              {:ok, _} <-
                run_cmd("ip", [
                  "netns",
@@ -748,22 +734,11 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   defp cleanup_namespace(endpoint_id) do
-    ns = "hermit_dns_endpoint_#{endpoint_id}"
-    host_if = "dns_h_#{endpoint_id}"
     table_id = 1000 + endpoint_id
     octet = div(endpoint_id, 250) |> rem(250)
     host_ip = "10.251.#{octet}.1"
 
     try do
-      System.cmd("ip", ["link", "delete", host_if], stderr_to_stdout: true)
-
-      if netns_exists?(ns) do
-        System.cmd("ip", ["netns", "del", ns], stderr_to_stdout: true)
-      end
-
-      # Clean up netns DNS config directory
-      File.rm_rf("/etc/netns/#{ns}")
-
       System.cmd(
         "ip",
         [
@@ -789,19 +764,11 @@ defmodule Hermit.Vpn.DnsWorker do
         ],
         stderr_to_stdout: true
       )
-
-      # Clean up nftables table for this endpoint on host
-      System.cmd("nft", ["delete", "table", "ip", "hermit_dns_endpoint_#{endpoint_id}"],
-        stderr_to_stdout: true
-      )
     rescue
-      e ->
-        Logger.warning(
-          "Error encountered during DNS namespace cleanup for endpoint #{endpoint_id}: #{inspect(e)}"
-        )
+      _ -> :ok
     end
 
-    :ok
+    Hermit.Vpn.Namespace.destroy_endpoint_namespace(endpoint_id)
   end
 
   # --- Tailscale DNS Config API Update ---

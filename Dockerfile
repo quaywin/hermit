@@ -13,16 +13,16 @@ ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
 FROM ${BUILDER_IMAGE} AS dev
 
 # Install dev & runtime dependencies, download and install Tailscale in a single layer to minimize size
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
      iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy python3 iputils-ping git build-essential \
   && ARCH=$(dpkg --print-architecture) \
   && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
   && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
-  && rm -rf /tmp/tailscale* \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /tmp/tailscale*
 
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
@@ -47,9 +47,10 @@ CMD ["mix", "phx.server"]
 FROM ${BUILDER_IMAGE} AS builder
 
 # install build dependencies
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential git \
-  && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+  && apt-get install -y --no-install-recommends build-essential git
 
 # prepare build dir
 WORKDIR /app
@@ -63,14 +64,19 @@ ENV MIX_ENV="prod"
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
-RUN mix deps.get --only $MIX_ENV
+RUN --mount=type=cache,target=/root/.hex,sharing=locked \
+    --mount=type=cache,target=/root/.mix,sharing=locked \
+    mix deps.get --only $MIX_ENV
 RUN mkdir config
 
 # copy compile-time config files
 COPY config/config.exs config/${MIX_ENV}.exs config/
-RUN mix deps.compile
+RUN --mount=type=cache,target=/root/.hex,sharing=locked \
+    --mount=type=cache,target=/root/.mix,sharing=locked \
+    mix deps.compile
 
-RUN mix assets.setup
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    mix assets.setup
 
 COPY priv priv
 COPY lib lib
@@ -93,16 +99,16 @@ FROM ${RUNNER_IMAGE} AS final
 ARG TARGETARCH
 
 # Install dependencies, download and install Tailscale in a single layer to minimize size
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
      iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy python3 iputils-ping \
   && ARCH=$(dpkg --print-architecture) \
   && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
   && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
-  && rm -rf /tmp/tailscale* \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /tmp/tailscale*
 
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \

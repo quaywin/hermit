@@ -112,17 +112,17 @@ defmodule Hermit.Vpn.Namespace do
   """
   def create_endpoint_namespace(endpoint_id, ts_port \\ nil) do
     ns = "hermit_dns_endpoint_#{endpoint_id}"
+    endpoint_int = if is_binary(endpoint_id), do: String.to_integer(endpoint_id), else: endpoint_id
+    octet = div(endpoint_int, 250) |> rem(250)
 
     if mock?() do
       Logger.info("Mock: Created endpoint namespace #{ns}")
-      {:ok, %{ns: ns, ns_ip: "10.251.0.2", subnet: "10.251.0.0/30", host_if: "dns_h_#{endpoint_id}"}}
+      {:ok, %{ns: ns, ns_ip: "10.251.#{octet}.2", subnet: "10.251.#{octet}.0/30", host_if: "dns_h_#{endpoint_id}"}}
     else
-      # Calculate dynamic subnet based on endpoint_id hash
-      hash = :erlang.phash2(endpoint_id, 250) + 1
-      ns_ip = "10.251.#{hash}.2"
-      local_ip = "10.251.#{hash}.2/30"
-      host_ip = "10.251.#{hash}.1/30"
-      subnet = "10.251.#{hash}.0/30"
+      ns_ip = "10.251.#{octet}.2"
+      local_ip = "10.251.#{octet}.2/30"
+      host_ip = "10.251.#{octet}.1/30"
+      subnet = "10.251.#{octet}.0/30"
 
       veth_host_if = "dns_h_#{endpoint_id}"
       veth_ns_temp_if = "dns_n_#{endpoint_id}"

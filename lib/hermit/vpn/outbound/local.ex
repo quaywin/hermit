@@ -15,98 +15,15 @@ defmodule Hermit.Vpn.Outbound.Local do
         {:ok, "eth0"}
 
       true ->
-        Logger.info("Creating local netns for local outbound: #{wg_name}")
+        Logger.info("Creating local netns: #{wg_name}")
 
-        if netns_exists?(wg_name) do
-          Logger.warning(
-            "Stale network namespace found: #{wg_name}. Performing cleanup before recreation."
-          )
-
-          cleanup(pair_id, storage_dir)
-        end
-
-        # Calculate dynamic subnet based on pair_id hash if not configured
         hash = :erlang.phash2(pair_id, 250) + 1
-
-        local_ip =
-          Map.get(config, "local_ip") || Map.get(config, :local_ip) || "10.200.#{hash}.2/30"
-
-        ns_ip = String.split(local_ip, "/") |> hd()
-
-        host_ip = Map.get(config, "host_ip") || Map.get(config, :host_ip) || "10.200.#{hash}.1/30"
-        gateway = String.split(host_ip, "/") |> hd()
-
-        subnet =
-          case String.split(local_ip, ".") do
-            [a, b, c, d_cidr] ->
-              [_, cidr] = String.split(d_cidr, "/")
-              "#{a}.#{b}.#{c}.0/#{cidr}"
-
-            _ ->
-              "10.200.#{hash}.0/30"
-          end
-
-        # Create unique interface suffix to prevent collisions on host
-        unique_suffix =
-          :crypto.hash(:md5, pair_id) |> Base.encode16(case: :lower) |> String.slice(0, 11)
-
-        host_if_name = "loc_" <> unique_suffix
-        ns_temp_if = "vns_" <> String.slice(unique_suffix, 0, 8)
-
+        gateway = "10.200.#{hash}.1"
+        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
         netns_dns_dir = "/etc/netns/#{wg_name}"
 
-        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
-
-        # Execute network setup steps sequentially
         result =
-          with {:ok, _} <- run_cmd("ip", ["netns", "add", wg_name]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "link",
-                   "add",
-                   host_if_name,
-                   "type",
-                   "veth",
-                   "peer",
-                   "name",
-                   ns_temp_if
-                 ]),
-               {:ok, _} <- run_cmd("ip", ["link", "set", ns_temp_if, "netns", wg_name]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "ip",
-                   "link",
-                   "set",
-                   ns_temp_if,
-                   "name",
-                   "eth0"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "ip",
-                   "addr",
-                   "add",
-                   local_ip,
-                   "dev",
-                   "eth0"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "ip",
-                   "link",
-                   "set",
-                   "eth0",
-                   "up"
-                 ]),
+          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",
@@ -242,12 +159,7 @@ defmodule Hermit.Vpn.Outbound.Local do
                    "oifname",
                    "eth0",
                    "masquerade"
-                 ]),
-               {:ok, _} <- run_cmd("ip", ["addr", "add", host_ip, "dev", host_if_name]),
-               {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "up"]),
-               {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "mtu", "1400"]),
-               {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{host_if_name}.rp_filter=0"]),
-               :ok <- Hermit.Vpn.Nat.setup_nat("hermit_local_#{pair_id}", subnet, ns_ip) do
+                 ]) do
             # Setup network namespace DNS
             dns_servers =
               (Map.get(config, "dns_servers") || Map.get(config, :dns_servers) || [])
@@ -314,13 +226,7 @@ defmodule Hermit.Vpn.Outbound.Local do
             {:ok, "eth0"}
 
           {:error, reason} ->
-            System.cmd("ip", ["link", "delete", host_if_name])
-            System.cmd("ip", ["netns", "del", wg_name])
-            File.rm_rf(netns_dns_dir)
-
-            # Clean up profile-specific nftables table on host
-            System.cmd("nft", ["delete", "table", "ip", "hermit_local_#{pair_id}"])
-
+            Hermit.Vpn.Namespace.destroy_pair_namespace(pair_id)
             {:error, reason}
         end
     end
@@ -328,42 +234,8 @@ defmodule Hermit.Vpn.Outbound.Local do
 
   @impl true
   def cleanup(pair_id, _storage_dir) do
-    wg_name = "hermit_wg_#{pair_id}"
-
-    if mock?() do
-      Logger.info("Mock: Stopping VPN pair with netns #{wg_name}")
-      :ok
-    else
-      unique_suffix =
-        :crypto.hash(:md5, pair_id) |> Base.encode16(case: :lower) |> String.slice(0, 11)
-
-      host_if_name = "loc_" <> unique_suffix
-
-      Logger.info("Stopping Local outbound netns: #{wg_name}")
-
-      try do
-        # Delete host interface if any
-        System.cmd("ip", ["link", "delete", host_if_name])
-
-        # Delete the namespace
-        if netns_exists?(wg_name) do
-          System.cmd("ip", ["netns", "del", wg_name])
-        end
-
-        # Clean up netns DNS config
-        File.rm_rf("/etc/netns/#{wg_name}")
-
-        # Clean up nftables host rules via Hermit.Vpn.Nat
-        Hermit.Vpn.Nat.cleanup_nat("hermit_local_#{pair_id}")
-      rescue
-        e ->
-          Logger.warning(
-            "Error encountered during Local outbound cleanup for pair #{pair_id}: #{inspect(e)}"
-          )
-      end
-
-      :ok
-    end
+    Logger.info("Stopping Local outbound netns: hermit_wg_#{pair_id}")
+    Hermit.Vpn.Namespace.destroy_pair_namespace(pair_id)
   end
 
   @impl true

@@ -105,8 +105,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
         block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
 
-        # Create a unique temporary interface name on the host (max 15 chars)
-        # using md5 hash of ID to prevent collisions on host
+        # Create unique interface names on the host (max 15 chars)
         unique_suffix =
           :crypto.hash(:md5, pair_id) |> Base.encode16(case: :lower) |> String.slice(0, 11)
 
@@ -123,7 +122,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
         # Execute network setup steps sequentially
         result =
-          with {:ok, _} <- run_cmd("ip", ["netns", "add", wg_name]),
+          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
                {:ok, _} <- run_cmd("ip", ["link", "add", host_if_name, "type", "wireguard"]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "netns", wg_name]),
                {:ok, _} <-
@@ -380,8 +379,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
               _ -> :ok
             end
 
-            System.cmd("ip", ["netns", "del", wg_name])
-            File.rm_rf(netns_dns_dir)
+            Hermit.Vpn.Namespace.destroy_pair_namespace(pair_id)
             {:error, reason}
         end
     end
@@ -390,41 +388,26 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
   @impl true
   def cleanup(pair_id, _storage_dir) do
     wg_name = "hermit_wg_#{pair_id}"
+    Logger.info("Stopping WireGuard netns: #{wg_name}")
 
     if mock?() do
-      Logger.info("Mock: Stopping VPN pair with netns #{wg_name}")
       :ok
     else
-      # Unique suffix based on pair_id md5 hash to delete the host interface
       unique_suffix =
         :crypto.hash(:md5, pair_id) |> Base.encode16(case: :lower) |> String.slice(0, 11)
 
       host_if_name = "wg_" <> unique_suffix
 
-      Logger.info("Stopping WireGuard netns: #{wg_name}")
-
       try do
-        # Delete host interface if it exists on host
         case System.cmd("ip", ["link", "show", host_if_name], stderr_to_stdout: true) do
           {_, 0} -> System.cmd("ip", ["link", "delete", host_if_name])
           _ -> :ok
         end
-
-        # Delete the namespace
-        if netns_exists?(wg_name) do
-          System.cmd("ip", ["netns", "del", wg_name])
-        end
-
-        # Clean up netns DNS config
-        File.rm_rf("/etc/netns/#{wg_name}")
       rescue
-        e ->
-          Logger.warning(
-            "Error encountered during WireGuard outbound cleanup for pair #{pair_id}: #{inspect(e)}"
-          )
+        _ -> :ok
       end
 
-      :ok
+      Hermit.Vpn.Namespace.destroy_pair_namespace(pair_id)
     end
   end
 

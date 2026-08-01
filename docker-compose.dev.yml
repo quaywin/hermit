@@ -4,10 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: dev
-    container_name: hermit_orchestrator_dev
-    ports:
-      - "3000:3000" # Web dashboard
-      - "41641-41700:41641-41700/udp" # Tailscale UDP port range
+    network_mode: host # Bypass Docker NAT for 100% Direct P2P Tailscale connections
     privileged: true
     env_file:
       - .env

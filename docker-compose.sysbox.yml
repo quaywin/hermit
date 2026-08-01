@@ -2,6 +2,7 @@ services:
   hermit:
     image: ghcr.io/quaywin/hermit:latest
     container_name: hermit_orchestrator
+    network_mode: host # Bypass Docker NAT for 100% Direct P2P Tailscale connections
     # Use Sysbox runtime for advanced security isolation on Linux
     runtime: sysbox-runc
     cap_add:
@@ -9,9 +10,6 @@ services:
       - SYS_ADMIN
     devices:
       - "/dev/net/tun:/dev/net/tun"
-    ports:
-      - "${HERMIT_PORT:-3000}:3000" # Web dashboard
-      - "41641-41700:41641-41700/udp" # Tailscale UDP port range
     env_file:
       - ${HOME}/.hermit/env
     volumes:

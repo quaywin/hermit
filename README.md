@@ -232,7 +232,8 @@ HERMIT_BASIC_AUTH_PASS=your_secure_password
 By default, Hermit maps UDP port range `41641-41700` 1-to-1 on the host machine to allow multiple Tailscale nodes to establish direct, peer-to-peer (P2P) connections.
 
 If you are deploying Hermit on a VPS:
-- **Recommended**: Open UDP port range `41641-41700/udp` in your VPS firewall.
+- **Recommended**: Open UDP port range `41641-41700/udp` in your VPS firewall (and Cloud Provider Security Group, e.g., Tencent Cloud / AWS / GCP).
+- **Direct P2P NAT Bypass (Host Network Mode)**: If your VPS is behind double NAT and Tailscale falls back to DERP relay, you can set `network_mode: host` in `docker-compose.yml` (or `docker-compose.sysbox.yml`) to bypass Docker NAT and achieve 100% Direct P2P connectivity.
 
 If you need to change this port range:
 1. Open `docker-compose.yml` (and/or `docker-compose.dev.yml`).

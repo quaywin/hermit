@@ -1915,12 +1915,20 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               "dnat", "to", "#{ns_ip}:#{ts_port}"
             ])
 
+            container_ip = get_container_ip()
+
+            snat_args =
+              if container_ip do
+                ["snat", "to", "#{container_ip}:#{ts_port}"]
+              else
+                ["masquerade", "to", ":#{ts_port}"]
+              end
+
             System.cmd("nft", [
               "add", "rule", "ip", table_name, "postrouting",
               "ip", "saddr", ns_ip,
-              "udp", "sport", to_string(ts_port),
-              "snat", "to", ":#{ts_port}"
-            ])
+              "udp", "sport", to_string(ts_port)
+            ] ++ snat_args)
             :ok
 
           _ -> :ok
@@ -1939,5 +1947,36 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     System.cmd("nft", ["delete", "table", "ip", table_name])
   rescue
     _ -> :ok
+  end
+
+  @doc """
+  Gets the primary IPv4 address of the container default network namespace (e.g. 172.25.0.2).
+  """
+  def get_container_ip do
+    case System.cmd("ip", ["-o", "-4", "route", "get", "8.8.8.8"]) do
+      {output, 0} ->
+        case Regex.run(~r/src\s+(\d+\.\d+\.\d+\.\d+)/, output) do
+          [_, ip] -> ip
+          _ -> get_first_non_lo_ip()
+        end
+
+      _ -> get_first_non_lo_ip()
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp get_first_non_lo_ip do
+    case System.cmd("ip", ["-o", "-4", "addr", "show", "up"]) do
+      {output, 0} ->
+        case Regex.run(~r/inet\s+(\d+\.\d+\.\d+\.\d+)/, output) do
+          [_, ip] -> ip
+          _ -> nil
+        end
+
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 end

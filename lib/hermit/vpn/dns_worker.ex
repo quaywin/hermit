@@ -532,22 +532,33 @@ defmodule Hermit.Vpn.DnsWorker do
                  "#{ns_ip}:#{ts_port}"
                ]),
              {:ok, _} <-
-               run_cmd("nft", [
-                 "add",
-                 "rule",
-                 "ip",
-                 "hermit_dns_endpoint_#{endpoint_id}",
-                 "postrouting",
-                 "ip",
-                 "saddr",
-                 ns_ip,
-                 "udp",
-                 "sport",
-                 to_string(ts_port),
-                 "snat",
-                 "to",
-                 ":#{ts_port}"
-               ]),
+               (
+                 container_ip = Hermit.Vpn.Inbound.Tailscale.get_container_ip()
+
+                 snat_args =
+                   if container_ip do
+                     ["snat", "to", "#{container_ip}:#{ts_port}"]
+                   else
+                     ["masquerade", "to", ":#{ts_port}"]
+                   end
+
+                 run_cmd(
+                   "nft",
+                   [
+                     "add",
+                     "rule",
+                     "ip",
+                     "hermit_dns_endpoint_#{endpoint_id}",
+                     "postrouting",
+                     "ip",
+                     "saddr",
+                     ns_ip,
+                     "udp",
+                     "sport",
+                     to_string(ts_port)
+                   ] ++ snat_args
+                 )
+               ),
              {:ok, _} <-
                run_cmd("nft", [
                  "add",

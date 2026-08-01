@@ -54,14 +54,6 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
       true ->
         Logger.info("Creating local netns: #{wg_name}")
 
-        if netns_exists?(wg_name) do
-          Logger.warning(
-            "Stale network namespace found: #{wg_name}. Performing cleanup before recreation."
-          )
-
-          cleanup(pair_id, storage_dir)
-        end
-
         # Parse Address, DNS, and MTU from the config file
         addresses =
           case Regex.run(~r/^\s*Address\s*=\s*([^\s#\n\r]+)/m, config_content) do

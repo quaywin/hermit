@@ -54,11 +54,16 @@ defmodule Hermit.Vpn.Namespace do
 
         gateway = "10.200.#{hash}.1"
 
-        # Policy Routing Table 200: Force traffic originating from ns_ip (e.g. Tailscale DISCO/STUN) out via eth0 gateway
+        # Policy Routing Table 200: Force STUN/DISCO and Tailscale CGNAT traffic (100.64.0.0/10) via eth0 gateway
         run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "del", "from", ns_ip, "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "del", "from", "100.64.0.0/10", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "del", "to", "100.64.0.0/10", "table", "200"])
         run_cmd("ip", ["netns", "exec", ns, "ip", "route", "flush", "table", "200"])
+
         run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "from", ns_ip, "table", "200"])
-        run_cmd("ip", ["netns", "exec", ns, "ip", "route", "add", "default", "via", gateway, "dev", "eth0", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "from", "100.64.0.0/10", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "to", "100.64.0.0/10", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "route", "replace", "default", "via", gateway, "dev", "eth0", "table", "200"])
 
         # Setup host NAT table
         Hermit.Vpn.Nat.setup_nat("hermit_local_#{pair_id}", subnet, ns_ip)
@@ -157,11 +162,16 @@ defmodule Hermit.Vpn.Namespace do
 
         gateway = "10.251.#{octet}.1"
 
-        # Policy Routing Table 200: Force traffic originating from ns_ip (e.g. Tailscale DISCO/STUN) out via eth0 gateway
+        # Policy Routing Table 200: Force STUN/DISCO and Tailscale CGNAT traffic (100.64.0.0/10) via eth0 gateway
         run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "del", "from", ns_ip, "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "del", "from", "100.64.0.0/10", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "del", "to", "100.64.0.0/10", "table", "200"])
         run_cmd("ip", ["netns", "exec", ns, "ip", "route", "flush", "table", "200"])
+
         run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "from", ns_ip, "table", "200"])
-        run_cmd("ip", ["netns", "exec", ns, "ip", "route", "add", "default", "via", gateway, "dev", "eth0", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "from", "100.64.0.0/10", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "to", "100.64.0.0/10", "table", "200"])
+        run_cmd("ip", ["netns", "exec", ns, "ip", "route", "replace", "default", "via", gateway, "dev", "eth0", "table", "200"])
 
         table_name = "hermit_dns_endpoint_#{endpoint_id}"
         Hermit.Vpn.Nat.setup_nat(table_name, subnet, ns_ip, ts_port)

@@ -231,6 +231,12 @@
                   )}</code>
                 </div>
                 <div>
+                  <span class="text-base-content/60 font-medium">UDP Listening Port:</span>
+                  <code class="bg-base-200 text-emerald-500 font-mono text-xs px-1.5 py-0.5 rounded-[4px] border border-base-300">
+                    {Hermit.Vpn.Inbound.Tailscale.resolve_port(@id, @pair.inbound_config || %{})}
+                  </code>
+                </div>
+                <div>
                   <span class="text-base-content/60 font-medium">Daemon Process ID:</span>
                   <%= if @pair.ts_port do %>
                     <span class="text-emerald-500 font-mono text-xs">Active (PID via Port)</span>

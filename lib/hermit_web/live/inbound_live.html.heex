@@ -171,6 +171,26 @@
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Port Range (Optional, default: 41641-41700)</label>
+                  <input
+                    type="text"
+                    name="inbound_profile[config][ts_port_range]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_port_range"]}
+                    placeholder="e.g., 41641-41700"
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Fixed Port (Optional)</label>
+                  <input
+                    type="number"
+                    name="inbound_profile[config][ts_port]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_port"]}
+                    placeholder="e.g., 41645"
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
               </div>
             <% "proxy" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">

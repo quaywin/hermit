@@ -265,12 +265,13 @@ defmodule Hermit.Vpn.DnsWorker do
       storage_dir = Path.join(get_storage_base_path(), "dns_#{endpoint_id}")
       File.mkdir_p!(storage_dir)
 
+      profile_config = (profile && profile.config) || %{}
       {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(profile)
 
       if auth_key == "" do
         {:error, "Tailscale auth key not configured"}
       else
-        case bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server) do
+        case bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server, profile_config) do
           {:ok, port, ip} ->
             {:ok, ip, port}
 
@@ -312,7 +313,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
   # --- Namespace Setup & Linux Commands ---
 
-  defp bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server) do
+  defp bootstrap_namespace(endpoint_id, storage_dir, auth_key, login_server, profile_config) do
     ns = "hermit_dns_endpoint_#{endpoint_id}"
     host_if = "dns_h_#{endpoint_id}"
     ns_if = "dns_n_#{endpoint_id}"
@@ -687,8 +688,10 @@ defmodule Hermit.Vpn.DnsWorker do
             log_path = Path.join(storage_dir, "tailscaled.log")
             _ = File.rm(log_path)
 
+            ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
+
             shell_cmd =
-              "ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{41640 + endpoint_id} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
+              "ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
 
             try do
               p = Port.open({:spawn_executable, "/bin/sh"}, [:binary, args: ["-c", shell_cmd]])

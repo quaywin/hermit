@@ -1,6 +1,12 @@
 defmodule Hermit.Vpn.Inbound.TailscaleTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   alias Hermit.Vpn.Inbound.Tailscale
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Hermit.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Hermit.Repo, {:shared, self()})
+    :ok
+  end
 
   describe "clean_hujson/1" do
     test "removes line comments" do
@@ -243,6 +249,27 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
   describe "approve_exit_node/1" do
     test "returns approved on mock mode" do
       assert {:ok, :approved} = Tailscale.approve_exit_node("test_pair")
+    end
+  end
+
+  describe "resolve_port/2" do
+    test "returns explicit ts_port when configured" do
+      config = %{"ts_port" => "41655"}
+      assert Tailscale.resolve_port("pair1", config) == 41655
+
+      config_int = %{"ts_port" => 41660}
+      assert Tailscale.resolve_port("pair1", config_int) == 41660
+    end
+
+    test "allocates port within custom ts_port_range" do
+      config = %{"ts_port_range" => "42000-42010"}
+      port = Tailscale.resolve_port("pair_abc", config)
+      assert port >= 42000 and port <= 42010
+    end
+
+    test "allocates port within default range 41641-41700 when config is empty" do
+      port = Tailscale.resolve_port("pair_xyz", %{})
+      assert port >= 41641 and port <= 41700
     end
   end
 end

@@ -53,8 +53,10 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         log_path = Path.join(state_dir, "tailscaled.log")
         _ = File.rm(log_path)
 
+        ts_port = resolve_port(pair_id, config)
+
         shell_cmd =
-          "ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=41641 --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
+          "ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
 
         try do
           # Port is owned by the calling process (PairWorker)
@@ -1773,6 +1775,85 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     else
       Process.sleep(500)
       wait_for_dns_resolve(wg_name, hosts, retries - 1)
+    end
+  end
+
+  @doc """
+  Resolves the UDP port for tailscaled to bind.
+  Supports explicit `ts_port`, configured `ts_port_range` (or global setting `tailscale_port_range`),
+  and falls back to finding a free port within the range.
+  """
+  def resolve_port(pair_id, config) do
+    explicit_port = Map.get(config, "ts_port") || Map.get(config, :ts_port)
+
+    case parse_port(explicit_port) do
+      port when is_integer(port) and port > 0 ->
+        port
+
+      _ ->
+        range_str =
+          Map.get(config, "ts_port_range") ||
+            Map.get(config, :ts_port_range) ||
+            Hermit.Vpn.Setting.get_value("tailscale_port_range", "41641-41700")
+
+        {start_port, end_port} = parse_port_range(range_str)
+        find_free_port_in_range(pair_id, start_port, end_port)
+    end
+  end
+
+  defp parse_port(val) when is_integer(val), do: val
+
+  defp parse_port(val) when is_binary(val) do
+    case Integer.parse(String.trim(val)) do
+      {port, ""} -> port
+      _ -> nil
+    end
+  end
+
+  defp parse_port(_), do: nil
+
+  defp parse_port_range(str) when is_binary(str) do
+    case String.split(str, ["-", "..", ":"]) |> Enum.map(&String.trim/1) do
+      [s, e] ->
+        with {start_p, ""} <- Integer.parse(s),
+             {end_p, ""} <- Integer.parse(e),
+             true <- start_p > 0 and end_p >= start_p do
+          {start_p, end_p}
+        else
+          _ -> {41641, 41700}
+        end
+
+      _ ->
+        {41641, 41700}
+    end
+  end
+
+  defp parse_port_range(_), do: {41641, 41700}
+
+  defp find_free_port_in_range(pair_id, start_port, end_port) do
+    total = max(1, end_port - start_port + 1)
+    offset = :erlang.phash2(pair_id, total)
+    start_candidate = start_port + offset
+
+    candidates =
+      if start_candidate <= end_port do
+        Enum.to_list(start_candidate..end_port) ++
+          if(start_candidate > start_port, do: Enum.to_list(start_port..(start_candidate - 1)), else: [])
+      else
+        Enum.to_list(start_port..end_port)
+      end
+
+    Enum.find(candidates, 0, &port_free?/1)
+  end
+
+  defp port_free?(port) do
+    case :gen_udp.open(port, [:inet, reuseaddr: false]) do
+      {:ok, socket} ->
+        :gen_udp.close(socket)
+        true
+
+      {:error, _} ->
+        false
     end
   end
 end

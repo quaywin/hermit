@@ -55,3 +55,364 @@ primary_region = 'sin'
     method = 'get'
     path = '/up'
     protocol = 'http'
+
+# Tailscale UDP Port Range (41641 - 41700)
+[[services]]
+  internal_port = 41641
+  protocol = "udp"
+  [[services.ports]]
+    port = 41641
+
+[[services]]
+  internal_port = 41642
+  protocol = "udp"
+  [[services.ports]]
+    port = 41642
+
+[[services]]
+  internal_port = 41643
+  protocol = "udp"
+  [[services.ports]]
+    port = 41643
+
+[[services]]
+  internal_port = 41644
+  protocol = "udp"
+  [[services.ports]]
+    port = 41644
+
+[[services]]
+  internal_port = 41645
+  protocol = "udp"
+  [[services.ports]]
+    port = 41645
+
+[[services]]
+  internal_port = 41646
+  protocol = "udp"
+  [[services.ports]]
+    port = 41646
+
+[[services]]
+  internal_port = 41647
+  protocol = "udp"
+  [[services.ports]]
+    port = 41647
+
+[[services]]
+  internal_port = 41648
+  protocol = "udp"
+  [[services.ports]]
+    port = 41648
+
+[[services]]
+  internal_port = 41649
+  protocol = "udp"
+  [[services.ports]]
+    port = 41649
+
+[[services]]
+  internal_port = 41650
+  protocol = "udp"
+  [[services.ports]]
+    port = 41650
+
+[[services]]
+  internal_port = 41651
+  protocol = "udp"
+  [[services.ports]]
+    port = 41651
+
+[[services]]
+  internal_port = 41652
+  protocol = "udp"
+  [[services.ports]]
+    port = 41652
+
+[[services]]
+  internal_port = 41653
+  protocol = "udp"
+  [[services.ports]]
+    port = 41653
+
+[[services]]
+  internal_port = 41654
+  protocol = "udp"
+  [[services.ports]]
+    port = 41654
+
+[[services]]
+  internal_port = 41655
+  protocol = "udp"
+  [[services.ports]]
+    port = 41655
+
+[[services]]
+  internal_port = 41656
+  protocol = "udp"
+  [[services.ports]]
+    port = 41656
+
+[[services]]
+  internal_port = 41657
+  protocol = "udp"
+  [[services.ports]]
+    port = 41657
+
+[[services]]
+  internal_port = 41658
+  protocol = "udp"
+  [[services.ports]]
+    port = 41658
+
+[[services]]
+  internal_port = 41659
+  protocol = "udp"
+  [[services.ports]]
+    port = 41659
+
+[[services]]
+  internal_port = 41660
+  protocol = "udp"
+  [[services.ports]]
+    port = 41660
+
+[[services]]
+  internal_port = 41661
+  protocol = "udp"
+  [[services.ports]]
+    port = 41661
+
+[[services]]
+  internal_port = 41662
+  protocol = "udp"
+  [[services.ports]]
+    port = 41662
+
+[[services]]
+  internal_port = 41663
+  protocol = "udp"
+  [[services.ports]]
+    port = 41663
+
+[[services]]
+  internal_port = 41664
+  protocol = "udp"
+  [[services.ports]]
+    port = 41664
+
+[[services]]
+  internal_port = 41665
+  protocol = "udp"
+  [[services.ports]]
+    port = 41665
+
+[[services]]
+  internal_port = 41666
+  protocol = "udp"
+  [[services.ports]]
+    port = 41666
+
+[[services]]
+  internal_port = 41667
+  protocol = "udp"
+  [[services.ports]]
+    port = 41667
+
+[[services]]
+  internal_port = 41668
+  protocol = "udp"
+  [[services.ports]]
+    port = 41668
+
+[[services]]
+  internal_port = 41669
+  protocol = "udp"
+  [[services.ports]]
+    port = 41669
+
+[[services]]
+  internal_port = 41670
+  protocol = "udp"
+  [[services.ports]]
+    port = 41670
+
+[[services]]
+  internal_port = 41671
+  protocol = "udp"
+  [[services.ports]]
+    port = 41671
+
+[[services]]
+  internal_port = 41672
+  protocol = "udp"
+  [[services.ports]]
+    port = 41672
+
+[[services]]
+  internal_port = 41673
+  protocol = "udp"
+  [[services.ports]]
+    port = 41673
+
+[[services]]
+  internal_port = 41674
+  protocol = "udp"
+  [[services.ports]]
+    port = 41674
+
+[[services]]
+  internal_port = 41675
+  protocol = "udp"
+  [[services.ports]]
+    port = 41675
+
+[[services]]
+  internal_port = 41676
+  protocol = "udp"
+  [[services.ports]]
+    port = 41676
+
+[[services]]
+  internal_port = 41677
+  protocol = "udp"
+  [[services.ports]]
+    port = 41677
+
+[[services]]
+  internal_port = 41678
+  protocol = "udp"
+  [[services.ports]]
+    port = 41678
+
+[[services]]
+  internal_port = 41679
+  protocol = "udp"
+  [[services.ports]]
+    port = 41679
+
+[[services]]
+  internal_port = 41680
+  protocol = "udp"
+  [[services.ports]]
+    port = 41680
+
+[[services]]
+  internal_port = 41681
+  protocol = "udp"
+  [[services.ports]]
+    port = 41681
+
+[[services]]
+  internal_port = 41682
+  protocol = "udp"
+  [[services.ports]]
+    port = 41682
+
+[[services]]
+  internal_port = 41683
+  protocol = "udp"
+  [[services.ports]]
+    port = 41683
+
+[[services]]
+  internal_port = 41684
+  protocol = "udp"
+  [[services.ports]]
+    port = 41684
+
+[[services]]
+  internal_port = 41685
+  protocol = "udp"
+  [[services.ports]]
+    port = 41685
+
+[[services]]
+  internal_port = 41686
+  protocol = "udp"
+  [[services.ports]]
+    port = 41686
+
+[[services]]
+  internal_port = 41687
+  protocol = "udp"
+  [[services.ports]]
+    port = 41687
+
+[[services]]
+  internal_port = 41688
+  protocol = "udp"
+  [[services.ports]]
+    port = 41688
+
+[[services]]
+  internal_port = 41689
+  protocol = "udp"
+  [[services.ports]]
+    port = 41689
+
+[[services]]
+  internal_port = 41690
+  protocol = "udp"
+  [[services.ports]]
+    port = 41690
+
+[[services]]
+  internal_port = 41691
+  protocol = "udp"
+  [[services.ports]]
+    port = 41691
+
+[[services]]
+  internal_port = 41692
+  protocol = "udp"
+  [[services.ports]]
+    port = 41692
+
+[[services]]
+  internal_port = 41693
+  protocol = "udp"
+  [[services.ports]]
+    port = 41693
+
+[[services]]
+  internal_port = 41694
+  protocol = "udp"
+  [[services.ports]]
+    port = 41694
+
+[[services]]
+  internal_port = 41695
+  protocol = "udp"
+  [[services.ports]]
+    port = 41695
+
+[[services]]
+  internal_port = 41696
+  protocol = "udp"
+  [[services.ports]]
+    port = 41696
+
+[[services]]
+  internal_port = 41697
+  protocol = "udp"
+  [[services.ports]]
+    port = 41697
+
+[[services]]
+  internal_port = 41698
+  protocol = "udp"
+  [[services.ports]]
+    port = 41698
+
+[[services]]
+  internal_port = 41699
+  protocol = "udp"
+  [[services.ports]]
+    port = 41699
+
+[[services]]
+  internal_port = 41700
+  protocol = "udp"
+  [[services.ports]]
+    port = 41700

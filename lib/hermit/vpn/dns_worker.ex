@@ -323,6 +323,7 @@ defmodule Hermit.Vpn.DnsWorker do
     ns_ip = "10.251.#{octet}.2"
     subnet = "10.251.#{octet}.0/30"
     port = 5400 + endpoint_id
+    ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
 
     socket_path = "/run/tailscaled.dns_#{endpoint_id}.socket"
     pid_path = Path.join(storage_dir, "tailscaled.pid")
@@ -480,6 +481,15 @@ defmodule Hermit.Vpn.DnsWorker do
                  "chain",
                  "ip",
                  "hermit_dns_endpoint_#{endpoint_id}",
+                 "prerouting",
+                 "{ type nat hook prerouting priority dstnat ; }"
+               ]),
+             {:ok, _} <-
+               run_cmd("nft", [
+                 "add",
+                 "chain",
+                 "ip",
+                 "hermit_dns_endpoint_#{endpoint_id}",
                  "postrouting",
                  "{ type nat hook postrouting priority srcnat ; }"
                ]),
@@ -506,6 +516,37 @@ defmodule Hermit.Vpn.DnsWorker do
                  "daddr",
                  subnet,
                  "accept"
+               ]),
+             {:ok, _} <-
+               run_cmd("nft", [
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_dns_endpoint_#{endpoint_id}",
+                 "prerouting",
+                 "udp",
+                 "dport",
+                 to_string(ts_port),
+                 "dnat",
+                 "to",
+                 "#{ns_ip}:#{ts_port}"
+               ]),
+             {:ok, _} <-
+               run_cmd("nft", [
+                 "add",
+                 "rule",
+                 "ip",
+                 "hermit_dns_endpoint_#{endpoint_id}",
+                 "postrouting",
+                 "ip",
+                 "saddr",
+                 ns_ip,
+                 "udp",
+                 "sport",
+                 to_string(ts_port),
+                 "snat",
+                 "to",
+                 ":#{ts_port}"
                ]),
              {:ok, _} <-
                run_cmd("nft", [

@@ -70,6 +70,9 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           # Wait up to 2 seconds for socket creation
           wait_for_socket(socket_path)
 
+          # Setup inbound DNAT and port-preserving SNAT rules on container default namespace
+          setup_tailscale_host_nat(pair_id, ts_port)
+
           # Wait for DNS/Network resolution inside the namespace to be ready
           hosts =
             if login_server && login_server != "" do
@@ -443,6 +446,9 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
       # 5. Clean up Unix domain socket from the container filesystem
       File.rm(socket_path)
+
+      # 6. Clean up nftables host NAT rules
+      cleanup_tailscale_host_nat(pair_id)
 
       :ok
     end
@@ -1882,4 +1888,54 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   def claim_port(_pair_id, _port), do: :ok
+
+  @doc """
+  Sets up inbound DNAT and port-preserving outbound SNAT rules on the container default namespace for pair_id.
+  """
+  def setup_tailscale_host_nat(pair_id, ts_port) when is_integer(ts_port) and ts_port > 0 do
+    table_name = "hermit_ts_nat_#{pair_id}"
+    ns = "hermit_wg_#{pair_id}"
+
+    case System.cmd("ip", ["netns", "exec", ns, "ip", "-o", "-4", "addr", "show"]) do
+      {output, 0} ->
+        case Regex.run(~r/inet\s+(10\.\d+\.\d+\.\d+)/, output) do
+          [_, ns_ip] ->
+            System.cmd("nft", ["add", "table", "ip", table_name])
+            System.cmd("nft", ["add", "chain", "ip", table_name, "prerouting", "{ type nat hook prerouting priority dstnat ; }"])
+            System.cmd("nft", ["add", "chain", "ip", table_name, "postrouting", "{ type nat hook postrouting priority srcnat ; }"])
+            System.cmd("nft", ["add", "chain", "ip", table_name, "forward", "{ type filter hook forward priority filter ; }"])
+            System.cmd("nft", ["add", "rule", "ip", table_name, "forward", "ip", "daddr", ns_ip, "accept"])
+            System.cmd("nft", ["add", "rule", "ip", table_name, "forward", "ip", "saddr", ns_ip, "accept"])
+
+            System.cmd("nft", [
+              "add", "rule", "ip", table_name, "prerouting",
+              "udp", "dport", to_string(ts_port),
+              "dnat", "to", "#{ns_ip}:#{ts_port}"
+            ])
+
+            System.cmd("nft", [
+              "add", "rule", "ip", table_name, "postrouting",
+              "ip", "saddr", ns_ip,
+              "udp", "sport", to_string(ts_port),
+              "snat", "to", ":#{ts_port}"
+            ])
+            :ok
+
+          _ -> :ok
+        end
+
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  def setup_tailscale_host_nat(_pair_id, _ts_port), do: :ok
+
+  def cleanup_tailscale_host_nat(pair_id) do
+    table_name = "hermit_ts_nat_#{pair_id}"
+    System.cmd("nft", ["delete", "table", "ip", table_name])
+  rescue
+    _ -> :ok
+  end
 end

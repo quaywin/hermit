@@ -1900,6 +1900,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       {output, 0} ->
         case Regex.run(~r/inet\s+(10\.\d+\.\d+\.\d+)/, output) do
           [_, ns_ip] ->
+            # Ensure table is clean before setup
+            System.cmd("nft", ["delete", "table", "ip", table_name])
             System.cmd("nft", ["add", "table", "ip", table_name])
             System.cmd("nft", ["add", "chain", "ip", table_name, "prerouting", "{ type nat hook prerouting priority dstnat ; }"])
             System.cmd("nft", ["add", "chain", "ip", table_name, "postrouting", "{ type nat hook postrouting priority srcnat ; }"])

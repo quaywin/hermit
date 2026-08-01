@@ -54,6 +54,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         _ = File.rm(log_path)
 
         ts_port = resolve_port(pair_id, config)
+        claim_port(pair_id, ts_port)
 
         shell_cmd =
           "ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
@@ -1836,17 +1837,28 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     start_candidate = start_port + offset
 
     candidates =
-      if start_candidate <= end_port do
-        Enum.to_list(start_candidate..end_port) ++
-          if(start_candidate > start_port, do: Enum.to_list(start_port..(start_candidate - 1)), else: [])
+      if start_candidate > start_port do
+        Stream.concat(start_candidate..end_port, start_port..(start_candidate - 1))
       else
-        Enum.to_list(start_port..end_port)
+        start_port..end_port
       end
 
-    Enum.find(candidates, 0, &port_free?/1)
+    Enum.find(candidates, 0, fn p -> port_free?(pair_id, p) end)
   end
 
-  defp port_free?(port) do
+  defp port_free?(pair_id, port) do
+    registry_free?(pair_id, port) and os_port_free?(port)
+  end
+
+  defp registry_free?(pair_id, port) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:ts_port, port}) do
+      [] -> true
+      [{_pid, ^pair_id}] -> true
+      _ -> false
+    end
+  end
+
+  defp os_port_free?(port) do
     case :gen_udp.open(port, [:inet, reuseaddr: false]) do
       {:ok, socket} ->
         :gen_udp.close(socket)
@@ -1856,4 +1868,18 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         false
     end
   end
+
+  @doc """
+  Claims and registers a port reservation for pair_id in Hermit.Vpn.Registry.
+  The reservation is automatically released when the calling process terminates.
+  """
+  def claim_port(pair_id, port) when is_integer(port) and port > 0 do
+    case Registry.register(Hermit.Vpn.Registry, {:ts_port, port}, pair_id) do
+      {:ok, _} -> :ok
+      {:error, {:already_registered, _}} -> :ok
+      _ -> :ok
+    end
+  end
+
+  def claim_port(_pair_id, _port), do: :ok
 end

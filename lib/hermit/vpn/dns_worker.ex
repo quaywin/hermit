@@ -689,6 +689,7 @@ defmodule Hermit.Vpn.DnsWorker do
             _ = File.rm(log_path)
 
             ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
+            Hermit.Vpn.Inbound.Tailscale.claim_port("dns_#{endpoint_id}", ts_port)
 
             shell_cmd =
               "ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"

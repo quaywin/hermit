@@ -63,7 +63,7 @@ defmodule Hermit.Vpn.Outbound.Local do
                    wg_name,
                    "ip",
                    "route",
-                   "add",
+                   "replace",
                    "default",
                    "via",
                    gateway,

@@ -203,7 +203,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    wg_name,
                    "ip",
                    "route",
-                   "add",
+                   "replace",
                    "default",
                    "dev",
                    "wg0"

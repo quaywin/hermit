@@ -442,7 +442,7 @@ defmodule Hermit.Vpn.DnsWorker do
                  ns,
                  "ip",
                  "route",
-                 "add",
+                 "replace",
                  "default",
                  "via",
                  host_ip,

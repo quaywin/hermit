@@ -16,9 +16,9 @@ defmodule HermitWeb.Endpoint do
     longpoll: [connect_info: [session: @session_options]]
 
   @ssl_opts Plug.SSL.init(
-    rewrite_on: [:x_forwarded_proto],
-    exclude: [hosts: ["localhost", "127.0.0.1"]]
-  )
+              rewrite_on: [:x_forwarded_proto],
+              exclude: [hosts: ["localhost", "127.0.0.1"]]
+            )
 
   plug :force_ssl_redirect
 
@@ -51,6 +51,7 @@ defmodule HermitWeb.Endpoint do
   end
 
   plug Plug.RequestId
+
   plug Plug.Telemetry,
     event_prefix: [:phoenix, :endpoint],
     log: {__MODULE__, :log_level, []}

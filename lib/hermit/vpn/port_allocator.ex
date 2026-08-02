@@ -28,7 +28,10 @@ defmodule Hermit.Vpn.PortAllocator do
         {:ok, socks, http}
 
       nil ->
-        Logger.error("PortAllocator: No free ports available in range #{@start_port}..#{@end_port}")
+        Logger.error(
+          "PortAllocator: No free ports available in range #{@start_port}..#{@end_port}"
+        )
+
         {:error, :no_ports_available}
     end
   end

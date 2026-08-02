@@ -45,7 +45,12 @@
       <div>
         <span class="text-xs uppercase tracking-wider text-base-content/50 block">Total Blocked Domains</span>
         <span class="text-xl font-bold text-base-content">
-          {format_number(@blocklists |> Enum.filter(& &1.enabled) |> Enum.map(& &1.rules_count) |> Enum.sum())}
+          {format_number(
+            @blocklists
+            |> Enum.filter(& &1.enabled)
+            |> Enum.map(& &1.rules_count)
+            |> Enum.sum()
+          )}
         </span>
       </div>
     </div>
@@ -56,8 +61,7 @@
       <div>
         <span class="text-xs uppercase tracking-wider text-base-content/50 block">Filtering Engine</span>
         <span class="text-xs font-semibold text-emerald-500 uppercase tracking-wider flex items-center gap-1 mt-1">
-          <span class="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          Active in Memory
+          <span class="size-2 rounded-full bg-emerald-500 animate-pulse"></span> Active in Memory
         </span>
         <span class="text-[10px] text-base-content/40 mt-1 block font-mono">
           RAM: {@ram_usage} (Free: {@free_ram})
@@ -71,7 +75,10 @@
       <div class="flex-1">
         <span class="text-xs uppercase tracking-wider text-base-content/50 block">Auto-Update</span>
         <form phx-change="change_update_interval" class="mt-1">
-          <select name="interval" class="select select-xs select-bordered w-full rounded-[6px] text-xs font-semibold bg-base-100 border-base-300 focus:outline-none">
+          <select
+            name="interval"
+            class="select select-xs select-bordered w-full rounded-[6px] text-xs font-semibold bg-base-100 border-base-300 focus:outline-none"
+          >
             <option value="disabled" selected={@update_interval == "disabled"}>Disabled</option>
             <option value="12h" selected={@update_interval == "12h"}>Every 12 Hours</option>
             <option value="24h" selected={@update_interval == "24h"}>Every 24 Hours</option>
@@ -108,7 +115,7 @@
                 {blocklist.format}
               </span>
             </div>
-            
+
             <button
               phx-click="toggle_blocklist"
               phx-value-id={blocklist.id}
@@ -127,7 +134,10 @@
           </p>
 
           <!-- Path / URL info -->
-          <div class="mt-4 p-2 bg-base-200/50 rounded-[6px] border border-base-300/40 flex items-center gap-2 font-mono text-[10px] text-base-content/50 truncate select-all" title={blocklist.url}>
+          <div
+            class="mt-4 p-2 bg-base-200/50 rounded-[6px] border border-base-300/40 flex items-center gap-2 font-mono text-[10px] text-base-content/50 truncate select-all"
+            title={blocklist.url}
+          >
             <.icon name="hero-link" class="size-3 shrink-0" />
             <span class="truncate">{blocklist.url}</span>
           </div>
@@ -137,10 +147,13 @@
         <div class="mt-6 pt-4 border-t border-base-300 flex items-center justify-between text-xs text-base-content/50">
           <div class="flex flex-col gap-0.5">
             <span class="font-semibold text-base-content/80 text-sm">
-              {format_number(blocklist.rules_count)} <span class="text-[10px] font-normal text-base-content/50 uppercase">domains</span>
+              {format_number(blocklist.rules_count)}
+              <span class="text-[10px] font-normal text-base-content/50 uppercase">domains</span>
             </span>
             <span class="text-[10px]">
-              Last updated: {if blocklist.last_fetched_at, do: NaiveDateTime.to_string(blocklist.last_fetched_at), else: "Never"}
+              Last updated: {if blocklist.last_fetched_at,
+                do: NaiveDateTime.to_string(blocklist.last_fetched_at),
+                else: "Never"}
             </span>
           </div>
 
@@ -185,8 +198,13 @@
         <h3 class="text-base font-bold uppercase tracking-wider text-base-content border-b border-base-300 pb-3">
           {if @editing_blocklist, do: "Edit Filter Source", else: "Add Filter Source"}
         </h3>
-        
-        <.form for={@form} phx-change="validate_blocklist" phx-submit="save_blocklist" class="space-y-4 mt-4">
+
+        <.form
+          for={@form}
+          phx-change="validate_blocklist"
+          phx-submit="save_blocklist"
+          class="space-y-4 mt-4"
+        >
           <!-- Name -->
           <div>
             <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
@@ -240,7 +258,11 @@
               <.input
                 field={@form[:format]}
                 type="select"
-                options={[{"AdGuard Filter", "adguard"}, {"Hosts File", "hosts"}, {"Plain Domains", "domains"}]}
+                options={[
+                  {"AdGuard Filter", "adguard"},
+                  {"Hosts File", "hosts"},
+                  {"Plain Domains", "domains"}
+                ]}
                 class="w-full select select-bordered rounded-[6px] text-sm"
                 required
               />

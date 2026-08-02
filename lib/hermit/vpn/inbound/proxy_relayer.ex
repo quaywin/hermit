@@ -148,6 +148,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
               kill_port_process(elem(procs, 0))
               kill_port_process(elem(procs, 1))
             end
+
             unless mock?, do: cleanup_veth(vh_name)
             {:stop, reason}
         end

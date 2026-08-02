@@ -3,10 +3,10 @@ defmodule Hermit.Dns.BlocklistHourlyStat do
   import Ecto.Changeset
 
   schema "dns_blocklist_hourly_stats" do
-    field :dns_config_id, :integer
-    field :dns_blocklist_id, :integer
-    field :hour_timestamp, :integer
-    field :blocked_count, :integer, default: 0
+    field(:dns_config_id, :integer)
+    field(:dns_blocklist_id, :integer)
+    field(:hour_timestamp, :integer)
+    field(:blocked_count, :integer, default: 0)
 
     timestamps()
   end

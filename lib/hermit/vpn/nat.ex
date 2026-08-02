@@ -18,23 +18,76 @@ defmodule Hermit.Vpn.Nat do
 
       # 2. Create fresh table and core chains
       System.cmd("nft", ["add", "table", "ip", table_name])
-      System.cmd("nft", ["add", "chain", "ip", table_name, "prerouting", "{ type nat hook prerouting priority dstnat ; }"])
-      System.cmd("nft", ["add", "chain", "ip", table_name, "postrouting", "{ type nat hook postrouting priority srcnat ; }"])
-      System.cmd("nft", ["add", "chain", "ip", table_name, "forward", "{ type filter hook forward priority filter ; }"])
+
+      System.cmd("nft", [
+        "add",
+        "chain",
+        "ip",
+        table_name,
+        "prerouting",
+        "{ type nat hook prerouting priority dstnat ; }"
+      ])
+
+      System.cmd("nft", [
+        "add",
+        "chain",
+        "ip",
+        table_name,
+        "postrouting",
+        "{ type nat hook postrouting priority srcnat ; }"
+      ])
+
+      System.cmd("nft", [
+        "add",
+        "chain",
+        "ip",
+        table_name,
+        "forward",
+        "{ type filter hook forward priority filter ; }"
+      ])
 
       # 3. Allow subnet forwarding
       if subnet && subnet != "" do
-        System.cmd("nft", ["add", "rule", "ip", table_name, "forward", "ip", "saddr", subnet, "accept"])
-        System.cmd("nft", ["add", "rule", "ip", table_name, "forward", "ip", "daddr", subnet, "accept"])
+        System.cmd("nft", [
+          "add",
+          "rule",
+          "ip",
+          table_name,
+          "forward",
+          "ip",
+          "saddr",
+          subnet,
+          "accept"
+        ])
+
+        System.cmd("nft", [
+          "add",
+          "rule",
+          "ip",
+          table_name,
+          "forward",
+          "ip",
+          "daddr",
+          subnet,
+          "accept"
+        ])
       end
 
       # 4. Inbound DNAT and Outbound SNAT for Tailscale (if ts_port configured)
-      if is_integer(ts_port) and ts_port > 0 and ns_ip && ns_ip != "" do
+      if (is_integer(ts_port) and ts_port > 0 and ns_ip) && ns_ip != "" do
         # Inbound DNAT: Forward UDP packets on ts_port to inner network namespace
         System.cmd("nft", [
-          "add", "rule", "ip", table_name, "prerouting",
-          "udp", "dport", to_string(ts_port),
-          "dnat", "to", "#{ns_ip}:#{ts_port}"
+          "add",
+          "rule",
+          "ip",
+          table_name,
+          "prerouting",
+          "udp",
+          "dport",
+          to_string(ts_port),
+          "dnat",
+          "to",
+          "#{ns_ip}:#{ts_port}"
         ])
 
         # Outbound SNAT: Rewrite saddr to container_ip and preserve sport ts_port (runs BEFORE masquerade)
@@ -45,16 +98,37 @@ defmodule Hermit.Vpn.Nat do
             ["masquerade", "to", ":#{ts_port}"]
           end
 
-        System.cmd("nft", [
-          "add", "rule", "ip", table_name, "postrouting",
-          "ip", "saddr", ns_ip,
-          "udp", "sport", to_string(ts_port)
-        ] ++ snat_args)
+        System.cmd(
+          "nft",
+          [
+            "add",
+            "rule",
+            "ip",
+            table_name,
+            "postrouting",
+            "ip",
+            "saddr",
+            ns_ip,
+            "udp",
+            "sport",
+            to_string(ts_port)
+          ] ++ snat_args
+        )
       end
 
       # 5. General subnet masquerade (placed AFTER specific SNAT rule)
       if subnet && subnet != "" do
-        System.cmd("nft", ["add", "rule", "ip", table_name, "postrouting", "ip", "saddr", subnet, "masquerade"])
+        System.cmd("nft", [
+          "add",
+          "rule",
+          "ip",
+          table_name,
+          "postrouting",
+          "ip",
+          "saddr",
+          subnet,
+          "masquerade"
+        ])
       end
 
       :ok

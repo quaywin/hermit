@@ -1899,7 +1899,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   def claim_port(_pair_id, _port), do: :ok
 
   @doc """
-  Sets up inbound DNAT and port-preserving outbound SNAT rules on the container default namespace for pair_id.
+  Sets up inbound DNAT, port-preserving outbound SNAT rules on the container default namespace,
+  and netns policy routing table for pair_id to enable Direct Tailscale P2P connections.
   """
   def setup_tailscale_host_nat(pair_id, ts_port) when is_integer(ts_port) and ts_port > 0 do
     ns = "hermit_wg_#{pair_id}"
@@ -1910,14 +1911,20 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         case Regex.run(~r/inet\s+(10\.\d+\.\d+\.\d+)/, output) do
           [_, ns_ip] ->
             subnet = Regex.replace(~r/\.\d+$/, ns_ip, ".0") <> "/30"
+            host_gateway_ip = Regex.replace(~r/\.\d+$/, ns_ip, ".1")
+
             Hermit.Vpn.Nat.setup_nat(table_name, subnet, ns_ip, ts_port)
             Hermit.Vpn.Nat.cleanup_nat("hermit_ts_nat_#{pair_id}")
+
+            setup_tailscale_netns_policy_routing(ns, host_gateway_ip, ts_port)
             :ok
 
-          _ -> :ok
+          _ ->
+            :ok
         end
 
-      _ -> :ok
+      _ ->
+        :ok
     end
   rescue
     _ -> :ok
@@ -1926,8 +1933,71 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   def setup_tailscale_host_nat(_pair_id, _ts_port), do: :ok
 
   def cleanup_tailscale_host_nat(pair_id) do
+    ns = "hermit_wg_#{pair_id}"
+    cleanup_tailscale_netns_policy_routing(ns)
     Hermit.Vpn.Nat.cleanup_nat("hermit_local_#{pair_id}")
     Hermit.Vpn.Nat.cleanup_nat("hermit_ts_nat_#{pair_id}")
+  rescue
+    _ -> :ok
+  end
+
+  defp setup_tailscale_netns_policy_routing(ns, host_gateway_ip, ts_port) do
+    System.cmd(
+      "ip",
+      ["netns", "exec", ns, "ip", "rule", "del", "sport", to_string(ts_port), "table", "200"],
+      stderr_to_stdout: true
+    )
+
+    System.cmd("ip", ["netns", "exec", ns, "ip", "route", "flush", "table", "200"],
+      stderr_to_stdout: true
+    )
+
+    System.cmd("ip", [
+      "netns",
+      "exec",
+      ns,
+      "ip",
+      "route",
+      "add",
+      "default",
+      "via",
+      host_gateway_ip,
+      "dev",
+      "eth0",
+      "table",
+      "200"
+    ])
+
+    System.cmd("ip", [
+      "netns",
+      "exec",
+      ns,
+      "ip",
+      "rule",
+      "add",
+      "sport",
+      to_string(ts_port),
+      "table",
+      "200"
+    ])
+
+    System.cmd("ip", ["netns", "exec", ns, "sysctl", "-w", "net.ipv4.conf.eth0.rp_filter=0"],
+      stderr_to_stdout: true
+    )
+
+    System.cmd("ip", ["netns", "exec", ns, "sysctl", "-w", "net.ipv4.conf.all.rp_filter=0"],
+      stderr_to_stdout: true
+    )
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp cleanup_tailscale_netns_policy_routing(ns) do
+    System.cmd("ip", ["netns", "exec", ns, "ip", "route", "flush", "table", "200"],
+      stderr_to_stdout: true
+    )
   rescue
     _ -> :ok
   end
@@ -1943,7 +2013,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           _ -> get_first_non_lo_ip()
         end
 
-      _ -> get_first_non_lo_ip()
+      _ ->
+        get_first_non_lo_ip()
     end
   rescue
     _ -> nil
@@ -1957,7 +2028,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           _ -> nil
         end
 
-      _ -> nil
+      _ ->
+        nil
     end
   rescue
     _ -> nil

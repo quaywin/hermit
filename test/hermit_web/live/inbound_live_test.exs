@@ -48,7 +48,8 @@ defmodule HermitWeb.InboundLiveTest do
 
     # Delete the profile
     # Get profile ID to trigger delete action
-    profile = Hermit.Repo.one!(from(p in Hermit.Vpn.InboundProfile, where: p.name == "TS Inbound Office"))
+    profile =
+      Hermit.Repo.one!(from(p in Hermit.Vpn.InboundProfile, where: p.name == "TS Inbound Office"))
 
     html =
       view

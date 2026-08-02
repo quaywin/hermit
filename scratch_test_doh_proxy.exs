@@ -3,7 +3,7 @@
 
 # 1. Cấu hình HTTP Proxy (Cổng HTTP Proxy của VPN Pair đang chạy)
 # Bạn hãy khởi động 1 VPN Pair trên Dashboard Hermit và thay đổi cổng này tương ứng
-proxy_port = 10001 
+proxy_port = 10001
 proxy_url = "http://127.0.0.1:#{proxy_port}"
 
 send_query_via_proxy = fn domain ->

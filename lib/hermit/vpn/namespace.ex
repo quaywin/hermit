@@ -37,10 +37,31 @@ defmodule Hermit.Vpn.Namespace do
 
         # Create veth pair if host interface does not exist
         unless link_exists?(veth_host_if) do
-          run_cmd("ip", ["link", "add", veth_host_if, "type", "veth", "peer", "name", veth_ns_temp_if])
+          run_cmd("ip", [
+            "link",
+            "add",
+            veth_host_if,
+            "type",
+            "veth",
+            "peer",
+            "name",
+            veth_ns_temp_if
+          ])
+
           run_cmd("ip", ["link", "set", veth_ns_temp_if, "netns", ns])
 
-          run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", veth_ns_temp_if, "name", "eth0"])
+          run_cmd("ip", [
+            "netns",
+            "exec",
+            ns,
+            "ip",
+            "link",
+            "set",
+            veth_ns_temp_if,
+            "name",
+            "eth0"
+          ])
+
           run_cmd("ip", ["netns", "exec", ns, "ip", "addr", "add", local_ip, "dev", "eth0"])
           run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"])
 
@@ -112,12 +133,22 @@ defmodule Hermit.Vpn.Namespace do
   """
   def create_endpoint_namespace(endpoint_id, ts_port \\ nil) do
     ns = "hermit_dns_endpoint_#{endpoint_id}"
-    endpoint_int = if is_binary(endpoint_id), do: String.to_integer(endpoint_id), else: endpoint_id
+
+    endpoint_int =
+      if is_binary(endpoint_id), do: String.to_integer(endpoint_id), else: endpoint_id
+
     octet = div(endpoint_int, 250) |> rem(250)
 
     if mock?() do
       Logger.info("Mock: Created endpoint namespace #{ns}")
-      {:ok, %{ns: ns, ns_ip: "10.251.#{octet}.2", subnet: "10.251.#{octet}.0/30", host_if: "dns_h_#{endpoint_id}"}}
+
+      {:ok,
+       %{
+         ns: ns,
+         ns_ip: "10.251.#{octet}.2",
+         subnet: "10.251.#{octet}.0/30",
+         host_if: "dns_h_#{endpoint_id}"
+       }}
     else
       ns_ip = "10.251.#{octet}.2"
       local_ip = "10.251.#{octet}.2/30"
@@ -133,10 +164,31 @@ defmodule Hermit.Vpn.Namespace do
         end
 
         unless link_exists?(veth_host_if) do
-          run_cmd("ip", ["link", "add", veth_host_if, "type", "veth", "peer", "name", veth_ns_temp_if])
+          run_cmd("ip", [
+            "link",
+            "add",
+            veth_host_if,
+            "type",
+            "veth",
+            "peer",
+            "name",
+            veth_ns_temp_if
+          ])
+
           run_cmd("ip", ["link", "set", veth_ns_temp_if, "netns", ns])
 
-          run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", veth_ns_temp_if, "name", "eth0"])
+          run_cmd("ip", [
+            "netns",
+            "exec",
+            ns,
+            "ip",
+            "link",
+            "set",
+            veth_ns_temp_if,
+            "name",
+            "eth0"
+          ])
+
           run_cmd("ip", ["netns", "exec", ns, "ip", "addr", "add", local_ip, "dev", "eth0"])
           run_cmd("ip", ["netns", "exec", ns, "ip", "link", "set", "eth0", "up"])
 

@@ -36,7 +36,8 @@ defmodule HermitWeb.DnsProfileLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dns")
 
     # Open modal
-    assert view |> element("button", "Create DNS Profile") |> render_click() =~ "Create DNS Profile"
+    assert view |> element("button", "Create DNS Profile") |> render_click() =~
+             "Create DNS Profile"
 
     # Submit form
     html =
@@ -54,7 +55,13 @@ defmodule HermitWeb.DnsProfileLiveTest do
     assert html =~ "DNS Profile: Kids Filter"
   end
 
-  test "toggles filter settings dynamically", %{conn: conn, default_profile: profile, adguard: adguard, goodbye: goodbye, adult: adult} do
+  test "toggles filter settings dynamically", %{
+    conn: conn,
+    default_profile: profile,
+    adguard: adguard,
+    goodbye: goodbye,
+    adult: adult
+  } do
     {:ok, view, _html} = live(conn, ~p"/dns?id=#{profile.id}")
 
     # Toggle Ads Blocking (AdGuard)
@@ -92,7 +99,9 @@ defmodule HermitWeb.DnsProfileLiveTest do
       |> render_submit()
 
     assert html =~ "Upstream DNS servers updated."
-    assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:upstream_dns) == "9.9.9.9, 149.112.112.112"
+
+    assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:upstream_dns) ==
+             "9.9.9.9, 149.112.112.112"
   end
 
   test "manages custom routing rules (add & delete)", %{conn: conn, default_profile: profile} do
@@ -116,6 +125,7 @@ defmodule HermitWeb.DnsProfileLiveTest do
       "action" => "redirect"
     })
     |> render_change()
+
     html =
       view
       |> form("form[phx-submit=add_custom_rule]", %{
@@ -155,6 +165,7 @@ defmodule HermitWeb.DnsProfileLiveTest do
 
     # Start editing again and save
     _ = view |> element("button[phx-click=start_edit_name]") |> render_click()
+
     html =
       view
       |> form("#edit-profile-name-form", %{
@@ -167,7 +178,10 @@ defmodule HermitWeb.DnsProfileLiveTest do
     assert DnsConfig |> Hermit.Repo.get!(profile.id) |> Map.get(:name) == "Production DNS Filter"
   end
 
-  test "supports pausing and resuming query logs streaming", %{conn: conn, default_profile: profile} do
+  test "supports pausing and resuming query logs streaming", %{
+    conn: conn,
+    default_profile: profile
+  } do
     {:ok, view, html} = live(conn, ~p"/dns?id=#{profile.id}")
     assert html =~ "Pause Stream"
     refute html =~ "(Paused)"

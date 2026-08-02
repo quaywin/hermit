@@ -372,7 +372,8 @@ defmodule Hermit.Vpn.DnsWorker do
           )
         end
 
-        with {:ok, %{ns_ip: ns_ip}} <- Hermit.Vpn.Namespace.create_endpoint_namespace(endpoint_id, ts_port),
+        with {:ok, %{ns_ip: ns_ip}} <-
+               Hermit.Vpn.Namespace.create_endpoint_namespace(endpoint_id, ts_port),
              {:ok, _} <-
                run_cmd("ip", [
                  "netns",
@@ -450,7 +451,13 @@ defmodule Hermit.Vpn.DnsWorker do
                  "eth0"
                ]),
              # NAT routing on Host via unified Hermit.Vpn.Nat module
-             :ok <- Hermit.Vpn.Nat.setup_nat("hermit_dns_endpoint_#{endpoint_id}", subnet, ns_ip, ts_port),
+             :ok <-
+               Hermit.Vpn.Nat.setup_nat(
+                 "hermit_dns_endpoint_#{endpoint_id}",
+                 subnet,
+                 ns_ip,
+                 ts_port
+               ),
              # DNAT port redirection inside namespace using nftables
              {:ok, _} <-
                run_cmd("ip", [
@@ -620,7 +627,9 @@ defmodule Hermit.Vpn.DnsWorker do
             log_path = Path.join(storage_dir, "tailscaled.log")
             _ = File.rm(log_path)
 
-            ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
+            ts_port =
+              Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
+
             Hermit.Vpn.Inbound.Tailscale.claim_port("dns_#{endpoint_id}", ts_port)
 
             shell_cmd =

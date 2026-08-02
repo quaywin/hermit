@@ -167,7 +167,10 @@
                       <code class="text-xs font-mono font-bold">{ip || "Waiting..."}</code>
                       <span class="text-xs text-base-content/60 block mt-1">UDP Port:</span>
                       <code class="text-xs font-mono font-bold text-emerald-500">
-                        {Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint.id}", (endpoint.inbound_profile && endpoint.inbound_profile.config) || %{})}
+                        {Hermit.Vpn.Inbound.Tailscale.resolve_port(
+                          "dns_#{endpoint.id}",
+                          (endpoint.inbound_profile && endpoint.inbound_profile.config) || %{}
+                        )}
                       </code>
                     </div>
                     <div class="flex flex-col items-end gap-1">

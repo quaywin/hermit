@@ -102,7 +102,8 @@ defmodule HermitWeb.BlocklistLive do
                 # Disabled
                 BlocklistLoader.unload_blocklist(updated_blocklist.id)
 
-              updated_blocklist.enabled and (old_url != updated_blocklist.url or old_format != updated_blocklist.format) ->
+              updated_blocklist.enabled and
+                  (old_url != updated_blocklist.url or old_format != updated_blocklist.format) ->
                 # Changed config while enabled -> reload
                 BlocklistLoader.load_blocklist_async(updated_blocklist)
 
@@ -133,6 +134,7 @@ defmodule HermitWeb.BlocklistLive do
       {:ok, updated} ->
         if updated.enabled do
           BlocklistLoader.load_blocklist_async(updated)
+
           {:noreply,
            socket
            |> put_flash(:info, "Filter source '#{updated.name}' enabled. Loading rules...")
@@ -141,6 +143,7 @@ defmodule HermitWeb.BlocklistLive do
            |> assign(free_ram: BlocklistLoader.get_system_free_memory_string())}
         else
           BlocklistLoader.unload_blocklist(updated.id)
+
           {:noreply,
            socket
            |> put_flash(:info, "Filter source '#{updated.name}' disabled.")
@@ -157,18 +160,24 @@ defmodule HermitWeb.BlocklistLive do
   @impl true
   def handle_event("fetch_blocklist", %{"id" => id}, socket) do
     blocklist = Hermit.Repo.get!(Blocklist, id)
+
     if blocklist.enabled do
       BlocklistLoader.load_blocklist_async(blocklist)
-      {:noreply, socket |> put_flash(:info, "Update triggered for '#{blocklist.name}' in the background.")}
+
+      {:noreply,
+       socket |> put_flash(:info, "Update triggered for '#{blocklist.name}' in the background.")}
     else
-      {:noreply, socket |> put_flash(:error, "Cannot trigger update for a disabled filter source.")}
+      {:noreply,
+       socket |> put_flash(:error, "Cannot trigger update for a disabled filter source.")}
     end
   end
 
   @impl true
   def handle_event("reload_all_blocklists", _params, socket) do
     Task.start(fn -> BlocklistLoader.reload_all() end)
-    {:noreply, socket |> put_flash(:info, "All enabled blocklists reload triggered in the background.")}
+
+    {:noreply,
+     socket |> put_flash(:info, "All enabled blocklists reload triggered in the background.")}
   end
 
   @impl true
@@ -216,7 +225,7 @@ defmodule HermitWeb.BlocklistLive do
 
   # Helper functions
   defp fetch_blocklists do
-    Hermit.Repo.all(from b in Blocklist, order_by: b.name)
+    Hermit.Repo.all(from(b in Blocklist, order_by: b.name))
   end
 
   defp assign_form(socket, struct \\ %Blocklist{}) do
@@ -225,6 +234,7 @@ defmodule HermitWeb.BlocklistLive do
   end
 
   defp format_number(nil), do: "0"
+
   defp format_number(n) when is_integer(n) do
     n
     |> Integer.to_charlist()

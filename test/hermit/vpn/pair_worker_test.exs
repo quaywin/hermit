@@ -1025,7 +1025,10 @@ defmodule Hermit.Vpn.PairWorkerTest do
 
     state = GenServer.call(pid, :get_state)
     assert state.wg_status == :error
-    assert state.wg_error_reason =~ "Endpoint Unreachable" or state.wg_error_reason =~ "Handshake Refused"
+
+    assert state.wg_error_reason =~ "Endpoint Unreachable" or
+             state.wg_error_reason =~ "Handshake Refused"
+
     GenServer.stop(pid)
   end
 

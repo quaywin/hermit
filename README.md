@@ -247,8 +247,7 @@ If you need to change this port range:
 
 #### Tailscale Performance Optimization (Highly Recommended)
 
-Hermit automatically implements the high-performance network tuning recommended by Tailscale:
-- **UDP Buffer & Queue Scaling**: Hermit automatically configures network sysctls (`rmem_max`, `wmem_max`, `udp_mem`, and `netdev_max_backlog`) at startup.
+Hermit implements high-performance network tuning for Tailscale:
 - **Namespace UDP GRO Offloading**: Hermit automatically runs `ethtool` to enable `rx-udp-gro-forwarding` and disable `rx-gro-list` on all virtual interfaces inside the isolated network namespaces.
 
 **Host-level Optimization (Manual):**

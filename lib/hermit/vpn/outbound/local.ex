@@ -22,8 +22,10 @@ defmodule Hermit.Vpn.Outbound.Local do
         block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
         netns_dns_dir = "/etc/netns/#{wg_name}"
 
+        ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port(pair_id, config)
+
         result =
-          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
+          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id, ts_port),
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",

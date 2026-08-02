@@ -112,9 +112,11 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         # Build netns DNS directory configuration
         netns_dns_dir = "/etc/netns/#{wg_name}"
 
+        ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port(pair_id, config)
+
         # Execute network setup steps sequentially
         result =
-          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
+          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id, ts_port),
                {:ok, _} <- run_cmd("ip", ["link", "add", host_if_name, "type", "wireguard"]),
                {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "netns", wg_name]),
                {:ok, _} <-

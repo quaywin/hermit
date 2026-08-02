@@ -9,7 +9,7 @@ defmodule Hermit.Vpn.Namespace do
   Ensures an isolated network namespace exists for a pair_id with a standard `eth0` veth interface
   connected to the container host, and sets up host NAT forwarding.
   """
-  def create_pair_namespace(pair_id) when is_binary(pair_id) do
+  def create_pair_namespace(pair_id, ts_port \\ nil) do
     ns = "hermit_wg_#{pair_id}"
 
     if mock?() do
@@ -65,8 +65,8 @@ defmodule Hermit.Vpn.Namespace do
         run_cmd("ip", ["netns", "exec", ns, "ip", "rule", "add", "to", "100.64.0.0/10", "table", "200"])
         run_cmd("ip", ["netns", "exec", ns, "ip", "route", "replace", "default", "via", gateway, "dev", "eth0", "table", "200"])
 
-        # Setup host NAT table
-        Hermit.Vpn.Nat.setup_nat("hermit_local_#{pair_id}", subnet, ns_ip)
+        # Setup host NAT table (with port-preserving SNAT if ts_port provided)
+        Hermit.Vpn.Nat.setup_nat("hermit_local_#{pair_id}", subnet, ns_ip, ts_port)
 
         {:ok, %{ns: ns, ns_ip: ns_ip, subnet: subnet, host_if: veth_host_if}}
       rescue

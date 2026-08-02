@@ -365,10 +365,13 @@ defmodule HermitWeb.TunnelDetailLive do
         {"custom", dns_val}
       end
 
+    advertise_routes = Map.get(params, "advertise_routes", "") |> String.trim()
+
     new_config =
       inbound_config
       |> Map.put("dns_mode", dns_mode)
       |> Map.put("dns_resolvers", dns_resolvers)
+      |> Map.put("advertise_routes", advertise_routes)
 
     case PairWorker.update_inbound_config(id, new_config) do
       {:ok, updated_pair} ->

@@ -300,7 +300,14 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             end
           end
 
-        ts_up_args = ts_up_args ++ ["--advertise-routes="]
+        advertise_routes = Map.get(config, "advertise_routes") || ""
+
+        ts_up_args =
+          if clean_routes(advertise_routes) != "" do
+            ts_up_args ++ ["--advertise-routes=#{clean_routes(advertise_routes)}"]
+          else
+            ts_up_args ++ ["--advertise-routes="]
+          end
 
         if advertise_connector do
           tag = get_connector_tag(pair_id, config)
@@ -748,7 +755,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           {:error, :missing_credentials}
         else
-          # 1. Handle Routes approval (Exit node)
+          # 1. Handle Routes approval (Exit node or Subnets)
           advertise_exit_node =
             case Map.get(config, "advertise_exit_node") do
               false -> false
@@ -757,14 +764,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
               _ -> true
             end
 
+          advertise_routes = Map.get(config, "advertise_routes") || ""
+
           routes_res =
-            if advertise_exit_node do
+            if advertise_exit_node or clean_routes(advertise_routes) != "" do
               expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
               Logger.info("Starting Tailscale routes approval for #{expected_hostname}")
               do_approve_exit_node(api_key, tailnet, expected_hostname, 5)
             else
               Logger.info(
-                "Node #{pair_id} is not advertising exit node routes. Skipping routes approval."
+                "Node #{pair_id} is not advertising any routes. Skipping routes approval."
               )
 
               {:ok, :skipped}
@@ -841,14 +850,12 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           case Req.get(routes_url, auth: {:basic, "#{api_key}:"}) do
             {:ok, %{status: 200, body: %{"advertisedRoutes" => advertised_routes}}} ->
-              exit_routes = Enum.filter(advertised_routes, &(&1 in ["0.0.0.0/0", "::/0"]))
-
-              if exit_routes != [] do
+              if advertised_routes != [] do
                 Logger.info(
-                  "Found advertised exit node routes: #{inspect(exit_routes)}. Auto-approving..."
+                  "Found advertised routes: #{inspect(advertised_routes)}. Auto-approving..."
                 )
 
-                routes_payload = %{routes: exit_routes}
+                routes_payload = %{routes: advertised_routes}
 
                 case Req.post(routes_url, json: routes_payload, auth: {:basic, "#{api_key}:"}) do
                   {:ok, %{status: 200}} ->
@@ -1736,6 +1743,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       end
 
     Map.new(config, fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp clean_routes(nil), do: ""
+
+  defp clean_routes(routes) when is_binary(routes) do
+    routes
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join(",")
   end
 
 

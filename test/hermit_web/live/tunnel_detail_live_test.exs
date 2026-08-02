@@ -373,23 +373,27 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     html =
       view
       |> form("#save_routes_dns_settings_form", %{
-        "dns_resolvers" => "76.76.2.0, 76.76.10.0"
+        "dns_resolvers" => "76.76.2.0, 76.76.10.0",
+        "advertise_routes" => "192.168.1.0/24"
       })
       |> render_submit()
 
     assert html =~ "Tailscale network settings updated"
 
-    # Verify DB was updated with DNS resolvers
+    # Verify DB was updated with DNS resolvers and advertise routes
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "toggle_test")
     assert updated_pair.inbound_config["dns_mode"] == "custom"
     assert updated_pair.inbound_config["dns_resolvers"] == "76.76.2.0, 76.76.10.0"
+    assert updated_pair.inbound_config["advertise_routes"] == "192.168.1.0/24"
 
     # Toggle it back on to use default Tailscale DNS settings
     view |> element("button[phx-click=toggle_use_tailscale_dns]") |> render_click()
 
     html =
       view
-      |> form("#save_routes_dns_settings_form", %{})
+      |> form("#save_routes_dns_settings_form", %{
+        "advertise_routes" => "192.168.1.0/24"
+      })
       |> render_submit()
 
     assert html =~ "Tailscale network settings updated"

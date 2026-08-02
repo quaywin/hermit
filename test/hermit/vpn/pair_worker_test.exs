@@ -466,7 +466,8 @@ defmodule Hermit.Vpn.PairWorkerTest do
     new_inbound_config = %{
       "ts_auth_key" => "tskey-new",
       "advertise_exit_node" => false,
-      "advertise_connector" => true
+      "advertise_connector" => true,
+      "advertise_routes" => "192.168.1.0/24"
     }
 
     assert {:ok, _} = PairWorker.update_inbound_config("test_pair", new_inbound_config)
@@ -476,12 +477,14 @@ defmodule Hermit.Vpn.PairWorkerTest do
     assert updated_pair.inbound_config["ts_auth_key"] == "tskey-new"
     assert updated_pair.inbound_config["advertise_exit_node"] == false
     assert updated_pair.inbound_config["advertise_connector"] == true
+    assert updated_pair.inbound_config["advertise_routes"] == "192.168.1.0/24"
 
     # Check memory state of running worker
     state = GenServer.call(pid, :get_state)
     assert state.inbound_config["ts_auth_key"] == "tskey-new"
     assert state.inbound_config["advertise_exit_node"] == false
     assert state.inbound_config["advertise_connector"] == true
+    assert state.inbound_config["advertise_routes"] == "192.168.1.0/24"
 
     GenServer.stop(pid)
   end

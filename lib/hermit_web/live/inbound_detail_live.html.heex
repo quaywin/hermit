@@ -181,7 +181,7 @@
                 🗺️ Tailscale Routing Overview
               </h3>
               <p class="text-xs text-base-content/50">
-                List of active tunnels (VPN Pairs) connected to this Tailscale inbound profile and their App Connector settings.
+                List of active tunnels (VPN Pairs) connected to this Tailscale inbound profile, showing their subnet routes and App Connector settings.
               </p>
             </div>
           </div>
@@ -192,6 +192,7 @@
                 <tr class="border-b border-base-300 text-base-content/60 font-medium uppercase tracking-wider text-[10px]">
                   <th class="py-3 px-4 min-w-[100px]">Tunnel ID</th>
                   <th class="py-3 px-4 min-w-[140px]">Tailscale Hostname</th>
+                  <th class="py-3 px-4 min-w-[120px]">Subnet Routes</th>
                   <th class="py-3 px-4 min-w-[100px]">App Connector</th>
                   <th class="py-3 px-4 min-w-[120px]">Connector Tag</th>
                   <th class="py-3 px-4 min-w-[180px]">Domain Routes</th>
@@ -202,7 +203,7 @@
                 <%= if Enum.empty?(@vpn_pairs) do %>
                   <tr>
                     <td
-                      colspan="6"
+                      colspan="7"
                       class="py-8 text-center text-base-content/50 font-medium italic"
                     >
                       No active tunnels are using this inbound profile.
@@ -233,6 +234,19 @@
                           <span class="text-base-content/40 italic">External</span>
                         <% else %>
                           hermit-node-{String.replace(pair.id, "_", "-")}
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4">
+                        <%= if Map.get(pair, :is_external, false) do %>
+                          <span class="text-base-content/30 italic">-</span>
+                        <% else %>
+                          <%= if pair.inbound_config["advertise_routes"] && String.trim(pair.inbound_config["advertise_routes"]) != "" do %>
+                            <span class="font-mono bg-base-200 px-1.5 py-0.5 rounded-[4px] border border-base-300 text-xs">
+                              {pair.inbound_config["advertise_routes"]}
+                            </span>
+                          <% else %>
+                            <span class="text-base-content/40 italic">None</span>
+                          <% end %>
                         <% end %>
                       </td>
                       <td class="py-3 px-4">

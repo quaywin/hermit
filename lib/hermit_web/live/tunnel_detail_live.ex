@@ -273,7 +273,32 @@ defmodule HermitWeb.TunnelDetailLive do
 
   @impl true
   def handle_event("toggle_use_tailscale_dns", _params, socket) do
-    {:noreply, assign(socket, use_tailscale_dns: not socket.assigns.use_tailscale_dns)}
+    new_use_default = not socket.assigns.use_tailscale_dns
+
+    if new_use_default do
+      id = socket.assigns.id
+      pair = socket.assigns.pair
+      inbound_config = pair.inbound_config || %{}
+
+      new_config =
+        inbound_config
+        |> Map.put("dns_mode", "default")
+        |> Map.put("dns_resolvers", "")
+
+      case PairWorker.update_inbound_config(id, new_config) do
+        {:ok, updated_pair} ->
+          {:noreply,
+           socket
+           |> assign(use_tailscale_dns: true)
+           |> assign_pair(updated_pair)
+           |> put_flash(:info, "Tailscale network settings updated. Applying dynamically...")}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to update DNS settings: #{inspect(reason)}")}
+      end
+    else
+      {:noreply, assign(socket, use_tailscale_dns: false)}
+    end
   end
 
   @impl true
@@ -314,8 +339,6 @@ defmodule HermitWeb.TunnelDetailLive do
     pair = socket.assigns.pair
     inbound_config = pair.inbound_config || %{}
 
-    advertise_routes = Map.get(params, "advertise_routes", "") |> String.trim()
-
     use_tailscale_dns =
       case Map.get(params, "use_tailscale_dns") do
         "true" ->
@@ -346,7 +369,6 @@ defmodule HermitWeb.TunnelDetailLive do
       inbound_config
       |> Map.put("dns_mode", dns_mode)
       |> Map.put("dns_resolvers", dns_resolvers)
-      |> Map.put("advertise_routes", advertise_routes)
 
     case PairWorker.update_inbound_config(id, new_config) do
       {:ok, updated_pair} ->

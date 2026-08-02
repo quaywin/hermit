@@ -92,9 +92,9 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       assert conn["connectors"] == [tag]
       assert conn["domains"] == domains
 
-      # 3. autoApprovers
-      assert updated["autoApprovers"]["routes"]["0.0.0.0/0"] == [tag]
-      assert updated["autoApprovers"]["routes"]["::/0"] == [tag]
+      # 3. autoApprovers (App Connector tags should not auto-approve 0.0.0.0/0 subnet routes)
+      assert updated["autoApprovers"]["routes"]["0.0.0.0/0"] == []
+      assert updated["autoApprovers"]["routes"]["::/0"] == []
 
       # 4. grants
       assert [grant] = updated["grants"]

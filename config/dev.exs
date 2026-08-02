@@ -46,6 +46,10 @@ config :hermit, HermitWeb.Endpoint,
 # Reload browser tabs when matching files change.
 config :hermit, HermitWeb.Endpoint,
   live_reload: [
+    dirs: [
+      Path.expand("lib/hermit_web"),
+      Path.expand("priv/static")
+    ],
     web_console_logger: true,
     patterns: [
       # Static assets, except user uploads
@@ -57,6 +61,8 @@ config :hermit, HermitWeb.Endpoint,
       ~r"lib/hermit_web/(controllers|live|components)/.*\.(ex|heex)$"
     ]
   ]
+
+
 
 # Enable dev routes for dashboard and mailbox
 config :hermit, dev_routes: true

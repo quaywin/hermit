@@ -32,7 +32,7 @@ defmodule Hermit.Vpn.Inbound do
               :ok | {:ok, any()} | {:error, any()}
 
   @doc """
-  Phê duyệt các route quảng bá của node (ví dụ: exit node, subnet).
+  Phê duyệt các route quảng bá của node (ví dụ: exit node).
   """
   @callback approve_exit_node(pair_id :: String.t()) ::
               :ok | {:ok, any()} | {:error, any()}

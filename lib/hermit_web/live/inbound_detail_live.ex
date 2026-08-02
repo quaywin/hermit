@@ -241,8 +241,7 @@ defmodule HermitWeb.InboundDetailLive do
               inbound_config: %{
                 "advertise_connector" => true,
                 "advertise_connector_tag" => tag,
-                "advertise_connector_domains" => Enum.join(conn["domains"] || [], "\n"),
-                "advertise_routes" => ""
+                "advertise_connector_domains" => Enum.join(conn["domains"] || [], "\n")
               },
               wg_status: :external,
               ts_status: :external

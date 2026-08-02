@@ -361,7 +361,10 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
               ])
             end
 
-            # Mark only Tailscale UDP STUN/DISCO packets (ports 41641-41700) with 0x200
+            # Resolve exact ts_port assigned to this pair
+            ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port(pair_id, config)
+
+            # Mark only Tailscale UDP STUN/DISCO packets on exact ts_port with 0x200
             # to route through Table 200 (eth0), while allowing Exit Node traffic to
             # use rule 5210 (main table → wg0)
             run_cmd("ip", [
@@ -371,7 +374,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
             run_cmd("ip", [
               "netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "output",
-              "udp", "sport", "41641-41700", "mark", "set", "0x200"
+              "udp", "sport", "#{ts_port}", "mark", "set", "0x200"
             ])
 
             run_cmd("ip", [

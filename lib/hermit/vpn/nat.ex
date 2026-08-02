@@ -11,6 +11,7 @@ defmodule Hermit.Vpn.Nat do
   """
   def setup_nat(table_name, subnet, ns_ip, ts_port \\ nil) when is_binary(table_name) do
     container_ip = Hermit.Vpn.Inbound.Tailscale.get_container_ip()
+    ts_port = parse_port(ts_port)
 
     try do
       # 1. Clean up any existing table to avoid duplicate rules
@@ -78,4 +79,15 @@ defmodule Hermit.Vpn.Nat do
   end
 
   def cleanup_nat(_), do: :ok
+
+  defp parse_port(val) when is_integer(val), do: val
+
+  defp parse_port(val) when is_binary(val) do
+    case Integer.parse(String.trim(val)) do
+      {port, ""} -> port
+      _ -> nil
+    end
+  end
+
+  defp parse_port(_), do: nil
 end

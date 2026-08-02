@@ -379,10 +379,11 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
               "udp", "sport", "#{ts_port}", "mark", "set", "0x200"
             ])
 
-            run_cmd("ip", [
-              "netns", "exec", wg_name, "ip", "rule", "del", "fwmark", "0x200/0x200",
-              "lookup", "200", "priority", "5208"
-            ])
+            _ =
+              run_cmd("ip", [
+                "netns", "exec", wg_name, "ip", "rule", "del", "fwmark", "0x200/0x200",
+                "lookup", "200", "priority", "5208"
+              ])
 
             run_cmd("ip", [
               "netns", "exec", wg_name, "ip", "rule", "add", "fwmark", "0x200/0x200",

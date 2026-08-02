@@ -98,7 +98,7 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
 
       # 4. grants
       assert [grant] = updated["grants"]
-      assert grant["src"] == ["autogroup:member"]
+      assert grant["src"] == ["*"]
       assert grant["dst"] == [tag]
       assert grant["ip"] == ["*"]
     end

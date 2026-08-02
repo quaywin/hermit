@@ -1484,10 +1484,10 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           access_sources
 
         existing_grant ->
-          Map.get(existing_grant, "src", ["autogroup:member"])
+          Map.get(existing_grant, "src", ["*"])
 
         true ->
-          ["autogroup:member"]
+          ["*"]
       end
 
     grants = Enum.reject(grants, fn grant -> Map.get(grant, "dst") == [tag] end)
@@ -1510,7 +1510,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       |> Enum.map(&String.trim/1)
       |> Enum.reject(&(&1 == ""))
     else
-      ["autogroup:member"]
+      ["*"]
     end
   end
 

@@ -57,7 +57,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         claim_port(pair_id, ts_port)
 
         shell_cmd =
-          "ip netns exec #{wg_name} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
+          "ip netns exec #{wg_name} env TS_IGNORE_INTERFACES=wg0 tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
 
         try do
           # Port is owned by the calling process (PairWorker)

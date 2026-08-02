@@ -1495,7 +1495,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     new_grant = %{
       "src" => sources,
       "dst" => [tag],
-      "ip" => ["tcp:53", "udp:53"]
+      "ip" => ["*"]
     }
 
     grants ++ [new_grant]

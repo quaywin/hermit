@@ -100,7 +100,7 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       assert [grant] = updated["grants"]
       assert grant["src"] == ["autogroup:member"]
       assert grant["dst"] == [tag]
-      assert grant["ip"] == ["tcp:53", "udp:53"]
+      assert grant["ip"] == ["*"]
     end
 
     test "updates domains for an existing app connector tag in nodeAttrs" do

@@ -1,7 +1,7 @@
 # Find eligible builder and runner images on Docker Hub.
 ARG ELIXIR_VERSION=1.18.4
-ARG OTP_VERSION=27.3.4.11
-ARG ALPINE_VERSION=3.21.3
+ARG OTP_VERSION=27.3.4.16
+ARG ALPINE_VERSION=3.21.7
 
 ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-alpine-${ALPINE_VERSION}"
 ARG RUNNER_IMAGE="docker.io/alpine:${ALPINE_VERSION}"

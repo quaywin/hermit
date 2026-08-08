@@ -118,7 +118,8 @@ WORKDIR "/app"
 
 # set runner ENV
 ENV MIX_ENV="prod"
-ENV ERL_FLAGS="+sub true +scl false +sbwt very_short +sbwtdcpu very_short"
+ENV ERL_FLAGS="+sub true +scl false +sbwt short +sbwtdcpu short"
+ENV ERL_CRASH_DUMP_SECONDS=0
 
 # Copy the final release
 COPY --from=builder /app/hermit_release ./

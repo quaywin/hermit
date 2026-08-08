@@ -142,8 +142,8 @@ defmodule Hermit.Dns.BlocklistLoader do
         Blocklist
         |> Repo.all()
         |> Enum.filter(& &1.enabled)
-        # Load blocklists in parallel with max concurrency of 4 to utilize cores and reduce I/O time
-        |> Task.async_stream(&load_blocklist/1, max_concurrency: 4, timeout: 120_000)
+        # Load blocklists sequentially to prevent RAM spikes from concurrent parsing
+        |> Task.async_stream(&load_blocklist/1, max_concurrency: 1, timeout: 120_000)
         |> Stream.run()
 
         # Reclaim memory for the main loader task after parallel stream finishes

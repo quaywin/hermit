@@ -15,7 +15,8 @@ FROM ${BUILDER_IMAGE} AS dev
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add --no-cache \
      libstdc++ openssl ncurses-libs ca-certificates \
-     iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils git build-base \
+     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool tinyproxy iputils git build-base \
+  && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing microsocks wireguard-go \
   && case $(uname -m) in \
        x86_64) TS_ARCH="amd64" ;; \
        aarch64) TS_ARCH="arm64" ;; \
@@ -98,7 +99,8 @@ ARG TARGETARCH
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add --no-cache \
      libstdc++ openssl ncurses-libs ca-certificates \
-     iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils \
+     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool tinyproxy iputils \
+  && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing microsocks wireguard-go \
   && case $(uname -m) in \
        x86_64) TS_ARCH="amd64" ;; \
        aarch64) TS_ARCH="arm64" ;; \

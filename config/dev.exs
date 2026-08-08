@@ -62,8 +62,6 @@ config :hermit, HermitWeb.Endpoint,
     ]
   ]
 
-
-
 # Enable dev routes for dashboard and mailbox
 config :hermit, dev_routes: true
 

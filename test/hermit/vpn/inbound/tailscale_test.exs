@@ -272,4 +272,61 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       assert port >= 41641 and port <= 41700
     end
   end
+
+  describe "append_advertise_args/3" do
+    # Non-existent socket -> get_current_tags/2 safely returns [].
+    @opts %{
+      pair_id: "test_pair",
+      wg_name: "hermit_wg_test_pair",
+      socket_path: "/run/tailscaled.nonexistent.socket",
+      advertise_exit_node: false,
+      advertise_connector: false
+    }
+
+    test "advertises custom subnet routes from config (bootstrap parity)" do
+      config = %{"advertise_routes" => "192.168.1.0/24, 10.0.0.0/8"}
+
+      args = Tailscale.append_advertise_args(["up", "--reset"], config, @opts)
+
+      assert "--advertise-routes=192.168.1.0/24,10.0.0.0/8" in args
+    end
+
+    test "emits empty advertise-routes when no routes configured" do
+      args = Tailscale.append_advertise_args(["up", "--reset"], %{}, @opts)
+
+      assert "--advertise-routes=" in args
+    end
+
+    test "toggles advertise-exit-node from the flag" do
+      on =
+        Tailscale.append_advertise_args(
+          ["up"],
+          %{},
+          Map.put(@opts, :advertise_exit_node, true)
+        )
+
+      assert "--advertise-exit-node" in on
+
+      off =
+        Tailscale.append_advertise_args(
+          ["up"],
+          %{},
+          Map.put(@opts, :advertise_exit_node, false)
+        )
+
+      assert "--advertise-exit-node=false" in off
+    end
+
+    test "advertises app connector tag when enabled" do
+      args =
+        Tailscale.append_advertise_args(
+          ["up"],
+          %{},
+          Map.put(@opts, :advertise_connector, true)
+        )
+
+      assert "--advertise-connector" in args
+      assert Enum.any?(args, &String.starts_with?(&1, "--advertise-tags="))
+    end
+  end
 end

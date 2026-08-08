@@ -294,7 +294,8 @@ defmodule HermitWeb.TunnelDetailLive do
            |> put_flash(:info, "Tailscale network settings updated. Applying dynamically...")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed to update DNS settings: #{inspect(reason)}")}
+          {:noreply,
+           put_flash(socket, :error, "Failed to update DNS settings: #{inspect(reason)}")}
       end
     else
       {:noreply, assign(socket, use_tailscale_dns: false)}

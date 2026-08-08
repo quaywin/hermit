@@ -110,27 +110,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             end
 
           ts_up_args =
-            if advertise_exit_node do
-              ts_up_args ++ ["--advertise-exit-node"]
-            else
-              ts_up_args ++ ["--advertise-exit-node=false"]
-            end
-
-          tag = get_connector_tag(pair_id, config)
-          current_tags = get_current_tags(wg_name, socket_path)
-
-          ts_up_args =
-            if advertise_connector do
-              ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
-            else
-              if tag in current_tags do
-                ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
-              else
-                ts_up_args ++ ["--advertise-connector=false"]
-              end
-            end
-
-          ts_up_args = ts_up_args ++ ["--advertise-routes="]
+            append_advertise_args(ts_up_args, config, %{
+              pair_id: pair_id,
+              wg_name: wg_name,
+              socket_path: socket_path,
+              advertise_exit_node: advertise_exit_node,
+              advertise_connector: advertise_connector
+            })
 
           if advertise_connector do
             tag = get_connector_tag(pair_id, config)
@@ -280,34 +266,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           end
 
         ts_up_args =
-          if advertise_exit_node do
-            ts_up_args ++ ["--advertise-exit-node"]
-          else
-            ts_up_args ++ ["--advertise-exit-node=false"]
-          end
-
-        tag = get_connector_tag(pair_id, config)
-        current_tags = get_current_tags(wg_name, socket_path)
-
-        ts_up_args =
-          if advertise_connector do
-            ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
-          else
-            if tag in current_tags do
-              ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
-            else
-              ts_up_args ++ ["--advertise-connector=false"]
-            end
-          end
-
-        advertise_routes = Map.get(config, "advertise_routes") || ""
-
-        ts_up_args =
-          if clean_routes(advertise_routes) != "" do
-            ts_up_args ++ ["--advertise-routes=#{clean_routes(advertise_routes)}"]
-          else
-            ts_up_args ++ ["--advertise-routes="]
-          end
+          append_advertise_args(ts_up_args, config, %{
+            pair_id: pair_id,
+            wg_name: wg_name,
+            socket_path: socket_path,
+            advertise_exit_node: advertise_exit_node,
+            advertise_connector: advertise_connector
+          })
 
         if advertise_connector do
           tag = get_connector_tag(pair_id, config)
@@ -1745,6 +1710,52 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     Map.new(config, fn {k, v} -> {to_string(k), v} end)
   end
 
+  @doc """
+  Appends Tailscale `up` advertise-related args derived from the inbound config.
+
+  Single source of truth shared by `bootstrap/4` and `update_settings/2`, so the
+  advertised exit-node, app-connector and subnet-route flags cannot drift between
+  the initial bring-up, live config updates, and any recovery that re-bootstraps.
+  """
+  def append_advertise_args(ts_up_args, config, opts) do
+    %{
+      pair_id: pair_id,
+      wg_name: wg_name,
+      socket_path: socket_path,
+      advertise_exit_node: advertise_exit_node,
+      advertise_connector: advertise_connector
+    } = opts
+
+    ts_up_args =
+      if advertise_exit_node do
+        ts_up_args ++ ["--advertise-exit-node"]
+      else
+        ts_up_args ++ ["--advertise-exit-node=false"]
+      end
+
+    tag = get_connector_tag(pair_id, config)
+    current_tags = get_current_tags(wg_name, socket_path)
+
+    ts_up_args =
+      if advertise_connector do
+        ts_up_args ++ ["--advertise-connector", "--advertise-tags=#{tag}"]
+      else
+        if tag in current_tags do
+          ts_up_args ++ ["--advertise-connector=false", "--advertise-tags=#{tag}"]
+        else
+          ts_up_args ++ ["--advertise-connector=false"]
+        end
+      end
+
+    advertise_routes = Map.get(config, "advertise_routes") || ""
+
+    if clean_routes(advertise_routes) != "" do
+      ts_up_args ++ ["--advertise-routes=#{clean_routes(advertise_routes)}"]
+    else
+      ts_up_args ++ ["--advertise-routes="]
+    end
+  end
+
   defp clean_routes(nil), do: ""
 
   defp clean_routes(routes) when is_binary(routes) do
@@ -1754,8 +1765,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     |> Enum.reject(&(&1 == ""))
     |> Enum.join(",")
   end
-
-
 
   defp mock? do
     config = Application.get_env(:hermit, :docker, [])

@@ -488,7 +488,6 @@
                               placeholder="e.g., 76.76.2.0, 76.76.10.0"
                             />
                           </div>
-
                         <% end %>
                       </div>
 
@@ -520,7 +519,11 @@
                           Apply Network Settings
                         </button>
                       </div>
-                      <input type="hidden" name="use_tailscale_dns" value={to_string(@use_tailscale_dns)} />
+                      <input
+                        type="hidden"
+                        name="use_tailscale_dns"
+                        value={to_string(@use_tailscale_dns)}
+                      />
                     </form>
                   </div>
                 <% else %>

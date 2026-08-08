@@ -1,10 +1,11 @@
-# Find eligible builder and runner images on Docker Hub.
+# Find eligible builder and runner images on Docker Hub. We use Debian Slim
+# as officially recommended by Fly.io and Phoenix core team for glibc stability.
 ARG ELIXIR_VERSION=1.18.4
 ARG OTP_VERSION=27.3.4.16
-ARG ALPINE_VERSION=3.21.7
+ARG DEBIAN_VERSION=trixie-20260803-slim
 
-ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-alpine-${ALPINE_VERSION}"
-ARG RUNNER_IMAGE="docker.io/alpine:${ALPINE_VERSION}"
+ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
+ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
 
 # ==========================================
 # Development Environment Stage
@@ -12,20 +13,20 @@ ARG RUNNER_IMAGE="docker.io/alpine:${ALPINE_VERSION}"
 FROM ${BUILDER_IMAGE} AS dev
 
 # Install dev & runtime dependencies, download and install Tailscale in a single layer to minimize size
-RUN --mount=type=cache,target=/var/cache/apk \
-    apk add --no-cache \
-     libstdc++ openssl ncurses-libs ca-certificates \
-     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool tinyproxy iputils git build-base \
-  && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing microsocks \
-  && case $(uname -m) in \
-       x86_64) TS_ARCH="amd64" ;; \
-       aarch64) TS_ARCH="arm64" ;; \
-       *) TS_ARCH=$(uname -m) ;; \
-     esac \
-  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${TS_ARCH}.tgz" | tar -xz -C /tmp \
-  && cp /tmp/tailscale_1.98.4_${TS_ARCH}/tailscale* /usr/bin/ \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+  && apt-get install -y --no-install-recommends \
+     libstdc++6 openssl libncurses6 locales ca-certificates \
+     iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping git build-essential \
+  && ARCH=$(dpkg --print-architecture) \
+  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
+  && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
   && rm -rf /tmp/tailscale*
 
+# Set the locale
+RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+  && locale-gen
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
@@ -46,8 +47,10 @@ CMD ["mix", "phx.server"]
 FROM ${BUILDER_IMAGE} AS builder
 
 # install build dependencies
-RUN --mount=type=cache,target=/var/cache/apk \
-    apk add --no-cache build-base git
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+  && apt-get install -y --no-install-recommends build-essential git
 
 # prepare build dir
 WORKDIR /app
@@ -96,20 +99,20 @@ FROM ${RUNNER_IMAGE} AS final
 ARG TARGETARCH
 
 # Install dependencies, download and install Tailscale in a single layer to minimize size
-RUN --mount=type=cache,target=/var/cache/apk \
-    apk add --no-cache \
-     libstdc++ openssl ncurses-libs ca-certificates \
-     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool tinyproxy iputils \
-  && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing microsocks \
-  && case $(uname -m) in \
-       x86_64) TS_ARCH="amd64" ;; \
-       aarch64) TS_ARCH="arm64" ;; \
-       *) TS_ARCH=$(uname -m) ;; \
-     esac \
-  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${TS_ARCH}.tgz" | tar -xz -C /tmp \
-  && cp /tmp/tailscale_1.98.4_${TS_ARCH}/tailscale* /usr/bin/ \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+  && apt-get install -y --no-install-recommends \
+     libstdc++6 openssl libncurses6 locales ca-certificates \
+     iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping \
+  && ARCH=$(dpkg --print-architecture) \
+  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
+  && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
   && rm -rf /tmp/tailscale*
 
+# Set the locale
+RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+  && locale-gen
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8

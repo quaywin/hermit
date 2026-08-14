@@ -32,8 +32,11 @@ defmodule HermitWeb.DnsEndpointLive do
      |> assign(editing_endpoint: nil)
      |> assign(new_form: to_form(new_changeset))
      |> assign(edit_form: nil)
+     |> assign(new_connection_type: "doh")
+     |> assign(edit_connection_type: "doh")
      |> assign(show_new_modal: false)
      |> assign(show_edit_modal: false)
+     |> assign(ddns_map: Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map())
      # Lưu trữ status của các Tailscale Node
      |> assign(dns_statuses: %{})
      |> update_all_dns_statuses()}
@@ -58,7 +61,12 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_info(:tick, socket) do
     # Cập nhật trạng thái của các DNS node định kỳ mỗi giây
-    {:noreply, update_all_dns_statuses(socket)}
+    ddns_map = Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map()
+
+    {:noreply,
+     socket
+     |> assign(ddns_map: ddns_map)
+     |> update_all_dns_statuses()}
   end
 
   @impl true
@@ -69,12 +77,22 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("open_new_modal", _params, socket) do
     new_changeset = DnsEndpoint.changeset(%DnsEndpoint{}, %{})
-    {:noreply, assign(socket, show_new_modal: true, new_form: to_form(new_changeset))}
+    {:noreply, assign(socket, show_new_modal: true, new_connection_type: "doh", new_form: to_form(new_changeset))}
   end
 
   @impl true
   def handle_event("close_new_modal", _params, socket) do
     {:noreply, assign(socket, show_new_modal: false)}
+  end
+
+  @impl true
+  def handle_event("select_new_type", %{"type" => type}, socket) do
+    {:noreply, assign(socket, new_connection_type: type)}
+  end
+
+  @impl true
+  def handle_event("select_edit_type", %{"type" => type}, socket) do
+    {:noreply, assign(socket, edit_connection_type: type)}
   end
 
   @impl true
@@ -89,11 +107,22 @@ defmodule HermitWeb.DnsEndpointLive do
 
   @impl true
   def handle_event("save_new", %{"dns_endpoint" => params}, socket) do
-    changeset = DnsEndpoint.changeset(%DnsEndpoint{}, params)
+    type = socket.assigns.new_connection_type
+
+    sanitized_params =
+      case type do
+        "doh" -> Map.merge(params, %{"inbound_profile_id" => nil, "ddns_hostname" => nil})
+        "tailscale" -> Map.put(params, "ddns_hostname", nil)
+        "ddns" -> Map.put(params, "inbound_profile_id", nil)
+        _ -> params
+      end
+
+    changeset = DnsEndpoint.changeset(%DnsEndpoint{}, sanitized_params)
 
     case Hermit.Repo.insert(changeset) do
       {:ok, _endpoint} ->
         DnsEndpoint.clear_cache()
+        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
         {:noreply,
          socket
@@ -112,9 +141,17 @@ defmodule HermitWeb.DnsEndpointLive do
     endpoint = Hermit.Repo.get!(DnsEndpoint, String.to_integer(id_str))
     changeset = DnsEndpoint.changeset(endpoint, %{})
 
+    type =
+      cond do
+        endpoint.inbound_profile_id -> "tailscale"
+        endpoint.ddns_hostname && endpoint.ddns_hostname != "" -> "ddns"
+        true -> "doh"
+      end
+
     {:noreply,
      socket
      |> assign(editing_endpoint: endpoint)
+     |> assign(edit_connection_type: type)
      |> assign(edit_form: to_form(changeset))
      |> assign(show_edit_modal: true)}
   end
@@ -139,11 +176,22 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("save_edit", %{"dns_endpoint" => params}, socket) do
     endpoint = socket.assigns.editing_endpoint
-    changeset = DnsEndpoint.changeset(endpoint, params)
+    type = socket.assigns.edit_connection_type
+
+    sanitized_params =
+      case type do
+        "doh" -> Map.merge(params, %{"inbound_profile_id" => nil, "ddns_hostname" => nil})
+        "tailscale" -> Map.put(params, "ddns_hostname", nil)
+        "ddns" -> Map.put(params, "inbound_profile_id", nil)
+        _ -> params
+      end
+
+    changeset = DnsEndpoint.changeset(endpoint, sanitized_params)
 
     case Hermit.Repo.update(changeset) do
       {:ok, updated_endpoint} ->
         DnsEndpoint.clear_cache()
+        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
         # Reboot DNS node if it was running with old config
         {status, _, _} = DnsWorker.get_status(updated_endpoint.id)

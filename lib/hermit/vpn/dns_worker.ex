@@ -859,7 +859,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp mock? do
     config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false)
+    Keyword.get(config, :mock, false) or System.get_env("MOCK_VPN") == "true" or Mix.env() == :test
   end
 
   defp get_storage_base_path do
@@ -903,38 +903,64 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   defp run_cmd(cmd, args) do
-    flat_args = List.flatten(args)
-    Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
+    if mock?() do
+      {:ok, ""}
+    else
+      flat_args = List.flatten(args)
+      Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
-    case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
-      {output, 0} ->
-        {:ok, String.trim(output)}
+      try do
+        case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
+          {output, 0} ->
+            {:ok, String.trim(output)}
 
-      {output, code} ->
-        Logger.error(
-          "Command failed: #{cmd} #{Enum.join(flat_args, " ")} (exit code #{code}): #{output}"
-        )
+          {output, code} ->
+            Logger.error(
+              "Command failed: #{cmd} #{Enum.join(flat_args, " ")} (exit code #{code}): #{output}"
+            )
 
-        {:error, {code, String.trim(output)}}
+            {:error, {code, String.trim(output)}}
+        end
+      rescue
+        e ->
+          Logger.warning("Command #{cmd} failed with exception: #{inspect(e)}")
+          {:error, e}
+      end
     end
   end
 
   defp netns_exists?(ns_name) do
-    case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
-      {output, 0} ->
-        output
-        |> String.split("\n")
-        |> Enum.any?(fn line -> String.starts_with?(line, ns_name) end)
+    if mock?() do
+      false
+    else
+      try do
+        case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
+          {output, 0} ->
+            output
+            |> String.split("\n")
+            |> Enum.any?(fn line -> String.starts_with?(line, ns_name) end)
 
-      _ ->
-        false
+          _ ->
+            false
+        end
+      rescue
+        _ -> false
+      end
     end
   end
 
   defp netns_usable?(ns_name) do
-    case System.cmd("ip", ["netns", "exec", ns_name, "true"]) do
-      {_, 0} -> true
-      _ -> false
+    if mock?() do
+      false
+    else
+      try do
+        case System.cmd("ip", ["netns", "exec", ns_name, "true"]) do
+          {_, 0} -> true
+          _ -> false
+        end
+      rescue
+        _ -> false
+      end
     end
   end
 

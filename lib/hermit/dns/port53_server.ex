@@ -1,0 +1,270 @@
+defmodule Hermit.Dns.Port53Server do
+  @moduledoc """
+  Standalone UDP/TCP server process listening on Port 53 (0.0.0.0:53).
+  Matches incoming home router queries by source IP to DDNS Endpoints.
+  Completely decoupled from Tailscale endpoints and virtual IP sockets.
+  """
+  use GenServer
+  import Bitwise
+  alias Hermit.Dns.Packet
+  alias Hermit.Dns.Filter
+  alias Hermit.Vpn.DnsConfig
+  alias Hermit.Vpn.DnsDdnsResolver
+  require Logger
+
+  @port 53
+
+  # --- Client API ---
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  # --- GenServer Callbacks ---
+
+  @impl true
+  def init(_opts) do
+    port = Application.get_env(:hermit, :port53_port, @port)
+
+    state = %{
+      udp_socket: nil,
+      tcp_socket: nil,
+      port: port
+    }
+
+    case try_bind_port53(state) do
+      {:ok, new_state} ->
+        {:ok, new_state}
+
+      {:error, _reason, new_state} ->
+        # Retry binding port periodically in case port becomes free
+        Process.send_after(self(), :retry_bind, 5000)
+        {:ok, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(:retry_bind, state) do
+    if is_nil(state.udp_socket) do
+      case try_bind_port53(state) do
+        {:ok, new_state} ->
+          {:noreply, new_state}
+
+        {:error, _reason, new_state} ->
+          Process.send_after(self(), :retry_bind, 5000)
+          {:noreply, new_state}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:udp, socket, ip, port, packet}, %{udp_socket: socket} = state) do
+    client_ip_str = :inet.ntoa(ip) |> to_string()
+
+    Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+      case DnsDdnsResolver.lookup_endpoint(client_ip_str) do
+        nil ->
+          Logger.debug("Port53Server: No DDNS endpoint matched for client IP #{client_ip_str}")
+          send_udp_error(socket, ip, port, packet, 5)
+
+        endpoint_id ->
+          process_ddns_query(socket, ip, port, packet, endpoint_id)
+      end
+    end)
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  # --- Internal Helpers ---
+
+  defp try_bind_port53(state) do
+    port = state.port
+    udp_opts = [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024]
+    tcp_opts = [:binary, packet: 2, active: false, reuseaddr: true]
+
+    case :gen_udp.open(port, udp_opts) do
+      {:ok, udp_socket} ->
+        tcp_socket =
+          case :gen_tcp.listen(port, tcp_opts) do
+            {:ok, t_sock} ->
+              server_pid = self()
+              spawn_link(fn -> tcp_accept_loop(t_sock, server_pid) end)
+              t_sock
+
+            {:error, reason} ->
+              Logger.info("Port #{port} TCP is occupied (#{inspect(reason)}). UDP listener remains active.")
+              nil
+          end
+
+        Logger.info("Hermit Standalone Port 53 Server successfully listening on UDP/TCP port #{port}")
+        {:ok, %{state | udp_socket: udp_socket, tcp_socket: tcp_socket, port: port}}
+
+      {:error, reason} ->
+        Logger.info("Port #{port} UDP is occupied (#{inspect(reason)}). Standalone Port 53 server will retry.")
+        {:error, reason, state}
+    end
+  end
+
+  defp tcp_accept_loop(tcp_socket, server_pid) do
+    case :gen_tcp.accept(tcp_socket) do
+      {:ok, client_socket} ->
+        spawn(fn -> handle_tcp_client(client_socket) end)
+        tcp_accept_loop(tcp_socket, server_pid)
+
+      {:error, :closed} ->
+        :ok
+
+      {:error, _reason} ->
+        Process.sleep(100)
+        tcp_accept_loop(tcp_socket, server_pid)
+    end
+  end
+
+  defp handle_tcp_client(client_socket) do
+    case :inet.peername(client_socket) do
+      {:ok, {ip, _port}} ->
+        client_ip_str = :inet.ntoa(ip) |> to_string()
+
+        case :gen_tcp.recv(client_socket, 0, 5000) do
+          {:ok, packet} ->
+            endpoint_id = DnsDdnsResolver.lookup_endpoint(client_ip_str)
+            config = if endpoint_id, do: DnsConfig.get_for_endpoint(endpoint_id)
+
+            if config do
+              case Packet.parse(packet) do
+                {:ok, query} ->
+                  if Filter.match_global_ets_blocklist?(query.domain) do
+                    blocked_resp = Packet.build_nxdomain(query.id, query.query_record)
+                    :gen_tcp.send(client_socket, blocked_resp)
+                  else
+                    forward_tcp_upstream(client_socket, packet, config)
+                  end
+
+                _ ->
+                  send_tcp_error(client_socket, packet, 5)
+              end
+            else
+              send_tcp_error(client_socket, packet, 5)
+            end
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+
+    :gen_tcp.close(client_socket)
+  end
+
+  defp forward_tcp_upstream(client_socket, packet, config) do
+    upstream_ip_str = if is_binary(config.upstream_dns) and config.upstream_dns != "", do: config.upstream_dns, else: "1.1.1.1"
+
+    case :inet.parse_address(String.to_charlist(upstream_ip_str)) do
+      {:ok, upstream_ip} ->
+        case :gen_tcp.connect(upstream_ip, 53, [:binary, packet: 2, active: false], 2000) do
+          {:ok, u_sock} ->
+            :gen_tcp.send(u_sock, packet)
+
+            case :gen_tcp.recv(u_sock, 0, 2000) do
+              {:ok, response_packet} ->
+                :gen_tcp.send(client_socket, response_packet)
+
+              _ ->
+                send_tcp_error(client_socket, packet, 2)
+            end
+
+            :gen_tcp.close(u_sock)
+
+          _ ->
+            send_tcp_error(client_socket, packet, 2)
+        end
+
+      _ ->
+        send_tcp_error(client_socket, packet, 2)
+    end
+  end
+
+  defp process_ddns_query(socket, ip, port, packet, endpoint_id) do
+    case Packet.parse(packet) do
+      {:ok, query} ->
+        config = DnsConfig.get_for_endpoint(endpoint_id)
+
+        if config do
+          if Filter.match_global_ets_blocklist?(query.domain) do
+            blocked_resp = Packet.build_nxdomain(query.id, query.query_record)
+            :gen_udp.send(socket, ip, port, blocked_resp)
+          else
+            forward_upstream(socket, ip, port, packet, config)
+          end
+        else
+          send_udp_error(socket, ip, port, packet, 5)
+        end
+
+      _ ->
+        send_udp_error(socket, ip, port, packet, 5)
+    end
+  end
+
+  defp forward_upstream(socket, client_ip, client_port, packet, config) do
+    upstream_ip_str =
+      if is_binary(config.upstream_dns) and config.upstream_dns != "", do: config.upstream_dns, else: "1.1.1.1"
+
+    case :inet.parse_address(String.to_charlist(upstream_ip_str)) do
+      {:ok, upstream_ip} ->
+        case :gen_udp.open(0, [:binary, active: false]) do
+          {:ok, upstream_socket} ->
+            :gen_udp.send(upstream_socket, upstream_ip, 53, packet)
+
+            case :gen_udp.recv(upstream_socket, 0, 2000) do
+              {:ok, {_u_ip, _u_port, response_packet}} ->
+                :gen_udp.send(socket, client_ip, client_port, response_packet)
+
+              _ ->
+                send_udp_error(socket, client_ip, client_port, packet, 2)
+            end
+
+            :gen_udp.close(upstream_socket)
+
+          _ ->
+            send_udp_error(socket, client_ip, client_port, packet, 2)
+        end
+
+      _ ->
+        send_udp_error(socket, client_ip, client_port, packet, 2)
+    end
+  end
+
+  # rcode: 5 = REFUSED, 2 = SERVFAIL
+  defp build_dns_error(packet, rcode) do
+    if byte_size(packet) >= 12 do
+      <<id::binary-size(2), _flags::binary-size(2), rest::binary>> = packet
+      flag_byte2 = 0x80 ||| (rcode &&& 0x0F)
+      id <> <<0x81, flag_byte2>> <> rest
+    else
+      nil
+    end
+  end
+
+  defp send_udp_error(socket, ip, port, packet, rcode) do
+    case build_dns_error(packet, rcode) do
+      nil -> :ok
+      resp -> :gen_udp.send(socket, ip, port, resp)
+    end
+  end
+
+  defp send_tcp_error(client_socket, packet, rcode) do
+    case build_dns_error(packet, rcode) do
+      nil -> :ok
+      resp -> :gen_tcp.send(client_socket, resp)
+    end
+  end
+end

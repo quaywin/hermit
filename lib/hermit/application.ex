@@ -21,6 +21,8 @@ defmodule Hermit.Application do
       {Hermit.Dns.BlocklistLoader, []},
       {Hermit.Dns.Telemetry, []},
       {Hermit.Vpn.DnsDeviceResolver, []},
+      {Hermit.Vpn.DnsDdnsResolver, []},
+      {Hermit.Dns.Port53Server, []},
       {Hermit.Vpn.DnsSupervisor, []},
       HermitWeb.Endpoint
     ]
@@ -47,14 +49,34 @@ defmodule Hermit.Application do
 
     case Ecto.Migrator.with_repo(Hermit.Repo, &Ecto.Migrator.run(&1, path, :up, all: true)) do
       {:ok, _, _} ->
+        ensure_db_columns()
         :ok
 
       {:error, reason} ->
+        ensure_db_columns()
         IO.inspect(reason, label: "Failed to run SQLite migrations on startup")
     end
   rescue
     e ->
+      ensure_db_columns()
       IO.inspect(e, label: "Failed to run SQLite migrations on startup")
+  end
+
+  defp ensure_db_columns do
+    Ecto.Migrator.with_repo(Hermit.Repo, fn repo ->
+      try do
+        results = repo.query!("PRAGMA table_info(dns_endpoints)")
+        cols = Enum.map(results.rows, fn [_cid, name | _] -> name end)
+
+        unless "ddns_hostname" in cols do
+          repo.query!("ALTER TABLE dns_endpoints ADD COLUMN ddns_hostname TEXT")
+        end
+      rescue
+        _ -> :ok
+      end
+    end)
+  rescue
+    _ -> :ok
   end
 
   defp seed_default_local_profile do

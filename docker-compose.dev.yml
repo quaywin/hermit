@@ -6,6 +6,8 @@ services:
       target: dev
     ports:
       - "3000:3000" # Web dashboard
+      - "5300:53/udp" # Port 53 UDP for DDNS Matcher (mapped to host port 5300)
+      - "5300:53/tcp" # Port 53 TCP for DDNS Matcher (mapped to host port 5300)
       - "41641-41700:41641-41700/udp" # Tailscale UDP port range
     privileged: true
     env_file:

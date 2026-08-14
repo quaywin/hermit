@@ -13,9 +13,7 @@ ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
 FROM ${BUILDER_IMAGE} AS dev
 
 # Install dev & runtime dependencies, download and install Tailscale in a single layer to minimize size
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
+RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
      iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping git build-essential \
@@ -47,9 +45,7 @@ CMD ["mix", "phx.server"]
 FROM ${BUILDER_IMAGE} AS builder
 
 # install build dependencies
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
+RUN apt-get update \
   && apt-get install -y --no-install-recommends build-essential git
 
 # prepare build dir
@@ -64,19 +60,14 @@ ENV MIX_ENV="prod"
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
-RUN --mount=type=cache,target=/root/.hex,sharing=locked \
-    --mount=type=cache,target=/root/.mix,sharing=locked \
-    mix deps.get --only $MIX_ENV
+RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 
 # copy compile-time config files
 COPY config/config.exs config/${MIX_ENV}.exs config/
-RUN --mount=type=cache,target=/root/.hex,sharing=locked \
-    --mount=type=cache,target=/root/.mix,sharing=locked \
-    mix deps.compile
+RUN mix deps.compile
 
-RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    mix assets.setup
+RUN mix assets.setup
 
 COPY priv priv
 COPY lib lib
@@ -99,9 +90,7 @@ FROM ${RUNNER_IMAGE} AS final
 ARG TARGETARCH
 
 # Install dependencies, download and install Tailscale in a single layer to minimize size
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
+RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
      iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping \

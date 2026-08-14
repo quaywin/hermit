@@ -351,25 +351,31 @@ defmodule Hermit.Vpn.DnsWorker do
 
         # Setup isolated resolv.conf for the namespace to prevent tailscaled from overwriting host resolv.conf
         netns_dns_dir = "/etc/netns/#{ns}"
-        File.mkdir_p!(netns_dns_dir)
 
-        if File.exists?("/etc/resolv.conf") do
-          case File.read("/etc/resolv.conf") do
-            {:ok, resolv_content} ->
-              final_content = build_resolv_conf(resolv_content)
-              File.write!(Path.join(netns_dns_dir, "resolv.conf"), final_content)
+        try do
+          File.mkdir_p!(netns_dns_dir)
 
-            _ ->
-              File.write!(
-                Path.join(netns_dns_dir, "resolv.conf"),
-                "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
-              )
+          if File.exists?("/etc/resolv.conf") do
+            case File.read("/etc/resolv.conf") do
+              {:ok, resolv_content} ->
+                final_content = build_resolv_conf(resolv_content)
+                File.write!(Path.join(netns_dns_dir, "resolv.conf"), final_content)
+
+              _ ->
+                File.write!(
+                  Path.join(netns_dns_dir, "resolv.conf"),
+                  "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+                )
+            end
+          else
+            File.write!(
+              Path.join(netns_dns_dir, "resolv.conf"),
+              "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+            )
           end
-        else
-          File.write!(
-            Path.join(netns_dns_dir, "resolv.conf"),
-            "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
-          )
+        rescue
+          e ->
+            Logger.warning("Could not setup netns resolv.conf for #{ns}: #{inspect(e)}")
         end
 
         with {:ok, %{ns_ip: ns_ip}} <-
@@ -906,34 +912,48 @@ defmodule Hermit.Vpn.DnsWorker do
     flat_args = List.flatten(args)
     Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
-    case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
-      {output, 0} ->
-        {:ok, String.trim(output)}
+    try do
+      case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
+        {output, 0} ->
+          {:ok, String.trim(output)}
 
-      {output, code} ->
-        Logger.error(
-          "Command failed: #{cmd} #{Enum.join(flat_args, " ")} (exit code #{code}): #{output}"
-        )
+        {output, code} ->
+          Logger.error(
+            "Command failed: #{cmd} #{Enum.join(flat_args, " ")} (exit code #{code}): #{output}"
+          )
 
-        {:error, {code, String.trim(output)}}
+          {:error, {code, String.trim(output)}}
+      end
+    rescue
+      e ->
+        Logger.error("Command failed (system error): #{cmd} #{Enum.join(flat_args, " ")}: #{inspect(e)}")
+        {:error, {:enoent, inspect(e)}}
     end
   end
 
   defp netns_exists?(ns_name) do
-    case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
-      {output, 0} ->
-        output
-        |> String.split("\n")
-        |> Enum.any?(fn line -> String.starts_with?(line, ns_name) end)
+    try do
+      case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
+        {output, 0} ->
+          output
+          |> String.split("\n")
+          |> Enum.any?(fn line -> String.starts_with?(line, ns_name) end)
 
-      _ ->
-        false
+        _ ->
+          false
+      end
+    rescue
+      _ -> false
     end
   end
 
   defp netns_usable?(ns_name) do
-    case System.cmd("ip", ["netns", "exec", ns_name, "true"]) do
-      {_, 0} -> true
+    try do
+      case System.cmd("ip", ["netns", "exec", ns_name, "true"]) do
+        {_, 0} -> true
+        _ -> false
+      end
+    rescue
       _ -> false
     end
   end
@@ -1036,8 +1056,12 @@ defmodule Hermit.Vpn.DnsWorker do
   defp wait_for_dns_resolve(ns, hosts, retries) do
     resolved? =
       Enum.any?(hosts, fn host ->
-        case System.cmd("ip", ["netns", "exec", ns, "getent", "hosts", host]) do
-          {_, 0} -> true
+        try do
+          case System.cmd("ip", ["netns", "exec", ns, "getent", "hosts", host]) do
+            {_, 0} -> true
+            _ -> false
+          end
+        rescue
           _ -> false
         end
       end)

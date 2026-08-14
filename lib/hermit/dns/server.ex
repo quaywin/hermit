@@ -124,15 +124,20 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp try_bind_socket(%{inbound_profile_id: nil} = state) do
-    if mock?() do
-      do_try_bind_socket(state)
-    else
-      Logger.info(
-        "DNS Server for endpoint #{state.endpoint_id} running in memory (DoH-only mode)"
-      )
+  defp try_bind_socket(%{port: 53} = state) do
+    case do_try_bind_socket(state) do
+      {:ok, new_state} ->
+        {:ok, new_state}
 
-      {:ok, state}
+      {:error, :eaddrinuse, new_state} ->
+        Logger.info(
+          "Port 53 is already bound by another DNS server. Operating in shared Port 53 mode for endpoint #{state.endpoint_id}."
+        )
+
+        {:ok, new_state}
+
+      other ->
+        other
     end
   end
 
@@ -142,9 +147,10 @@ defmodule Hermit.Dns.Server do
 
   defp do_try_bind_socket(%{profile_id: profile_id, port: port} = state) do
     octet = div(profile_id, 250) |> rem(250)
+    bind_all? = mock?() or is_nil(state.inbound_profile_id) or port == 53 or System.get_env("BIND_ALL_INTERFACES") == "true"
 
     udp_opts =
-      if mock?() do
+      if bind_all? do
         [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
       else
         [
@@ -158,7 +164,7 @@ defmodule Hermit.Dns.Server do
       end
 
     tcp_opts =
-      if mock?() do
+      if bind_all? do
         [:binary, packet: 2, active: false, reuseaddr: true]
       else
         [:binary, packet: 2, active: false, reuseaddr: true, ip: {10, 251, octet, 1}]
@@ -665,10 +671,60 @@ defmodule Hermit.Dns.Server do
     end
   end
 
+  defp get_effective_context(ip, state) do
+    ip_str = ip_to_string(ip)
+
+    case Hermit.Vpn.DnsDdnsResolver.lookup_endpoint_id(ip_str) do
+      {:ok, endpoint_id} ->
+        case fetch_endpoint_context(endpoint_id) do
+          {:ok, profile_id, config, upstreams, custom_rules} ->
+            {profile_id, config, upstreams, custom_rules}
+
+          _ ->
+            {state.profile_id, state.config, state.upstreams, state.custom_rules}
+        end
+
+      _ ->
+        {state.profile_id, state.config, state.upstreams, state.custom_rules}
+    end
+  end
+
+  defp fetch_endpoint_context(endpoint_id) do
+    try do
+      case :ets.lookup(:inbound_profiles_cache, {:ddns_endpoint_ctx, endpoint_id}) do
+        [{_, ctx}] ->
+          {:ok, ctx.profile_id, ctx.config, ctx.upstreams, ctx.custom_rules}
+
+        [] ->
+          endpoint =
+            Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
+            |> Hermit.Repo.preload(:dns_profile)
+
+          if endpoint && endpoint.dns_profile do
+            profile = Hermit.Repo.preload(endpoint.dns_profile, :blocklists)
+            upstreams = parse_upstreams(profile.upstream_dns)
+            custom_rules = Rules.precompile(profile.custom_rules)
+
+            ctx = %{
+              profile_id: profile.id,
+              config: profile,
+              upstreams: upstreams,
+              custom_rules: custom_rules
+            }
+
+            :ets.insert(:inbound_profiles_cache, {{:ddns_endpoint_ctx, endpoint_id}, ctx})
+            {:ok, ctx.profile_id, ctx.config, ctx.upstreams, ctx.custom_rules}
+          else
+            :error
+          end
+      end
+    rescue
+      _ -> :error
+    end
+  end
+
   defp process_query_fast_path(socket, ip, port, packet, query, state) do
-    profile_id = state.profile_id
-    config = state.config
-    upstreams = state.upstreams
+    {profile_id, config, upstreams, _custom_rules} = get_effective_context(ip, state)
     enable_query_logging = config.enable_query_logging
 
     # 0. AAAA Blocking (Filter IPv6)

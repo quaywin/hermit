@@ -21,6 +21,7 @@ defmodule Hermit.Application do
       {Hermit.Dns.BlocklistLoader, []},
       {Hermit.Dns.Telemetry, []},
       {Hermit.Vpn.DnsDeviceResolver, []},
+      {Hermit.Vpn.DnsDdnsResolver, []},
       {Hermit.Vpn.DnsSupervisor, []},
       HermitWeb.Endpoint
     ]

@@ -34,6 +34,7 @@ defmodule HermitWeb.DnsEndpointLive do
      |> assign(edit_form: nil)
      |> assign(show_new_modal: false)
      |> assign(show_edit_modal: false)
+     |> assign(ddns_map: Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map())
      # Lưu trữ status của các Tailscale Node
      |> assign(dns_statuses: %{})
      |> update_all_dns_statuses()}
@@ -58,7 +59,12 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_info(:tick, socket) do
     # Cập nhật trạng thái của các DNS node định kỳ mỗi giây
-    {:noreply, update_all_dns_statuses(socket)}
+    ddns_map = Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map()
+
+    {:noreply,
+     socket
+     |> assign(ddns_map: ddns_map)
+     |> update_all_dns_statuses()}
   end
 
   @impl true
@@ -92,8 +98,15 @@ defmodule HermitWeb.DnsEndpointLive do
     changeset = DnsEndpoint.changeset(%DnsEndpoint{}, params)
 
     case Hermit.Repo.insert(changeset) do
-      {:ok, _endpoint} ->
+      {:ok, endpoint} ->
         DnsEndpoint.clear_cache()
+        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
+
+        if endpoint.enabled do
+          Task.start(fn ->
+            Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, endpoint.inbound_profile_id)
+          end)
+        end
 
         {:noreply,
          socket
@@ -144,11 +157,16 @@ defmodule HermitWeb.DnsEndpointLive do
     case Hermit.Repo.update(changeset) do
       {:ok, updated_endpoint} ->
         DnsEndpoint.clear_cache()
+        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
         # Reboot DNS node if it was running with old config
-        {status, _, _} = DnsWorker.get_status(updated_endpoint.id)
+        server_running? =
+          case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, updated_endpoint.id}) do
+            [{_pid, _}] -> true
+            [] -> false
+          end
 
-        if status == :running do
+        if server_running? do
           Hermit.Vpn.DnsSupervisor.stop_dns(updated_endpoint.id)
 
           if updated_endpoint.enabled do
@@ -399,7 +417,10 @@ defmodule HermitWeb.DnsEndpointLive do
             # Chỉ lấy status nếu có liên kết inbound profile (Tailscale)
             DnsWorker.get_status(endpoint.id)
           else
-            {:stopped, nil, nil}
+            case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint.id}) do
+              [{_pid, _}] -> {:running, nil, nil}
+              [] -> {:stopped, nil, nil}
+            end
           end
 
         Map.put(acc, endpoint.id, status_info)

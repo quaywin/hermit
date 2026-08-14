@@ -5,7 +5,8 @@ defmodule Hermit.Vpn.DnsEndpoint do
   schema "dns_endpoints" do
     field(:name, :string)
     field(:doh_token, :string)
-    field(:enabled, :boolean, default: false)
+    field(:ddns_hostname, :string)
+    field(:enabled, :boolean, default: true)
 
     belongs_to(:dns_profile, Hermit.Vpn.DnsConfig, foreign_key: :dns_profile_id)
     belongs_to(:inbound_profile, Hermit.Vpn.InboundProfile, foreign_key: :inbound_profile_id)
@@ -16,7 +17,7 @@ defmodule Hermit.Vpn.DnsEndpoint do
   @doc false
   def changeset(dns_endpoint, attrs) do
     dns_endpoint
-    |> cast(attrs, [:name, :doh_token, :enabled, :dns_profile_id, :inbound_profile_id])
+    |> cast(attrs, [:name, :doh_token, :ddns_hostname, :enabled, :dns_profile_id, :inbound_profile_id])
     |> put_doh_token()
     |> validate_required([:name, :doh_token, :dns_profile_id])
     |> unique_constraint(:doh_token)

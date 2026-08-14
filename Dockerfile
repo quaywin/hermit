@@ -127,4 +127,7 @@ ENV ERL_CRASH_DUMP_SECONDS=0
 # Copy the final release
 COPY --from=builder /app/hermit_release ./
 
+EXPOSE 3000
+EXPOSE 53/udp 53/tcp
+
 CMD ["/app/bin/server"]

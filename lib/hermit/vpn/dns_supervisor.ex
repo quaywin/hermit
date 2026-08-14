@@ -21,7 +21,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
     worker_spec =
       {Hermit.Vpn.DnsWorker, endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id}
 
-    port = 5400 + endpoint_id
+    port = get_dns_port(endpoint_id)
 
     server_spec =
       {Hermit.Dns.Server,
@@ -100,7 +100,7 @@ defmodule Hermit.Vpn.DnsSupervisor do
         :ok
     end
 
-    port = 5400 + endpoint_id
+    port = get_dns_port(endpoint_id)
     endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
     inbound_profile_id = endpoint && endpoint.inbound_profile_id
 
@@ -112,6 +112,22 @@ defmodule Hermit.Vpn.DnsSupervisor do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp get_dns_port(endpoint_id) do
+    case System.get_env("DNS_PORT") do
+      nil ->
+        5400 + endpoint_id
+
+      "53" ->
+        53
+
+      other ->
+        case Integer.parse(other) do
+          {port, _} -> port
+          :error -> 5400 + endpoint_id
+        end
     end
   end
 

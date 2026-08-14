@@ -71,6 +71,8 @@ defmodule HermitWeb.Endpoint do
     host = System.get_env("PHX_HOST") || "localhost"
     storage_dir = Application.get_env(:hermit, :storage)[:base_path] || "/app/storage"
 
+    mode = if System.get_env("ENABLE_SITE_ENCRYPT") == "true", do: :auto, else: :manual
+
     directory_url =
       if host in ["localhost", "127.0.0.1", ""] do
         {:internal, port: 4001}
@@ -80,6 +82,7 @@ defmodule HermitWeb.Endpoint do
 
     SiteEncrypt.configure(
       client: :native,
+      mode: mode,
       directory_url: directory_url,
       emails: ["admin@#{host}"],
       db_folder: storage_dir,

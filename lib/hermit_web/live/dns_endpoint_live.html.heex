@@ -128,7 +128,7 @@
             </div>
 
             <!-- Configuration & URLs -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
               <!-- DoH setup -->
               <div class="space-y-2 bg-base-200/30 border border-base-300/60 rounded-[8px] p-4">
                 <div class="flex items-center justify-between">
@@ -153,6 +153,32 @@
                     <.icon name="hero-clipboard" class="size-4" />
                   </button>
                 </div>
+              </div>
+
+              <!-- Port 53 DDNS Matching -->
+              <div class="space-y-2 bg-base-200/30 border border-base-300/60 rounded-[8px] p-4">
+                <h4 class="text-xs font-semibold uppercase tracking-wider text-base-content/80">
+                  ⚡ Port 53 DDNS Matcher
+                </h4>
+                <%= if endpoint.ddns_hostname && endpoint.ddns_hostname != "" do %>
+                  <% ddns_info = Map.get(@ddns_map, endpoint.id) %>
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between">
+                      <span class="text-[11px] text-base-content/60">DDNS:</span>
+                      <code class="text-[11px] font-mono font-bold text-base-content/80">{endpoint.ddns_hostname}</code>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="text-[11px] text-base-content/60">Client IP:</span>
+                      <code class="text-[11px] font-mono font-bold text-emerald-500">
+                        {if ddns_info, do: ddns_info.ip, else: "Resolving..."}
+                      </code>
+                    </div>
+                  </div>
+                <% else %>
+                  <p class="text-[11px] text-base-content/40 py-1">
+                    No DDNS domain set. Click edit to bind a DDNS hostname for Port 53 queries.
+                  </p>
+                <% end %>
               </div>
 
               <!-- Network status (LAN/Tailscale status) -->
@@ -199,8 +225,33 @@
                     </div>
                   </div>
                 <% else %>
-                  <div class="flex items-center gap-2 text-xs text-base-content/50 py-2">
-                    <span>🟢 DoH resolver is active and listening on standard web ports.</span>
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <span class="text-xs text-base-content/60 block">UDP/TCP Port:</span>
+                      <code class="text-xs font-mono font-bold text-emerald-500">
+                        {5400 + endpoint.id}
+                      </code>
+                    </div>
+                    <div class="flex flex-col items-end gap-1">
+                      <span class={[
+                        "badge badge-sm font-semibold",
+                        status == :running && "badge-success text-white",
+                        status == :stopped && "badge-ghost text-base-content/60"
+                      ]}>
+                        {status}
+                      </span>
+                      <button
+                        phx-click="toggle_endpoint_enabled"
+                        phx-value-id={endpoint.id}
+                        class={[
+                          "btn btn-xs rounded-[4px] font-semibold text-[10px] mt-1",
+                          endpoint.enabled && "btn-error btn-outline",
+                          not endpoint.enabled && "btn-primary text-white"
+                        ]}
+                      >
+                        {if endpoint.enabled, do: "Deactivate", else: "Activate"}
+                      </button>
+                    </div>
                   </div>
                 <% end %>
               </div>
@@ -313,6 +364,19 @@
           </div>
 
           <div class="space-y-1.5">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60">DDNS Hostname (Port 53 Matching - Optional)</label>
+            <.input
+              field={f[:ddns_hostname]}
+              type="text"
+              placeholder="e.g. myhome.duckdns.org"
+              class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+            />
+            <span class="text-[10px] text-base-content/40 mt-1 block">
+              Home DDNS domain. Hermit automatically resolves this domain to match incoming Port 53 queries from your home IP.
+            </span>
+          </div>
+
+          <div class="space-y-1.5">
             <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60">Network Connection (Optional)</label>
             <.input
               field={f[:inbound_profile_id]}
@@ -379,6 +443,19 @@
               options={Enum.map(@dns_profiles, &{&1.name, &1.id})}
               class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
             />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60">DDNS Hostname (Port 53 Matching - Optional)</label>
+            <.input
+              field={f[:ddns_hostname]}
+              type="text"
+              placeholder="e.g. myhome.duckdns.org"
+              class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+            />
+            <span class="text-[10px] text-base-content/40 mt-1 block">
+              Home DDNS domain. Hermit automatically resolves this domain to match incoming Port 53 queries from your home IP.
+            </span>
           </div>
 
           <div class="space-y-1.5">

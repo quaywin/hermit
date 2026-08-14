@@ -859,7 +859,8 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp mock? do
     config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false) or System.get_env("MOCK_VPN") == "true" or Mix.env() == :test
+    mock_env? = Code.ensure_loaded?(Mix) and Mix.env() == :test
+    Keyword.get(config, :mock, false) or System.get_env("MOCK_VPN") == "true" or mock_env?
   end
 
   defp get_storage_base_path do

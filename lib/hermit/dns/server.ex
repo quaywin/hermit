@@ -179,16 +179,16 @@ defmodule Hermit.Dns.Server do
           {:error, reason} ->
             :gen_udp.close(udp_socket)
 
-            Logger.warning(
-              "Failed to start Elixir DNS TCP Server for profile #{profile_id} on port #{port}: #{inspect(reason)}. Will retry..."
+            Logger.debug(
+              "DNS TCP Server for profile #{profile_id} on port #{port} not ready yet (#{inspect(reason)}). Will retry..."
             )
 
             {:error, reason, state}
         end
 
       {:error, reason} ->
-        Logger.warning(
-          "Failed to start Elixir DNS UDP Server for profile #{profile_id} on port #{port}: #{inspect(reason)}. Will retry..."
+        Logger.debug(
+          "DNS UDP Server for profile #{profile_id} on port #{port} not ready yet (#{inspect(reason)}). Will retry..."
         )
 
         {:error, reason, state}

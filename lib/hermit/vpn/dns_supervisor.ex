@@ -18,6 +18,11 @@ defmodule Hermit.Vpn.DnsSupervisor do
       "DnsSupervisor: starting DNS worker and server for endpoint: #{endpoint_id} (inbound_profile: #{inbound_profile_id})"
     )
 
+    # Ensure virtual interface (10.251.octet.1) exists upfront for Tailscale endpoints
+    if inbound_profile_id do
+      Hermit.Vpn.Namespace.create_endpoint_namespace(endpoint_id)
+    end
+
     worker_spec =
       {Hermit.Vpn.DnsWorker, endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id}
 

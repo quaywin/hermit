@@ -192,32 +192,6 @@ defmodule Hermit.Dns.Server do
             {:error, reason, state}
         end
 
-      {:error, :eaddrnotavail} when not bind_all? ->
-        # Fallback to bind all interfaces if specific virtual IP is unavailable on host
-        fallback_udp_opts = [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, read_packets: 1000]
-        fallback_tcp_opts = [:binary, packet: 2, active: false, reuseaddr: true]
-
-        case :gen_udp.open(port, fallback_udp_opts) do
-          {:ok, udp_socket} ->
-            case :gen_tcp.listen(port, fallback_tcp_opts) do
-              {:ok, tcp_socket} ->
-                Logger.info(
-                  "Elixir DNS Server for profile #{profile_id} fallback listening on UDP and TCP port #{port}"
-                )
-
-                server_pid = self()
-                spawn_link(fn -> tcp_accept_loop(tcp_socket, profile_id, server_pid) end)
-                {:ok, %{state | socket: udp_socket, tcp_socket: tcp_socket}}
-
-              {:error, reason} ->
-                :gen_udp.close(udp_socket)
-                {:error, reason, state}
-            end
-
-          {:error, reason} ->
-            {:error, reason, state}
-        end
-
       {:error, reason} ->
         Logger.warning(
           "Failed to start Elixir DNS UDP Server for profile #{profile_id} on port #{port}: #{inspect(reason)}. Will retry..."

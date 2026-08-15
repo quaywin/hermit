@@ -212,6 +212,22 @@
                           {if ddns_info, do: ddns_info.ip, else: "Resolving..."}
                         </code>
                       </div>
+                      <div class="flex items-center justify-between pt-1 border-t border-base-200/60 mt-1">
+                        <span class="text-[11px] text-base-content/60">Strict DDNS Filter:</span>
+                        <button
+                          type="button"
+                          phx-click="toggle_ddns_filter"
+                          phx-value-id={endpoint.id}
+                          class={[
+                            "badge badge-sm font-semibold cursor-pointer border",
+                            (endpoint.enable_ddns_filter != false) && "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+                            (endpoint.enable_ddns_filter == false) && "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                          ]}
+                          title="Click to toggle DDNS IP filter ON/OFF"
+                        >
+                          {if endpoint.enable_ddns_filter != false, do: "ON (IP Match)", else: "OFF (Allow All IPs)"}
+                        </button>
+                      </div>
                     </div>
                   <% else %>
                     <h4 class="text-xs font-semibold uppercase tracking-wider text-base-content/80 mb-3">
@@ -409,14 +425,27 @@
           <% end %>
 
           <%= if @new_connection_type == "ddns" do %>
-            <div class="space-y-1.5 p-3 bg-base-200/40 rounded-[6px] border border-base-300">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60">DDNS Hostname</label>
-              <.input
-                field={f[:ddns_hostname]}
-                type="text"
-                placeholder="e.g. myhome.duckdns.org"
-                class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-              />
+            <div class="space-y-3 p-3 bg-base-200/40 rounded-[6px] border border-base-300">
+              <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">DDNS Hostname</label>
+                <.input
+                  field={f[:ddns_hostname]}
+                  type="text"
+                  placeholder="e.g. myhome.duckdns.org"
+                  class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                />
+              </div>
+              <div class="flex items-center justify-between pt-1 border-t border-base-300/50">
+                <div>
+                  <span class="text-xs font-medium text-base-content block">Strict DDNS IP Filtering</span>
+                  <span class="text-[10px] text-base-content/50 block">Only allow requests from matched DDNS WAN IP. Turn off to allow all IPs.</span>
+                </div>
+                <.input
+                  field={f[:enable_ddns_filter]}
+                  type="checkbox"
+                  class="checkbox checkbox-primary checkbox-sm rounded-[4px]"
+                />
+              </div>
             </div>
           <% else %>
             <input type="hidden" name="dns_endpoint[ddns_hostname]" value="" />
@@ -535,14 +564,27 @@
           <% end %>
 
           <%= if @edit_connection_type == "ddns" do %>
-            <div class="space-y-1.5 p-3 bg-base-200/40 rounded-[6px] border border-base-300">
-              <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60">DDNS Hostname</label>
-              <.input
-                field={f[:ddns_hostname]}
-                type="text"
-                placeholder="e.g. myhome.duckdns.org"
-                class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-              />
+            <div class="space-y-3 p-3 bg-base-200/40 rounded-[6px] border border-base-300">
+              <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">DDNS Hostname</label>
+                <.input
+                  field={f[:ddns_hostname]}
+                  type="text"
+                  placeholder="e.g. myhome.duckdns.org"
+                  class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                />
+              </div>
+              <div class="flex items-center justify-between pt-1 border-t border-base-300/50">
+                <div>
+                  <span class="text-xs font-medium text-base-content block">Strict DDNS IP Filtering</span>
+                  <span class="text-[10px] text-base-content/50 block">Only allow requests from matched DDNS WAN IP. Turn off to allow all IPs.</span>
+                </div>
+                <.input
+                  field={f[:enable_ddns_filter]}
+                  type="checkbox"
+                  class="checkbox checkbox-primary checkbox-sm rounded-[4px]"
+                />
+              </div>
             </div>
           <% else %>
             <input type="hidden" name="dns_endpoint[ddns_hostname]" value="" />

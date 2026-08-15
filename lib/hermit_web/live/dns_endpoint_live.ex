@@ -245,6 +245,28 @@ defmodule HermitWeb.DnsEndpointLive do
   end
 
   @impl true
+  def handle_event("toggle_ddns_filter", %{"id" => id_str}, socket) do
+    endpoint_id = String.to_integer(id_str)
+    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
+    new_val = not (endpoint.enable_ddns_filter != false)
+
+    case DnsEndpoint.changeset(endpoint, %{enable_ddns_filter: new_val}) |> Hermit.Repo.update() do
+      {:ok, _updated} ->
+        DnsEndpoint.clear_cache()
+        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "DDNS IP Filter #{if new_val, do: "enabled", else: "disabled"}.")
+         |> assign(endpoints: get_endpoints())
+         |> assign(ddns_map: Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map())}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to toggle DDNS IP filter.")}
+    end
+  end
+
+  @impl true
   def handle_event("toggle_endpoint_enabled", %{"id" => id_str}, socket) do
     endpoint_id = String.to_integer(id_str)
     endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)

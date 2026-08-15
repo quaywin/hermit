@@ -28,14 +28,19 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
           endpoint_id
 
         [] ->
-          # Only allow fallback to active DDNS endpoint for local loopback (127.0.0.1 / ::1) in dev/testing
-          if client_ip in ["127.0.0.1", "::1"] do
-            case :ets.match_object(@table, {{:endpoint, :_}, :_}) do
-              [{{:endpoint, ep_id}, _} | _] -> ep_id
-              _ -> nil
-            end
-          else
-            nil
+          case :ets.match_object(@table, {:unfiltered_endpoint, :_}) do
+            [{_, ep_id} | _] ->
+              ep_id
+
+            [] ->
+              if client_ip in ["127.0.0.1", "::1"] do
+                case :ets.match_object(@table, {{:endpoint, :_}, :_}) do
+                  [{{:endpoint, ep_id}, _} | _] -> ep_id
+                  _ -> nil
+                end
+              else
+                nil
+              end
           end
       end
     rescue
@@ -46,7 +51,7 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
   def lookup_endpoint(_), do: nil
 
   @doc """
-  Returns a map of %{endpoint_id => %{ip: ip_string, hostname: hostname}} for UI rendering.
+  Returns a map of %{endpoint_id => %{ip: ip_string, hostname: hostname, enable_ddns_filter: boolean}} for UI rendering.
   """
   def get_resolved_ddns_map do
     try do
@@ -98,6 +103,9 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
   # --- Helper Functions ---
 
   defp perform_resolutions do
+    # Clear previous unfiltered endpoints
+    :ets.match_delete(@table, {:unfiltered_endpoint, :_})
+
     endpoints =
       try do
         Hermit.Repo.all(
@@ -111,13 +119,19 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
 
     Enum.each(endpoints, fn endpoint ->
       hostname = String.trim(endpoint.ddns_hostname)
+      enable_filter = Map.get(endpoint, :enable_ddns_filter) != false
+
+      if not enable_filter do
+        :ets.insert(@table, {:unfiltered_endpoint, endpoint.id})
+      end
 
       case resolve_hostname(hostname) do
         {:ok, ip_str} ->
           :ets.insert(@table, {{:ip, ip_str}, endpoint.id})
-          :ets.insert(@table, {{:endpoint, endpoint.id}, %{ip: ip_str, hostname: hostname}})
+          :ets.insert(@table, {{:endpoint, endpoint.id}, %{ip: ip_str, hostname: hostname, enable_ddns_filter: enable_filter}})
 
         {:error, reason} ->
+          :ets.insert(@table, {{:endpoint, endpoint.id}, %{ip: "Resolving...", hostname: hostname, enable_ddns_filter: enable_filter}})
           Logger.debug("DnsDdnsResolver: Failed to resolve #{hostname} for endpoint #{endpoint.id}: #{inspect(reason)}")
       end
     end)

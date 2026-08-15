@@ -183,14 +183,6 @@ defmodule Hermit.Dns.Telemetry do
               "dns_logs_profile:#{config_id}",
               {:dns_logs_batch, logs}
             )
-
-            Enum.each(logs, fn log_data ->
-              Phoenix.PubSub.broadcast(
-                Hermit.PubSub,
-                "dns_logs_profile:#{config_id}",
-                {:dns_log, log_data}
-              )
-            end)
           else
             # For fallback queries without specific config_id, broadcast to all profile subscribers
             try do
@@ -204,6 +196,8 @@ defmodule Hermit.Dns.Telemetry do
               end)
             rescue
               _ -> :ok
+            catch
+              _, _ -> :ok
             end
           end
         end)

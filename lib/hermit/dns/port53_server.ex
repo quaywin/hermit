@@ -66,11 +66,11 @@ defmodule Hermit.Dns.Port53Server do
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
       case DnsDdnsResolver.lookup_endpoint(client_ip_str) do
         nil ->
-          Logger.debug("Port53Server: No DDNS endpoint matched for client IP #{client_ip_str}")
+          Logger.info("Port53 Server: Incoming query from #{client_ip_str} -> No DDNS endpoint matched (REFUSED)")
           send_udp_error(socket, ip, port, packet, 5)
 
         endpoint_id ->
-          process_ddns_query(socket, ip, port, packet, endpoint_id)
+          process_ddns_query(socket, ip, port, packet, endpoint_id, client_ip_str)
       end
     end)
 
@@ -140,17 +140,24 @@ defmodule Hermit.Dns.Port53Server do
             if config do
               case Packet.parse(packet) do
                 {:ok, query} ->
-                  if Filter.match_global_ets_blocklist?(query.domain) do
+                  blocklist_id = Filter.match_global_ets_blocklist?(query.domain)
+
+                  if blocklist_id do
+                    Logger.info("Port53 Server (TCP) [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> BLOCKED (NXDOMAIN)")
                     blocked_resp = Packet.build_nxdomain(query.id, query.query_record)
                     :gen_tcp.send(client_socket, blocked_resp)
+                    emit_telemetry(endpoint_id, config, ip, query, "blocked", "0.0.0.0 (Blocked)", "Port53 Blocklist", blocklist_id)
                   else
+                    Logger.info("Port53 Server (TCP) [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> ALLOWED")
                     forward_tcp_upstream(client_socket, packet, config)
+                    emit_telemetry(endpoint_id, config, ip, query, "resolved", "Resolved via Upstream", "Port53 Upstream")
                   end
 
                 _ ->
                   send_tcp_error(client_socket, packet, 5)
               end
             else
+              Logger.info("Port53 Server (TCP): Incoming query from #{client_ip_str} -> No DDNS endpoint matched (REFUSED)")
               send_tcp_error(client_socket, packet, 5)
             end
 
@@ -193,17 +200,23 @@ defmodule Hermit.Dns.Port53Server do
     end
   end
 
-  defp process_ddns_query(socket, ip, port, packet, endpoint_id) do
+  defp process_ddns_query(socket, ip, port, packet, endpoint_id, client_ip_str) do
     case Packet.parse(packet) do
       {:ok, query} ->
         config = DnsConfig.get_for_endpoint(endpoint_id)
 
         if config do
-          if Filter.match_global_ets_blocklist?(query.domain) do
+          blocklist_id = Filter.match_global_ets_blocklist?(query.domain)
+
+          if blocklist_id do
+            Logger.info("Port53 Server [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> BLOCKED (NXDOMAIN)")
             blocked_resp = Packet.build_nxdomain(query.id, query.query_record)
             :gen_udp.send(socket, ip, port, blocked_resp)
+            emit_telemetry(endpoint_id, config, ip, query, "blocked", "0.0.0.0 (Blocked)", "Port53 Blocklist", blocklist_id)
           else
+            Logger.info("Port53 Server [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> ALLOWED")
             forward_upstream(socket, ip, port, packet, config)
+            emit_telemetry(endpoint_id, config, ip, query, "resolved", "Resolved via Upstream", "Port53 Upstream")
           end
         else
           send_udp_error(socket, ip, port, packet, 5)
@@ -212,6 +225,25 @@ defmodule Hermit.Dns.Port53Server do
       _ ->
         send_udp_error(socket, ip, port, packet, 5)
     end
+  end
+
+  defp emit_telemetry(endpoint_id, config, ip, query, status, answer, resolver, blocklist_id \\ nil) do
+    :telemetry.execute(
+      [:hermit, :dns, :query],
+      %{duration: 1000},
+      %{
+        profile_id: endpoint_id,
+        config_id: config.id,
+        client_ip: ip,
+        domain: query.domain,
+        qtype: query.qtype,
+        status: status,
+        answer: answer,
+        resolver: resolver,
+        enable_query_logging: config.enable_query_logging != false,
+        blocklist_id: blocklist_id
+      }
+    )
   end
 
   defp forward_upstream(socket, client_ip, client_port, packet, config) do

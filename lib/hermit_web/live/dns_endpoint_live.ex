@@ -390,10 +390,25 @@ defmodule HermitWeb.DnsEndpointLive do
     endpoint_id = String.to_integer(id_str)
     endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
 
-    inbound_profile_id =
-      if inbound_profile_id_str == "", do: nil, else: String.to_integer(inbound_profile_id_str)
+    {inbound_profile_id, ddns_hostname} =
+      case inbound_profile_id_str do
+        "ddns" ->
+          {nil, if(endpoint.ddns_hostname in [nil, ""], do: "myhome.duckdns.org", else: endpoint.ddns_hostname)}
 
-    if inbound_profile_id == endpoint.inbound_profile_id do
+        "doh" ->
+          {nil, nil}
+
+        "" ->
+          {nil, endpoint.ddns_hostname}
+
+        other ->
+          case Integer.parse(other) do
+            {id, ""} -> {id, nil}
+            _ -> {nil, nil}
+          end
+      end
+
+    if inbound_profile_id == endpoint.inbound_profile_id and ddns_hostname == endpoint.ddns_hostname do
       {:noreply, socket}
     else
       # Nếu đang chạy node cũ, ta tự động dừng nó trước khi chuyển đổi profile mạng
@@ -412,10 +427,15 @@ defmodule HermitWeb.DnsEndpointLive do
       end
 
       case endpoint
-           |> DnsEndpoint.changeset(%{inbound_profile_id: inbound_profile_id, enabled: false})
+           |> DnsEndpoint.changeset(%{
+             inbound_profile_id: inbound_profile_id,
+             ddns_hostname: ddns_hostname,
+             enabled: false
+           })
            |> Hermit.Repo.update() do
         {:ok, updated_endpoint} ->
           DnsEndpoint.clear_cache()
+          Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
           {:noreply,
            socket

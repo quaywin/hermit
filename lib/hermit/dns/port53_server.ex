@@ -85,8 +85,8 @@ defmodule Hermit.Dns.Port53Server do
 
   defp try_bind_port53(state) do
     port = state.port
-    udp_ip = resolve_udp_bind_ip()
-    udp_opts = [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, ip: udp_ip]
+    {udp_ip, family_opts} = resolve_udp_bind_ip()
+    udp_opts = [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, ip: udp_ip] ++ family_opts
     tcp_opts = [:binary, packet: 2, active: false, reuseaddr: true]
 
     case :gen_udp.open(port, udp_opts) do
@@ -113,13 +113,20 @@ defmodule Hermit.Dns.Port53Server do
   end
 
   defp resolve_udp_bind_ip do
-    case :inet.gethostbyname(~c"fly-global-services") do
+    case :inet.gethostbyname(~c"fly-global-services", :inet) do
       {:ok, {:hostent, _, _, :inet, 4, [ip_tuple | _]}} ->
-        Logger.info("Port53 Server: Binding UDP socket to Fly.io global services IP #{:inet.ntoa(ip_tuple) |> to_string()}")
-        ip_tuple
+        Logger.info("Port53 Server: Binding UDP socket to Fly.io global services IPv4 #{:inet.ntoa(ip_tuple) |> to_string()}")
+        {ip_tuple, []}
 
       _ ->
-        {0, 0, 0, 0}
+        case :inet.gethostbyname(~c"fly-global-services", :inet6) do
+          {:ok, {:hostent, _, _, :inet6, 16, [ip_tuple | _]}} ->
+            Logger.info("Port53 Server: Binding UDP socket to Fly.io global services IPv6 #{inspect(ip_tuple)}")
+            {ip_tuple, [:inet6]}
+
+          _ ->
+            {{0, 0, 0, 0}, []}
+        end
     end
   end
 

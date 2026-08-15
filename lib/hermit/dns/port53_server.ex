@@ -85,7 +85,8 @@ defmodule Hermit.Dns.Port53Server do
 
   defp try_bind_port53(state) do
     port = state.port
-    udp_opts = [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024]
+    udp_ip = resolve_udp_bind_ip()
+    udp_opts = [:binary, active: 1000, reuseaddr: true, recbuf: 1024 * 1024, ip: udp_ip]
     tcp_opts = [:binary, packet: 2, active: false, reuseaddr: true]
 
     case :gen_udp.open(port, udp_opts) do
@@ -102,12 +103,23 @@ defmodule Hermit.Dns.Port53Server do
               nil
           end
 
-        Logger.info("Hermit Standalone Port 53 Server successfully listening on UDP/TCP port #{port}")
+        Logger.info("Hermit Standalone Port 53 Server successfully listening on UDP/TCP port #{port} (UDP IP: #{:inet.ntoa(udp_ip) |> to_string()})")
         {:ok, %{state | udp_socket: udp_socket, tcp_socket: tcp_socket, port: port}}
 
       {:error, reason} ->
         Logger.info("Port #{port} UDP is occupied (#{inspect(reason)}). Standalone Port 53 server will retry.")
         {:error, reason, state}
+    end
+  end
+
+  defp resolve_udp_bind_ip do
+    case :inet.gethostbyname(~c"fly-global-services") do
+      {:ok, {:hostent, _, _, :inet, 4, [ip_tuple | _]}} ->
+        Logger.info("Port53 Server: Binding UDP socket to Fly.io global services IP #{:inet.ntoa(ip_tuple) |> to_string()}")
+        ip_tuple
+
+      _ ->
+        {0, 0, 0, 0}
     end
   end
 

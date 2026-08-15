@@ -517,6 +517,8 @@ defmodule Hermit.Dns.Telemetry do
       end)
     rescue
       e -> Logger.warning("Telemetry: Failed to sync hourly metrics to SQLite: #{inspect(e)}")
+    catch
+      _, _ -> :ok
     end
   end
 

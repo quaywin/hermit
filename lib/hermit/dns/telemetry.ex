@@ -97,9 +97,12 @@ defmodule Hermit.Dns.Telemetry do
           pair_id = log_data["pair_id"]
           counter = System.unique_integer([:monotonic])
 
+          cfg_key = if is_nil(config_id), do: "fallback", else: config_id
+          pair_key = if pair_id in [nil, ""], do: "fallback", else: pair_id
+
           [
-            {{pair_id, counter}, log_data},
-            {{config_id, counter}, log_data}
+            {{pair_key, counter}, log_data},
+            {{cfg_key, counter}, log_data}
           ]
         end)
 

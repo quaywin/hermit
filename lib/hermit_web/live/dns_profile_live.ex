@@ -587,11 +587,16 @@ defmodule HermitWeb.DnsProfileLive do
         []
 
       _table ->
-        # Lấy tối đa 200 log gần nhất của profile này
-        # Key structure: {{profile_id, timestamp}, log_entry}
-        pattern = {{{profile_id, :_}, :"$1"}, [], [:"$1"]}
+        # Lấy log của profile này + log fallback từ ETS
+        pattern_profile = {{{profile_id, :_}, :"$1"}, [], [:"$1"]}
+        pattern_fallback_str = {{{"fallback", :_}, :"$1"}, [], [:"$1"]}
+        pattern_fallback_nil = {{{nil, :_}, :"$1"}, [], [:"$1"]}
+        pattern_fallback_empty = {{{"", :_}, :"$1"}, [], [:"$1"]}
 
-        :ets.select(:dns_query_logs, [pattern])
+        (:ets.select(:dns_query_logs, [pattern_profile]) ++
+         :ets.select(:dns_query_logs, [pattern_fallback_str]) ++
+         :ets.select(:dns_query_logs, [pattern_fallback_nil]) ++
+         :ets.select(:dns_query_logs, [pattern_fallback_empty]))
         |> Enum.map(&to_log_struct/1)
         |> Enum.sort_by(& &1.timestamp, :desc)
         |> Enum.uniq_by(fn log -> {log.timestamp, log.domain, log.client_ip} end)

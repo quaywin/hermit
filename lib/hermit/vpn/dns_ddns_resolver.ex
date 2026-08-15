@@ -28,10 +28,14 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
           endpoint_id
 
         [] ->
-          # Fallback: if client IP is local/dev or single-endpoint setup, match active DDNS endpoint from ETS
-          case :ets.match_object(@table, {{:endpoint, :_}, :_}) do
-            [{{:endpoint, ep_id}, _} | _] -> ep_id
-            _ -> nil
+          # Only allow fallback to active DDNS endpoint for local loopback (127.0.0.1 / ::1) in dev/testing
+          if client_ip in ["127.0.0.1", "::1"] do
+            case :ets.match_object(@table, {{:endpoint, :_}, :_}) do
+              [{{:endpoint, ep_id}, _} | _] -> ep_id
+              _ -> nil
+            end
+          else
+            nil
           end
       end
     rescue
@@ -129,7 +133,7 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
       {:error, _} ->
         char_host = String.to_charlist(hostname)
 
-        case :inet.gethostbyname(char_host) do
+        case :inet.gethostbyname(char_host, :inet, 1000) do
           {:ok, {:hostent, _name, _aliases, :inet, 4, [ip_tuple | _]}} ->
             ip_str = :inet.ntoa(ip_tuple) |> to_string()
             {:ok, ip_str}

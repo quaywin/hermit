@@ -177,20 +177,35 @@ defmodule Hermit.Dns.Telemetry do
         |> Enum.each(fn {config_id, group} ->
           logs = Enum.map(group, &elem(&1, 0))
 
-          Phoenix.PubSub.broadcast(
-            Hermit.PubSub,
-            "dns_logs_profile:#{config_id}",
-            {:dns_logs_batch, logs}
-          )
-
-          # Đồng thời gửi tin lẻ để đảm bảo tương thích ngược nếu có chỗ khác lắng nghe
-          Enum.each(logs, fn log_data ->
+          if config_id do
             Phoenix.PubSub.broadcast(
               Hermit.PubSub,
               "dns_logs_profile:#{config_id}",
-              {:dns_log, log_data}
+              {:dns_logs_batch, logs}
             )
-          end)
+
+            Enum.each(logs, fn log_data ->
+              Phoenix.PubSub.broadcast(
+                Hermit.PubSub,
+                "dns_logs_profile:#{config_id}",
+                {:dns_log, log_data}
+              )
+            end)
+          else
+            # For fallback queries without specific config_id, broadcast to all profile subscribers
+            try do
+              configs = Repo.all(Hermit.Vpn.DnsConfig)
+              Enum.each(configs, fn cfg ->
+                Phoenix.PubSub.broadcast(
+                  Hermit.PubSub,
+                  "dns_logs_profile:#{cfg.id}",
+                  {:dns_logs_batch, logs}
+                )
+              end)
+            rescue
+              _ -> :ok
+            end
+          end
         end)
 
         # Broadcast batch log theo pair_id
@@ -309,34 +324,38 @@ defmodule Hermit.Dns.Telemetry do
         end
 
       endpoint_name =
-        if endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined do
-          case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
-            [{_, name}] ->
-              name
+        cond do
+          Map.get(metadata, :endpoint_name) ->
+            Map.get(metadata, :endpoint_name)
 
-            _ ->
-              try do
-                case Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
-                  nil ->
-                    "Unknown"
+          endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined ->
+            case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
+              [{_, name}] ->
+                name
 
-                  endpoint ->
-                    :ets.insert(
-                      :inbound_profiles_cache,
-                      {{:endpoint_name, endpoint_id}, endpoint.name}
-                    )
+              _ ->
+                try do
+                  case Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
+                    nil ->
+                      "Port 53 Fallback"
 
-                    endpoint.name
+                    endpoint ->
+                      :ets.insert(
+                        :inbound_profiles_cache,
+                        {{:endpoint_name, endpoint_id}, endpoint.name}
+                      )
+
+                      endpoint.name
+                  end
+                rescue
+                  _ -> "Port 53 Fallback"
+                catch
+                  _, _ -> "Port 53 Fallback"
                 end
-              rescue
-                _ -> "Unknown"
-              catch
-                _, _ -> "Unknown"
-              end
-          end
-        else
-          # Fallback if table doesn't exist or profile_id is not integer-like
-          "Unknown"
+            end
+
+          true ->
+            "Port 53 Fallback"
         end
 
       client_name =

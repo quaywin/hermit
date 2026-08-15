@@ -66,10 +66,7 @@ defmodule Hermit.Dns.Port53Server do
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
       case DnsDdnsResolver.lookup_endpoint(client_ip_str) do
         nil ->
-          resolved_map = DnsDdnsResolver.get_resolved_ddns_map()
-          resolved_ips = Enum.map_join(resolved_map, ", ", fn {id, d} -> "Endpoint #{id} (#{d.hostname}): #{d.ip}" end)
-          Logger.info("Port53 Server: Incoming query from #{client_ip_str} -> No DDNS endpoint matched (Active DDNS IPs: [#{resolved_ips}]) -> REFUSED")
-          send_udp_error(socket, ip, port, packet, 5)
+          process_fallback_udp_query(socket, ip, port, packet, client_ip_str)
 
         endpoint_id ->
           process_ddns_query(socket, ip, port, packet, endpoint_id, client_ip_str)
@@ -159,10 +156,7 @@ defmodule Hermit.Dns.Port53Server do
                   send_tcp_error(client_socket, packet, 5)
               end
             else
-              resolved_map = DnsDdnsResolver.get_resolved_ddns_map()
-              resolved_ips = Enum.map_join(resolved_map, ", ", fn {id, d} -> "Endpoint #{id} (#{d.hostname}): #{d.ip}" end)
-              Logger.info("Port53 Server (TCP): Incoming query from #{client_ip_str} -> No DDNS endpoint matched (Active DDNS IPs: [#{resolved_ips}]) -> REFUSED")
-              send_tcp_error(client_socket, packet, 5)
+              process_fallback_tcp_query(client_socket, packet, client_ip_str, ip)
             end
 
           _ ->
@@ -174,6 +168,89 @@ defmodule Hermit.Dns.Port53Server do
     end
 
     :gen_tcp.close(client_socket)
+  end
+
+  defp process_fallback_udp_query(socket, ip, port, packet, client_ip_str) do
+    case Packet.parse(packet) do
+      {:ok, query} ->
+        Logger.info("Port53 Server: Query '#{query.domain}' from #{client_ip_str} -> FALLBACK (Resolved via 1.1.1.1)")
+        forward_fallback_udp(socket, ip, port, packet)
+        emit_fallback_telemetry(ip, query, "fallback", "Resolved via 1.1.1.1", "1.1.1.1 (Fallback)")
+
+      _ ->
+        send_udp_error(socket, ip, port, packet, 2)
+    end
+  end
+
+  defp process_fallback_tcp_query(client_socket, packet, client_ip_str, ip) do
+    case Packet.parse(packet) do
+      {:ok, query} ->
+        Logger.info("Port53 Server (TCP): Query '#{query.domain}' from #{client_ip_str} -> FALLBACK (Resolved via 1.1.1.1)")
+        forward_fallback_tcp(client_socket, packet)
+        emit_fallback_telemetry(ip, query, "fallback", "Resolved via 1.1.1.1", "1.1.1.1 (Fallback)")
+
+      _ ->
+        send_tcp_error(client_socket, packet, 2)
+    end
+  end
+
+  defp forward_fallback_udp(socket, client_ip, client_port, packet) do
+    case :gen_udp.open(0, [:binary, active: false]) do
+      {:ok, upstream_socket} ->
+        :gen_udp.send(upstream_socket, {1, 1, 1, 1}, 53, packet)
+
+        case :gen_udp.recv(upstream_socket, 0, 2000) do
+          {:ok, {_u_ip, _u_port, response_packet}} ->
+            :gen_udp.send(socket, client_ip, client_port, response_packet)
+
+          _ ->
+            send_udp_error(socket, client_ip, client_port, packet, 2)
+        end
+
+        :gen_udp.close(upstream_socket)
+
+      _ ->
+        send_udp_error(socket, client_ip, client_port, packet, 2)
+    end
+  end
+
+  defp forward_fallback_tcp(client_socket, packet) do
+    case :gen_tcp.connect({1, 1, 1, 1}, 53, [:binary, packet: 2, active: false], 2000) do
+      {:ok, u_sock} ->
+        :gen_tcp.send(u_sock, packet)
+
+        case :gen_tcp.recv(u_sock, 0, 2000) do
+          {:ok, response_packet} ->
+            :gen_tcp.send(client_socket, response_packet)
+
+          _ ->
+            send_tcp_error(client_socket, packet, 2)
+        end
+
+        :gen_tcp.close(u_sock)
+
+      _ ->
+        send_tcp_error(client_socket, packet, 2)
+    end
+  end
+
+  defp emit_fallback_telemetry(ip, query, status, answer, resolver) do
+    :telemetry.execute(
+      [:hermit, :dns, :query],
+      %{duration: 1000},
+      %{
+        profile_id: nil,
+        config_id: nil,
+        client_ip: ip,
+        domain: query.domain,
+        qtype: query.qtype,
+        status: status,
+        answer: answer,
+        resolver: resolver,
+        enable_query_logging: true,
+        endpoint_name: "Port 53 Fallback"
+      }
+    )
   end
 
   defp forward_tcp_upstream(client_socket, packet, config) do

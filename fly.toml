@@ -8,7 +8,7 @@ primary_region = 'sin'
 
 [vm]
   size = 'shared-cpu-1x'
-  memory = '256mb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
 
@@ -54,7 +54,19 @@ primary_region = 'sin'
     grace_period = '10s'
     method = 'get'
     path = '/up'
-    protocol = 'http'
+# Standalone Port 53 DNS (UDP)
+[[services]]
+  internal_port = 53
+  protocol = "udp"
+  [[services.ports]]
+    port = 53
+
+# Standalone Port 53 DNS (TCP)
+[[services]]
+  internal_port = 53
+  protocol = "tcp"
+  [[services.ports]]
+    port = 53
 
 # Tailscale UDP Port Range (41641 - 41700)
 [[services]]

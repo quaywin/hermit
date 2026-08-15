@@ -66,7 +66,9 @@ defmodule Hermit.Dns.Port53Server do
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
       case DnsDdnsResolver.lookup_endpoint(client_ip_str) do
         nil ->
-          Logger.info("Port53 Server: Incoming query from #{client_ip_str} -> No DDNS endpoint matched (REFUSED)")
+          resolved_map = DnsDdnsResolver.get_resolved_ddns_map()
+          resolved_ips = Enum.map_join(resolved_map, ", ", fn {id, d} -> "Endpoint #{id} (#{d.hostname}): #{d.ip}" end)
+          Logger.info("Port53 Server: Incoming query from #{client_ip_str} -> No DDNS endpoint matched (Active DDNS IPs: [#{resolved_ips}]) -> REFUSED")
           send_udp_error(socket, ip, port, packet, 5)
 
         endpoint_id ->
@@ -157,7 +159,9 @@ defmodule Hermit.Dns.Port53Server do
                   send_tcp_error(client_socket, packet, 5)
               end
             else
-              Logger.info("Port53 Server (TCP): Incoming query from #{client_ip_str} -> No DDNS endpoint matched (REFUSED)")
+              resolved_map = DnsDdnsResolver.get_resolved_ddns_map()
+              resolved_ips = Enum.map_join(resolved_map, ", ", fn {id, d} -> "Endpoint #{id} (#{d.hostname}): #{d.ip}" end)
+              Logger.info("Port53 Server (TCP): Incoming query from #{client_ip_str} -> No DDNS endpoint matched (Active DDNS IPs: [#{resolved_ips}]) -> REFUSED")
               send_tcp_error(client_socket, packet, 5)
             end
 

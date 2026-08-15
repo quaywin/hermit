@@ -177,27 +177,21 @@ defmodule Hermit.Dns.Port53Server do
   end
 
   defp forward_tcp_upstream(client_socket, packet, config) do
-    upstream_ip_str = if is_binary(config.upstream_dns) and config.upstream_dns != "", do: config.upstream_dns, else: "1.1.1.1"
+    upstream_ip = parse_first_upstream_ip(config.upstream_dns)
 
-    case :inet.parse_address(String.to_charlist(upstream_ip_str)) do
-      {:ok, upstream_ip} ->
-        case :gen_tcp.connect(upstream_ip, 53, [:binary, packet: 2, active: false], 2000) do
-          {:ok, u_sock} ->
-            :gen_tcp.send(u_sock, packet)
+    case :gen_tcp.connect(upstream_ip, 53, [:binary, packet: 2, active: false], 2000) do
+      {:ok, u_sock} ->
+        :gen_tcp.send(u_sock, packet)
 
-            case :gen_tcp.recv(u_sock, 0, 2000) do
-              {:ok, response_packet} ->
-                :gen_tcp.send(client_socket, response_packet)
-
-              _ ->
-                send_tcp_error(client_socket, packet, 2)
-            end
-
-            :gen_tcp.close(u_sock)
+        case :gen_tcp.recv(u_sock, 0, 2000) do
+          {:ok, response_packet} ->
+            :gen_tcp.send(client_socket, response_packet)
 
           _ ->
             send_tcp_error(client_socket, packet, 2)
         end
+
+        :gen_tcp.close(u_sock)
 
       _ ->
         send_tcp_error(client_socket, packet, 2)
@@ -251,31 +245,39 @@ defmodule Hermit.Dns.Port53Server do
   end
 
   defp forward_upstream(socket, client_ip, client_port, packet, config) do
-    upstream_ip_str =
-      if is_binary(config.upstream_dns) and config.upstream_dns != "", do: config.upstream_dns, else: "1.1.1.1"
+    upstream_ip = parse_first_upstream_ip(config.upstream_dns)
 
-    case :inet.parse_address(String.to_charlist(upstream_ip_str)) do
-      {:ok, upstream_ip} ->
-        case :gen_udp.open(0, [:binary, active: false]) do
-          {:ok, upstream_socket} ->
-            :gen_udp.send(upstream_socket, upstream_ip, 53, packet)
+    case :gen_udp.open(0, [:binary, active: false]) do
+      {:ok, upstream_socket} ->
+        :gen_udp.send(upstream_socket, upstream_ip, 53, packet)
 
-            case :gen_udp.recv(upstream_socket, 0, 2000) do
-              {:ok, {_u_ip, _u_port, response_packet}} ->
-                :gen_udp.send(socket, client_ip, client_port, response_packet)
-
-              _ ->
-                send_udp_error(socket, client_ip, client_port, packet, 2)
-            end
-
-            :gen_udp.close(upstream_socket)
+        case :gen_udp.recv(upstream_socket, 0, 2000) do
+          {:ok, {_u_ip, _u_port, response_packet}} ->
+            :gen_udp.send(socket, client_ip, client_port, response_packet)
 
           _ ->
             send_udp_error(socket, client_ip, client_port, packet, 2)
         end
 
+        :gen_udp.close(upstream_socket)
+
       _ ->
         send_udp_error(socket, client_ip, client_port, packet, 2)
+    end
+  end
+
+  defp parse_first_upstream_ip(upstream_dns_str) do
+    if is_binary(upstream_dns_str) and upstream_dns_str != "" do
+      upstream_dns_str
+      |> String.split([",", " "], trim: true)
+      |> Enum.find_value({1, 1, 1, 1}, fn val ->
+        case :inet.parse_address(String.to_charlist(val)) do
+          {:ok, ip_tuple} -> ip_tuple
+          _ -> nil
+        end
+      end)
+    else
+      {1, 1, 1, 1}
     end
   end
 

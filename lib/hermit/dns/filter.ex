@@ -3,77 +3,7 @@ defmodule Hermit.Dns.Filter do
   Encapsulates logic for DNS blocklists and domain filtering.
   """
 
-  @spec match_global_ets_blocklist?(String.t()) :: integer() | nil
-  def match_global_ets_blocklist?(domain) do
-    domain = String.downcase(domain)
 
-    # Fast path: Check Bloom Filter first. If clean, skip ETS lookup entirely.
-    if any_bloom_member?(domain) do
-      case :ets.lookup(:dns_blocklist_entries, domain) do
-        [] ->
-          match_global_suffix_recursive(domain)
-
-        [{_, id} | _] ->
-          id
-      end
-    else
-      nil
-    end
-  end
-
-  defp any_bloom_member?(domain) do
-    if :ets.info(:dns_bloom_filter) == :undefined do
-      true
-    else
-      case :ets.tab2list(:dns_bloom_filter) do
-        [] -> true
-        filters -> any_bloom_member_recursive?(domain, filters)
-      end
-    end
-  end
-
-  defp any_bloom_member_recursive?(domain, filters) do
-    matched =
-      Enum.any?(filters, fn {_, bloom_binary} ->
-        Hermit.Dns.BloomFilter.member?(domain, bloom_binary)
-      end)
-
-    if matched do
-      true
-    else
-      case :binary.match(domain, ".") do
-        :nomatch ->
-          false
-
-        {idx, _len} ->
-          suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
-          any_bloom_member_recursive?(suffix, filters)
-      end
-    end
-  end
-
-  defp match_global_suffix_recursive(domain) do
-    case :binary.match(domain, ".") do
-      :nomatch ->
-        nil
-
-      {idx, _len} ->
-        suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
-
-        case :ets.lookup(:dns_blocklist_entries, suffix) do
-          [] ->
-            match_global_suffix_recursive(suffix)
-
-          [{_, id} | _] ->
-            id
-        end
-    end
-  end
-
-  @spec match_adult?(String.t()) :: boolean()
-  def match_adult?(domain) do
-    match_ets_blocklist?(domain, 3)
-  end
 
   @spec match_ets_blocklist?(String.t(), atom() | integer()) :: boolean()
   def match_ets_blocklist?(domain, :adguard_blocklist), do: match_ets_blocklist?(domain, 1)

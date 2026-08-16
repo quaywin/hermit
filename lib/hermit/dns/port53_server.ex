@@ -1,14 +1,12 @@
 defmodule Hermit.Dns.Port53Server do
   @moduledoc """
   Standalone UDP/TCP server process listening on Port 53 (0.0.0.0:53).
-  Matches incoming home router queries by source IP to DDNS Endpoints.
-  Completely decoupled from Tailscale endpoints and virtual IP sockets.
+  Matches incoming home router queries by source IP to DDNS Endpoints,
+  then delegates resolution directly to the endpoint's dedicated Hermit.Dns.Server process.
   """
   use GenServer
   import Bitwise
   alias Hermit.Dns.Packet
-  alias Hermit.Dns.Filter
-  alias Hermit.Vpn.DnsConfig
   alias Hermit.Vpn.DnsDdnsResolver
   require Logger
 
@@ -61,9 +59,9 @@ defmodule Hermit.Dns.Port53Server do
 
   @impl true
   def handle_info({:udp, socket, ip, port, packet}, %{udp_socket: socket} = state) do
-    client_ip_str = :inet.ntoa(ip) |> to_string()
-
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+      client_ip_str = :inet.ntoa(ip) |> to_string()
+
       case DnsDdnsResolver.lookup_endpoint(client_ip_str) do
         nil ->
           process_fallback_udp_query(socket, ip, port, packet, client_ip_str)
@@ -152,30 +150,21 @@ defmodule Hermit.Dns.Port53Server do
 
         case :gen_tcp.recv(client_socket, 0, 5000) do
           {:ok, packet} ->
-            endpoint_id = DnsDdnsResolver.lookup_endpoint(client_ip_str)
-            config = if endpoint_id, do: DnsConfig.get_for_endpoint(endpoint_id)
+            case DnsDdnsResolver.lookup_endpoint(client_ip_str) do
+              nil ->
+                process_fallback_tcp_query(client_socket, packet, client_ip_str, ip)
 
-            if config do
-              case Packet.parse(packet) do
-                {:ok, query} ->
-                  blocklist_id = Filter.match_global_ets_blocklist?(query.domain)
+              endpoint_id ->
+                case resolve_via_endpoint_dns_server(endpoint_id, packet, ip) do
+                  {:ok, response_packet} ->
+                    :gen_tcp.send(client_socket, response_packet)
 
-                  if blocklist_id do
-                    Logger.info("Port53 Server (TCP) [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> BLOCKED (NXDOMAIN)")
-                    blocked_resp = Packet.build_nxdomain(query.id, query.query_record)
-                    :gen_tcp.send(client_socket, blocked_resp)
-                    emit_telemetry(endpoint_id, config, ip, query, "blocked", "0.0.0.0 (Blocked)", "Port53 Blocklist", blocklist_id)
-                  else
-                    Logger.info("Port53 Server (TCP) [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> ALLOWED")
-                    forward_tcp_upstream(client_socket, packet, config)
-                    emit_telemetry(endpoint_id, config, ip, query, "resolved", "Resolved via Upstream", "Port53 Upstream")
-                  end
+                  {:servfail, servfail_packet} ->
+                    :gen_tcp.send(client_socket, servfail_packet)
 
-                _ ->
-                  send_tcp_error(client_socket, packet, 5)
-              end
-            else
-              process_fallback_tcp_query(client_socket, packet, client_ip_str, ip)
+                  {:error, _reason} ->
+                    send_tcp_error(client_socket, packet, 2)
+                end
             end
 
           _ ->
@@ -187,6 +176,87 @@ defmodule Hermit.Dns.Port53Server do
     end
 
     :gen_tcp.close(client_socket)
+  end
+
+  defp process_ddns_query(socket, ip, port, packet, endpoint_id, _client_ip_str) do
+    case resolve_via_endpoint_dns_server(endpoint_id, packet, ip) do
+      {:ok, response_packet} ->
+        :gen_udp.send(socket, ip, port, response_packet)
+
+      {:servfail, servfail_packet} ->
+        :gen_udp.send(socket, ip, port, servfail_packet)
+
+      {:error, _reason} ->
+        send_udp_error(socket, ip, port, packet, 2)
+    end
+  end
+
+  @doc false
+  def resolve_via_endpoint_dns_server(endpoint_id, packet, client_ip) do
+    case get_or_start_dns_server(endpoint_id) do
+      {:ok, pid} ->
+        try do
+          GenServer.call(pid, {:resolve_query, packet, client_ip}, 4000)
+        catch
+          :exit, {:timeout, _} ->
+            Logger.error("Port53 Server: DNS query timed out for endpoint: #{endpoint_id}")
+            {:servfail, build_servfail_packet(packet)}
+
+          :exit, reason ->
+            Logger.error("Port53 Server: DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}")
+            {:servfail, build_servfail_packet(packet)}
+        end
+
+      :error ->
+        {:servfail, build_servfail_packet(packet)}
+    end
+  end
+
+  defp get_or_start_dns_server(endpoint_id) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
+      [{pid, _}] ->
+        {:ok, pid}
+
+      [] ->
+        case Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
+          nil ->
+            :error
+
+          endpoint ->
+            case Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, endpoint.inbound_profile_id) do
+              {:ok, {_worker, server_pid}} when is_pid(server_pid) ->
+                {:ok, server_pid}
+
+              {:ok, server_pid} when is_pid(server_pid) ->
+                {:ok, server_pid}
+
+              {:error, {:already_started, pid}} ->
+                {:ok, pid}
+
+              _ ->
+                case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
+                  [{pid, _}] -> {:ok, pid}
+                  [] -> :error
+                end
+            end
+        end
+    end
+  end
+
+  defp build_servfail_packet(query_packet) do
+    case Packet.parse(query_packet) do
+      {:ok, query} ->
+        servfail = Packet.build_nxdomain(query.id, query.query_record)
+        Packet.patch_rcode(servfail, 2)
+
+      _ ->
+        if byte_size(query_packet) >= 12 do
+          <<id::binary-size(2), _::binary>> = query_packet
+          <<id::binary, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+        else
+          <<0x00, 0x00, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+        end
+    end
   end
 
   defp process_fallback_udp_query(socket, ip, port, packet, client_ip_str) do
@@ -270,111 +340,6 @@ defmodule Hermit.Dns.Port53Server do
         endpoint_name: "Port 53 Fallback"
       }
     )
-  end
-
-  defp forward_tcp_upstream(client_socket, packet, config) do
-    upstream_ip = parse_first_upstream_ip(config.upstream_dns)
-
-    case :gen_tcp.connect(upstream_ip, 53, [:binary, packet: 2, active: false], 2000) do
-      {:ok, u_sock} ->
-        :gen_tcp.send(u_sock, packet)
-
-        case :gen_tcp.recv(u_sock, 0, 2000) do
-          {:ok, response_packet} ->
-            :gen_tcp.send(client_socket, response_packet)
-
-          _ ->
-            send_tcp_error(client_socket, packet, 2)
-        end
-
-        :gen_tcp.close(u_sock)
-
-      _ ->
-        send_tcp_error(client_socket, packet, 2)
-    end
-  end
-
-  defp process_ddns_query(socket, ip, port, packet, endpoint_id, client_ip_str) do
-    case Packet.parse(packet) do
-      {:ok, query} ->
-        config = DnsConfig.get_for_endpoint(endpoint_id)
-
-        if config do
-          blocklist_id = Filter.match_global_ets_blocklist?(query.domain)
-
-          if blocklist_id do
-            Logger.info("Port53 Server [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> BLOCKED (NXDOMAIN)")
-            blocked_resp = Packet.build_nxdomain(query.id, query.query_record)
-            :gen_udp.send(socket, ip, port, blocked_resp)
-            emit_telemetry(endpoint_id, config, ip, query, "blocked", "0.0.0.0 (Blocked)", "Port53 Blocklist", blocklist_id)
-          else
-            Logger.info("Port53 Server [Endpoint #{endpoint_id}]: Query '#{query.domain}' from #{client_ip_str} -> ALLOWED")
-            forward_upstream(socket, ip, port, packet, config)
-            emit_telemetry(endpoint_id, config, ip, query, "resolved", "Resolved via Upstream", "Port53 Upstream")
-          end
-        else
-          send_udp_error(socket, ip, port, packet, 5)
-        end
-
-      _ ->
-        send_udp_error(socket, ip, port, packet, 5)
-    end
-  end
-
-  defp emit_telemetry(endpoint_id, config, ip, query, status, answer, resolver, blocklist_id \\ nil) do
-    :telemetry.execute(
-      [:hermit, :dns, :query],
-      %{duration: 1000},
-      %{
-        profile_id: endpoint_id,
-        config_id: config.id,
-        client_ip: ip,
-        domain: query.domain,
-        qtype: query.qtype,
-        status: status,
-        answer: answer,
-        resolver: resolver,
-        enable_query_logging: config.enable_query_logging != false,
-        blocklist_id: blocklist_id
-      }
-    )
-  end
-
-  defp forward_upstream(socket, client_ip, client_port, packet, config) do
-    upstream_ip = parse_first_upstream_ip(config.upstream_dns)
-
-    case :gen_udp.open(0, [:binary, active: false]) do
-      {:ok, upstream_socket} ->
-        :gen_udp.send(upstream_socket, upstream_ip, 53, packet)
-
-        case :gen_udp.recv(upstream_socket, 0, 2000) do
-          {:ok, {_u_ip, _u_port, response_packet}} ->
-            :gen_udp.send(socket, client_ip, client_port, response_packet)
-
-          _ ->
-            send_udp_error(socket, client_ip, client_port, packet, 2)
-        end
-
-        :gen_udp.close(upstream_socket)
-
-      _ ->
-        send_udp_error(socket, client_ip, client_port, packet, 2)
-    end
-  end
-
-  defp parse_first_upstream_ip(upstream_dns_str) do
-    if is_binary(upstream_dns_str) and upstream_dns_str != "" do
-      upstream_dns_str
-      |> String.split([",", " "], trim: true)
-      |> Enum.find_value({1, 1, 1, 1}, fn val ->
-        case :inet.parse_address(String.to_charlist(val)) do
-          {:ok, ip_tuple} -> ip_tuple
-          _ -> nil
-        end
-      end)
-    else
-      {1, 1, 1, 1}
-    end
   end
 
   # rcode: 5 = REFUSED, 2 = SERVFAIL

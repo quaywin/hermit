@@ -57,7 +57,7 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def handle_params(%{"id" => id_str}, _uri, socket) do
     id = String.to_integer(id_str)
-    profile = Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload(:blocklists)
+    profile = Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
     # Hủy đăng ký PubSub cũ
     if socket.assigns.selected_profile do
@@ -132,7 +132,7 @@ defmodule HermitWeb.DnsProfileLive do
 
           {:noreply,
            socket
-           |> assign(selected_profile: updated |> Hermit.Repo.preload(:blocklists))
+           |> assign(selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists]))
            |> assign(dns_profiles: dns_profiles)
            |> assign(editing_name: false)
            |> assign_name_form()
@@ -503,7 +503,7 @@ defmodule HermitWeb.DnsProfileLive do
   def handle_info({:dns_config_updated, updated_config}, socket) do
     if socket.assigns.selected_profile && socket.assigns.selected_profile.id == updated_config.id do
       # Đồng bộ lại state UI
-      updated_config = Hermit.Repo.preload(updated_config, :blocklists)
+      updated_config = Hermit.Repo.preload(updated_config, [:dns_endpoints, :blocklists])
 
       dns_profiles =
         Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
@@ -521,7 +521,7 @@ defmodule HermitWeb.DnsProfileLive do
 
     selected_profile =
       if socket.assigns.selected_profile,
-        do: Hermit.Repo.preload(socket.assigns.selected_profile, :blocklists, force: true),
+        do: Hermit.Repo.preload(socket.assigns.selected_profile, [:dns_endpoints, :blocklists], force: true),
         else: nil
 
     {:noreply,
@@ -567,7 +567,7 @@ defmodule HermitWeb.DnsProfileLive do
 
         {:noreply,
          socket
-         |> assign(selected_profile: updated |> Hermit.Repo.preload(:blocklists))
+         |> assign(selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists]))
          |> assign(dns_profiles: dns_profiles)
          |> put_flash(:info, success_msg)}
 
@@ -630,11 +630,27 @@ defmodule HermitWeb.DnsProfileLive do
   defp to_datetime(_), do: DateTime.utc_now()
 
   defp profile_active?(profile) do
-    Enum.any?(profile.dns_endpoints, fn endpoint ->
-      case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint.id}) do
-        [{_pid, _value}] -> true
-        _ -> false
+    endpoints =
+      case profile.dns_endpoints do
+        %Ecto.Association.NotLoaded{} ->
+          Hermit.Repo.all(
+            from(e in Hermit.Vpn.DnsEndpoint,
+              where: e.dns_profile_id == ^profile.id and e.enabled == true
+            )
+          )
+
+        nil ->
+          []
+
+        list ->
+          Enum.filter(list, &(&1.enabled == true))
       end
+
+    Enum.any?(endpoints, fn endpoint ->
+      match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint.id})) or
+        match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint.id})) or
+        (is_binary(endpoint.ddns_hostname) and endpoint.ddns_hostname != "") or
+        (is_binary(endpoint.doh_token) and endpoint.doh_token != "")
     end)
   end
 

@@ -17,9 +17,9 @@ defmodule HermitWeb.InboundDetailLive do
          |> push_navigate(to: ~p"/inbounds")}
 
       profile ->
-        # Subscription for status polling if needed
-        if connected?(socket) and profile.type == "tailscale" do
-          :timer.send_interval(1000, self(), :tick)
+        # Subscribe to VPN pairs updates for real-time tunnel status
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Hermit.PubSub, "vpn_pairs")
         end
 
         changeset = InboundProfile.changeset(profile, %{})
@@ -196,8 +196,30 @@ defmodule HermitWeb.InboundDetailLive do
   end
 
   @impl true
-  def handle_event("tick", _params, socket) do
-    {:noreply, reload_routing_tab(socket)}
+  def handle_event("refresh_routing", _params, socket) do
+    {:noreply,
+     socket
+     |> reload_routing_tab()
+     |> put_flash(:info, "Routing overview refreshed.")}
+  end
+
+  @impl true
+  def handle_info({:vpn_pair_updated, pair}, socket) do
+    updated_pairs =
+      Enum.map(socket.assigns.vpn_pairs, fn p ->
+        if p.id == pair.id and not Map.get(p, :is_external, false) do
+          %{p | wg_status: pair.wg_status, ts_status: pair.ts_status}
+        else
+          p
+        end
+      end)
+
+    {:noreply, assign(socket, vpn_pairs: updated_pairs)}
+  end
+
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
   end
 
   # Helper functions

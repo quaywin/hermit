@@ -301,12 +301,16 @@ defmodule Hermit.Dns.Server do
 
     new_cache =
       if status_str == "running" do
-        case read_proxy_ports_from_disk(pair_id) do
-          {:ok, http_port, socks5_port} ->
-            Map.put(state.proxy_ports_cache, pair_id, {http_port, socks5_port})
+        if Map.has_key?(state.proxy_ports_cache, pair_id) do
+          state.proxy_ports_cache
+        else
+          case read_proxy_ports_from_disk(pair_id) do
+            {:ok, http_port, socks5_port} ->
+              Map.put(state.proxy_ports_cache, pair_id, {http_port, socks5_port})
 
-          _ ->
-            state.proxy_ports_cache
+            _ ->
+              state.proxy_ports_cache
+          end
         end
       else
         Map.delete(state.proxy_ports_cache, pair_id)
@@ -1158,8 +1162,8 @@ defmodule Hermit.Dns.Server do
       send_client_response(socket, ip, port, servfail)
       state
     else
-      # Sinh ngẫu nhiên transaction ID 16-bit để tránh xung đột khi chạy đa luồng
-      upstream_tx_id = :rand.uniform(65536) - 1
+      # Sinh transaction ID 16-bit tuan tu khong trung lap
+      upstream_tx_id = generate_unique_tx_id(state.pending_table)
       upstream_tx_id_bin = <<upstream_tx_id::16>>
 
       # Rewrite Transaction ID trong gói tin gửi đi
@@ -1613,8 +1617,8 @@ defmodule Hermit.Dns.Server do
     server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 
-    # Sinh ngẫu nhiên transaction ID 16-bit
-    upstream_tx_id = :rand.uniform(65536) - 1
+    # Sinh transaction ID 16-bit tuan tu khong trung lap
+    upstream_tx_id = generate_unique_tx_id(state.pending_table)
     upstream_tx_id_bin = <<upstream_tx_id::16>>
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
@@ -1685,8 +1689,8 @@ defmodule Hermit.Dns.Server do
     server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 
-    # Sinh ngẫu nhiên transaction ID 16-bit
-    upstream_tx_id = :rand.uniform(65536) - 1
+    # Sinh transaction ID 16-bit tuan tu khong trung lap
+    upstream_tx_id = generate_unique_tx_id(state.pending_table)
     upstream_tx_id_bin = <<upstream_tx_id::16>>
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
@@ -1869,6 +1873,22 @@ defmodule Hermit.Dns.Server do
       packet
     end
   end
+
+  defp generate_unique_tx_id(pending_table) do
+    base_id = rem(System.unique_integer([:positive, :monotonic]), 65535) + 1
+    find_available_tx_id(pending_table, base_id, 0)
+  end
+
+  defp find_available_tx_id(pending_table, candidate_id, retries) when retries < 100 do
+    if :ets.member(pending_table, candidate_id) do
+      next_candidate = if candidate_id >= 65535, do: 1, else: candidate_id + 1
+      find_available_tx_id(pending_table, next_candidate, retries + 1)
+    else
+      candidate_id
+    end
+  end
+
+  defp find_available_tx_id(_pending_table, candidate_id, _retries), do: candidate_id
 
   defp mock? do
     config = Application.get_env(:hermit, :docker, [])

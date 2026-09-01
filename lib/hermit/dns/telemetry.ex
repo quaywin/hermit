@@ -172,6 +172,23 @@ defmodule Hermit.Dns.Telemetry do
         end
       end)
 
+      now = System.system_time(:second)
+
+      {cached_config_ids, last_config_fetch_at} =
+        if now - Map.get(state, :last_config_fetch_at, 0) >= 60 or Map.get(state, :cached_config_ids, []) == [] do
+          ids =
+            try do
+              import Ecto.Query
+              Repo.all(from(d in Hermit.Vpn.DnsConfig, select: d.id))
+            rescue
+              _ -> Map.get(state, :cached_config_ids, [])
+            end
+
+          {ids, now}
+        else
+          {Map.get(state, :cached_config_ids, []), Map.get(state, :last_config_fetch_at, 0)}
+        end
+
       # 3. Broadcast
       if :erlang.whereis(Hermit.PubSub) != :undefined do
         # Broadcast batch log theo profile
@@ -187,39 +204,33 @@ defmodule Hermit.Dns.Telemetry do
               {:dns_logs_batch, logs}
             )
           else
-            # For fallback queries without specific config_id, broadcast to all profile subscribers
-            try do
-              configs = Repo.all(Hermit.Vpn.DnsConfig)
-              Enum.each(configs, fn cfg ->
-                Phoenix.PubSub.broadcast(
-                  Hermit.PubSub,
-                  "dns_logs_profile:#{cfg.id}",
-                  {:dns_logs_batch, logs}
-                )
-              end)
-            rescue
-              _ -> :ok
-            catch
-              _, _ -> :ok
-            end
+            # For fallback queries without specific config_id, broadcast to all cached profile subscribers
+            Enum.each(cached_config_ids, fn cfg_id ->
+              Phoenix.PubSub.broadcast(
+                Hermit.PubSub,
+                "dns_logs_profile:#{cfg_id}",
+                {:dns_logs_batch, logs}
+              )
+            end)
           end
         end)
 
-        # Broadcast batch log theo pair_id
+        # Broadcast batch log theo pair_id (chi gui dang batch de toi uu bang thong va DOM rendering)
         logs_to_flush
         |> Enum.group_by(fn {log_data, _, _, _} -> log_data["pair_id"] end)
         |> Enum.each(fn {pair_id, group} ->
           logs = Enum.map(group, &elem(&1, 0))
           Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_logs_batch, logs})
-
-          # Đồng thời gửi tin lẻ để đảm bảo tương thích ngược nếu có chỗ khác lắng nghe
-          Enum.each(logs, fn log_data ->
-            Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_log, log_data})
-          end)
         end)
       end
 
-      {:noreply, %{state | log_buffer: []}}
+      {:noreply,
+       %{
+         state
+         | log_buffer: [],
+           cached_config_ids: cached_config_ids,
+           last_config_fetch_at: last_config_fetch_at
+       }}
     end
   end
 

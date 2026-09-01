@@ -32,32 +32,48 @@ defmodule Hermit.Dns.BloomFilter do
   Add a list of domains to a Bloom Filter and return the mutated binary.
   """
   def put_many(binary, domains, bit_size) do
-    # To avoid mutating binary in a slow loop (copy-on-write),
-    # we compute all set bit indices, map them to byte-index and bitmasks,
-    # and then construct the final binary in one pass.
-    byte_indices_with_masks =
-      domains
-      |> Enum.flat_map(fn domain ->
-        compute_indices(domain, bit_size)
-      end)
-      |> Enum.reduce(%{}, fn bit_idx, acc ->
-        byte_idx = div(bit_idx, 8)
-        bit_offset = rem(bit_idx, 8)
-        mask = 1 <<< (7 - bit_offset)
-
-        Map.update(acc, byte_idx, mask, fn existing_mask ->
-          Bitwise.bor(existing_mask, mask)
-        end)
-      end)
-
-    # Build the binary by merging the masks with the original zero-filled binary
     byte_size = div(bit_size, 8)
+    num_words = div(byte_size + 7, 8)
+    ref = :atomics.new(num_words, signed: false)
 
-    for i <- 0..(byte_size - 1), into: <<>> do
-      original_byte = :binary.at(binary, i)
-      mask = Map.get(byte_indices_with_masks, i, 0)
-      <<Bitwise.bor(original_byte, mask)>>
+    # If binary has existing bytes, populate the atomics array
+    if byte_size(binary) > 0 do
+      pad_size = num_words * 8 - byte_size(binary)
+      padded_binary = if pad_size > 0, do: binary <> <<0::size(pad_size * 8)>>, else: binary
+      load_binary_to_atomics(padded_binary, ref, 1)
     end
+
+    # Set bits directly into atomics array for all domains
+    Enum.each(domains, fn domain ->
+      domain_down = String.downcase(domain)
+
+      Enum.each(@salts, fn salt ->
+        bit_idx = :erlang.phash2({domain_down, salt}, bit_size)
+        word_idx = div(bit_idx, 64) + 1
+        mask = 1 <<< (63 - rem(bit_idx, 64))
+
+        curr = :atomics.get(ref, word_idx)
+
+        if Bitwise.band(curr, mask) == 0 do
+          :atomics.put(ref, word_idx, Bitwise.bor(curr, mask))
+        end
+      end)
+    end)
+
+    # Construct final binary from 64-bit words
+    result =
+      for idx <- 1..num_words, into: <<>> do
+        <<:atomics.get(ref, idx)::64>>
+      end
+
+    binary_part(result, 0, byte_size)
+  end
+
+  defp load_binary_to_atomics(<<>>, _ref, _idx), do: :ok
+
+  defp load_binary_to_atomics(<<word::64, rest::binary>>, ref, idx) do
+    :atomics.put(ref, idx, word)
+    load_binary_to_atomics(rest, ref, idx + 1)
   end
 
   @doc """

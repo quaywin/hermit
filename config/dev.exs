@@ -92,5 +92,6 @@ config :hermit, :storage, base_path: Path.expand("storage", File.cwd!())
 # Configure your database
 config :hermit, Hermit.Repo,
   pool_size: 5,
-  journal_mode: :delete,
+  journal_mode: :wal,
+  busy_timeout: 5000,
   show_sensitive_data_on_connection_error: true

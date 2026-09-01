@@ -184,6 +184,14 @@
                 List of active tunnels (VPN Pairs) connected to this Tailscale inbound profile, showing their subnet routes and App Connector settings.
               </p>
             </div>
+            <button
+              type="button"
+              phx-click="refresh_routing"
+              class="btn btn-ghost btn-xs text-xs font-medium text-base-content/70 hover:text-base-content flex items-center gap-1.5 border border-base-300 rounded-[4px] px-2.5 py-1.5 cursor-pointer"
+            >
+              <.icon name="hero-arrow-path" class="size-3.5" />
+              Refresh
+            </button>
           </div>
 
           <div class="overflow-x-auto">

@@ -33,7 +33,10 @@ if config_env() in [:dev, :prod] do
     System.get_env("DATABASE_PATH") ||
       Path.join(System.get_env("STORAGE_BASE_PATH", storage_default), database_name)
 
-  config :hermit, Hermit.Repo, database: database_path
+  config :hermit, Hermit.Repo,
+    database: database_path,
+    journal_mode: :wal,
+    busy_timeout: 5000
 
   if config_env() == :prod do
     config :hermit, Hermit.Repo, pool_size: String.to_integer(System.get_env("POOL_SIZE", "5"))

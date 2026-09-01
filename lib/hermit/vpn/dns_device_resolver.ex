@@ -10,16 +10,22 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @not_found_ttl_seconds 60
+
   def resolve_device(profile_id, client_ip) do
+    now = System.system_time(:second)
+
     case :ets.lookup(@table, {profile_id, client_ip}) do
-      [{_, :not_found, _inserted_at}] ->
+      [{_, :not_found, inserted_at}] when now - inserted_at < @not_found_ttl_seconds ->
         nil
 
-      [{_, name, _inserted_at}] ->
+      [{_, name, _inserted_at}] when name != :not_found ->
         name
 
-      [] ->
-        # New IP! Trigger a background update of the Tailscale node cache
+      _ ->
+        # New IP or expired negative cache! Temporarily mark as :not_found with current timestamp
+        # to avoid stampeding GenServer casts for the same IP
+        :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
         GenServer.cast(__MODULE__, {:trigger_update, profile_id})
         nil
     end

@@ -141,5 +141,13 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "Domain external.com removed from external node tag:connector-external-node"
     refute html =~ "phx-value-domain=\"external.com\""
     assert html =~ "phx-value-domain=\"other-external.com\""
+
+    # Test refresh button
+    html =
+      view
+      |> element("button[phx-click=refresh_routing]")
+      |> render_click()
+
+    assert html =~ "Routing overview refreshed."
   end
 end

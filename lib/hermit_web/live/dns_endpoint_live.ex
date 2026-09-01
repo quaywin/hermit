@@ -77,7 +77,13 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("open_new_modal", _params, socket) do
     new_changeset = DnsEndpoint.changeset(%DnsEndpoint{}, %{})
-    {:noreply, assign(socket, show_new_modal: true, new_connection_type: "doh", new_form: to_form(new_changeset))}
+
+    {:noreply,
+     assign(socket,
+       show_new_modal: true,
+       new_connection_type: "doh",
+       new_form: to_form(new_changeset)
+     )}
   end
 
   @impl true
@@ -250,7 +256,8 @@ defmodule HermitWeb.DnsEndpointLive do
     endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
     new_val = not (endpoint.enable_ddns_filter != false)
 
-    case DnsEndpoint.changeset(endpoint, %{enable_ddns_filter: new_val}) |> Hermit.Repo.update() do
+    case DnsEndpoint.changeset(endpoint, %{enable_ddns_filter: new_val})
+         |> Hermit.Repo.update() do
       {:ok, _updated} ->
         DnsEndpoint.clear_cache()
         Hermit.Vpn.DnsDdnsResolver.trigger_sync()
@@ -415,7 +422,11 @@ defmodule HermitWeb.DnsEndpointLive do
     {inbound_profile_id, ddns_hostname} =
       case inbound_profile_id_str do
         "ddns" ->
-          {nil, if(endpoint.ddns_hostname in [nil, ""], do: "myhome.duckdns.org", else: endpoint.ddns_hostname)}
+          {nil,
+           if(endpoint.ddns_hostname in [nil, ""],
+             do: "myhome.duckdns.org",
+             else: endpoint.ddns_hostname
+           )}
 
         "doh" ->
           {nil, nil}
@@ -430,7 +441,8 @@ defmodule HermitWeb.DnsEndpointLive do
           end
       end
 
-    if inbound_profile_id == endpoint.inbound_profile_id and ddns_hostname == endpoint.ddns_hostname do
+    if inbound_profile_id == endpoint.inbound_profile_id and
+         ddns_hostname == endpoint.ddns_hostname do
       {:noreply, socket}
     else
       # Nếu đang chạy node cũ, ta tự động dừng nó trước khi chuyển đổi profile mạng

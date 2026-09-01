@@ -117,12 +117,12 @@
                   />
                 </div>
                 <div class="space-y-2">
-                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Port Range (Optional, default: 41641-41700)</label>
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Port Range (Optional, default: 41642-41700)</label>
                   <input
                     type="text"
                     name="inbound_profile[config][ts_port_range]"
                     value={(Phoenix.HTML.Form.input_value(f, :config) || %{})["ts_port_range"]}
-                    placeholder="e.g., 41641-41700"
+                    placeholder="e.g., 41642-41700"
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>
@@ -189,8 +189,7 @@
               phx-click="refresh_routing"
               class="btn btn-ghost btn-xs text-xs font-medium text-base-content/70 hover:text-base-content flex items-center gap-1.5 border border-base-300 rounded-[4px] px-2.5 py-1.5 cursor-pointer"
             >
-              <.icon name="hero-arrow-path" class="size-3.5" />
-              Refresh
+              <.icon name="hero-arrow-path" class="size-3.5" /> Refresh
             </button>
           </div>
 

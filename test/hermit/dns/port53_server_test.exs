@@ -73,7 +73,9 @@ defmodule Hermit.Dns.Port53ServerTest do
     qname2 = <<6>> <> "myhome" <> <<5>> <> "local" <> <<0>>
     query_packet2 = <<0, 2, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> qname2 <> <<0, 1, 0, 1>>
 
-    res2 = Port53Server.resolve_via_endpoint_dns_server(endpoint_id, query_packet2, client_ip_tuple)
+    res2 =
+      Port53Server.resolve_via_endpoint_dns_server(endpoint_id, query_packet2, client_ip_tuple)
+
     assert {:ok, resp_packet2} = res2
     assert byte_size(resp_packet2) > 12
 
@@ -117,7 +119,14 @@ defmodule Hermit.Dns.Port53ServerTest do
     )
 
     client_ip_tuple = {198, 51, 100, 1}
-    assert {:ok, resp} = Port53Server.resolve_via_endpoint_dns_server(endpoint_id, query_packet, client_ip_tuple)
+
+    assert {:ok, resp} =
+             Port53Server.resolve_via_endpoint_dns_server(
+               endpoint_id,
+               query_packet,
+               client_ip_tuple
+             )
+
     assert resp == mock_response
 
     GenServer.stop(server_pid)

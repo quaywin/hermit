@@ -267,9 +267,9 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       assert port >= 42000 and port <= 42010
     end
 
-    test "allocates port within default range 41641-41700 when config is empty" do
+    test "allocates port within default range 41642-41700 when config is empty" do
       port = Tailscale.resolve_port("pair_xyz", %{})
-      assert port >= 41641 and port <= 41700
+      assert port >= 41642 and port <= 41700
     end
   end
 

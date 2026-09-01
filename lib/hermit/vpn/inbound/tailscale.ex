@@ -1814,7 +1814,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         range_str =
           Map.get(config, "ts_port_range") ||
             Map.get(config, :ts_port_range) ||
-            Hermit.Vpn.Setting.get_value("tailscale_port_range", "41641-41700")
+            Hermit.Vpn.Setting.get_value("tailscale_port_range", "41642-41700")
 
         {start_port, end_port} = parse_port_range(range_str)
         find_free_port_in_range(pair_id, start_port, end_port)
@@ -1840,15 +1840,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
              true <- start_p > 0 and end_p >= start_p do
           {start_p, end_p}
         else
-          _ -> {41641, 41700}
+          _ -> {41642, 41700}
         end
 
       _ ->
-        {41641, 41700}
+        {41642, 41700}
     end
   end
 
-  defp parse_port_range(_), do: {41641, 41700}
+  defp parse_port_range(_), do: {41642, 41700}
 
   defp find_free_port_in_range(pair_id, start_port, end_port) do
     total = max(1, end_port - start_port + 1)

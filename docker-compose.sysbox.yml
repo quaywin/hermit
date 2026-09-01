@@ -4,7 +4,7 @@ services:
     container_name: hermit_orchestrator
     ports:
       - "${HERMIT_PORT:-3000}:3000" # Web dashboard
-      - "41641-41700:41641-41700/udp" # Tailscale UDP port range
+      - "41642-41700:41642-41700/udp" # Tailscale UDP port range
     # Use Sysbox runtime for advanced security isolation on Linux
     runtime: sysbox-runc
     cap_add:

@@ -3,8 +3,6 @@ defmodule Hermit.Dns.Filter do
   Encapsulates logic for DNS blocklists and domain filtering.
   """
 
-
-
   @spec match_ets_blocklist?(String.t(), atom() | integer()) :: boolean()
   def match_ets_blocklist?(domain, :adguard_blocklist), do: match_ets_blocklist?(domain, 1)
   def match_ets_blocklist?(domain, :goodbyeads_blocklist), do: match_ets_blocklist?(domain, 2)

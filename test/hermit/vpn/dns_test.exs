@@ -41,7 +41,7 @@ defmodule Hermit.Vpn.DnsTest do
     send(Hermit.Dns.Telemetry, :flush_logs)
 
     # Assert PubSub broadcast
-    assert_receive {:dns_log, received_log}, 1000
+    assert_receive {:dns_logs_batch, [received_log | _]}, 1000
     assert received_log["pair_id"] == to_string(profile_id)
     assert received_log["domain"] == "google.com"
     assert received_log["status"] == "resolved"
@@ -121,7 +121,7 @@ defmodule Hermit.Vpn.DnsTest do
 
     send(Hermit.Dns.Telemetry, :flush_logs)
 
-    assert_receive {:dns_log, received_log1}, 1000
+    assert_receive {:dns_logs_batch, [received_log1 | _]}, 1000
     assert received_log1["client_ip"] == "127.0.0.1"
 
     # Wait briefly for DnsDeviceResolver to populate cache asynchronously
@@ -146,7 +146,7 @@ defmodule Hermit.Vpn.DnsTest do
 
     send(Hermit.Dns.Telemetry, :flush_logs)
 
-    assert_receive {:dns_log, received_log1_cached}, 1000
+    assert_receive {:dns_logs_batch, [received_log1_cached | _]}, 1000
     assert received_log1_cached["client_name"] == "localhost"
 
     # 2. Trigger with mock-client IP "100.64.0.5" first time (triggers cache update)
@@ -168,7 +168,7 @@ defmodule Hermit.Vpn.DnsTest do
 
     send(Hermit.Dns.Telemetry, :flush_logs)
 
-    assert_receive {:dns_log, received_log2}, 1000
+    assert_receive {:dns_logs_batch, [received_log2 | _]}, 1000
     assert received_log2["client_ip"] == "100.64.0.5"
 
     # Wait briefly for cache update
@@ -193,7 +193,7 @@ defmodule Hermit.Vpn.DnsTest do
 
     send(Hermit.Dns.Telemetry, :flush_logs)
 
-    assert_receive {:dns_log, received_log2_cached}, 1000
+    assert_receive {:dns_logs_batch, [received_log2_cached | _]}, 1000
     assert received_log2_cached["client_name"] == "mock-client"
   end
 

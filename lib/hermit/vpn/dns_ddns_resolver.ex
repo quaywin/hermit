@@ -128,11 +128,23 @@ defmodule Hermit.Vpn.DnsDdnsResolver do
       case resolve_hostname(hostname) do
         {:ok, ip_str} ->
           :ets.insert(@table, {{:ip, ip_str}, endpoint.id})
-          :ets.insert(@table, {{:endpoint, endpoint.id}, %{ip: ip_str, hostname: hostname, enable_ddns_filter: enable_filter}})
+
+          :ets.insert(
+            @table,
+            {{:endpoint, endpoint.id},
+             %{ip: ip_str, hostname: hostname, enable_ddns_filter: enable_filter}}
+          )
 
         {:error, reason} ->
-          :ets.insert(@table, {{:endpoint, endpoint.id}, %{ip: "Resolving...", hostname: hostname, enable_ddns_filter: enable_filter}})
-          Logger.debug("DnsDdnsResolver: Failed to resolve #{hostname} for endpoint #{endpoint.id}: #{inspect(reason)}")
+          :ets.insert(
+            @table,
+            {{:endpoint, endpoint.id},
+             %{ip: "Resolving...", hostname: hostname, enable_ddns_filter: enable_filter}}
+          )
+
+          Logger.debug(
+            "DnsDdnsResolver: Failed to resolve #{hostname} for endpoint #{endpoint.id}: #{inspect(reason)}"
+          )
       end
     end)
   end

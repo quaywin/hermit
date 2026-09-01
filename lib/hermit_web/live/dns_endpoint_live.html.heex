@@ -90,7 +90,13 @@
                         name="inbound_profile_id"
                         class="select select-bordered select-xs bg-base-100 border-base-300 text-xs font-semibold text-base-content/80 rounded-[4px] focus:outline-none focus:border-primary"
                       >
-                        <option value="" selected={is_nil(endpoint.inbound_profile_id) and (is_nil(endpoint.ddns_hostname) or endpoint.ddns_hostname == "")}>
+                        <option
+                          value=""
+                          selected={
+                            is_nil(endpoint.inbound_profile_id) and
+                              (is_nil(endpoint.ddns_hostname) or endpoint.ddns_hostname == "")
+                          }
+                        >
                           DoH Only
                         </option>
                         <%= if endpoint.ddns_hostname && endpoint.ddns_hostname != "" do %>
@@ -220,12 +226,16 @@
                           phx-value-id={endpoint.id}
                           class={[
                             "badge badge-sm font-semibold cursor-pointer border",
-                            (endpoint.enable_ddns_filter != false) && "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
-                            (endpoint.enable_ddns_filter == false) && "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                            endpoint.enable_ddns_filter != false &&
+                              "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+                            endpoint.enable_ddns_filter == false &&
+                              "bg-amber-500/10 text-amber-500 border-amber-500/20"
                           ]}
                           title="Click to toggle DDNS IP filter ON/OFF"
                         >
-                          {if endpoint.enable_ddns_filter != false, do: "ON (IP Match)", else: "OFF (Allow All IPs)"}
+                          {if endpoint.enable_ddns_filter != false,
+                            do: "ON (IP Match)",
+                            else: "OFF (Allow All IPs)"}
                         </button>
                       </div>
                     </div>
@@ -377,7 +387,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @new_connection_type == "doh" && "btn-primary text-white",
-                  @new_connection_type != "doh" && "btn-ghost border border-base-300 text-base-content/70"
+                  @new_connection_type != "doh" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🛡️ DoH Only
@@ -389,7 +400,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @new_connection_type == "tailscale" && "btn-primary text-white",
-                  @new_connection_type != "tailscale" && "btn-ghost border border-base-300 text-base-content/70"
+                  @new_connection_type != "tailscale" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🌐 Tailscale
@@ -401,7 +413,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @new_connection_type == "ddns" && "btn-primary text-white",
-                  @new_connection_type != "ddns" && "btn-ghost border border-base-300 text-base-content/70"
+                  @new_connection_type != "ddns" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 ⚡ Port 53 DDNS
@@ -516,7 +529,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @edit_connection_type == "doh" && "btn-primary text-white",
-                  @edit_connection_type != "doh" && "btn-ghost border border-base-300 text-base-content/70"
+                  @edit_connection_type != "doh" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🛡️ DoH Only
@@ -528,7 +542,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @edit_connection_type == "tailscale" && "btn-primary text-white",
-                  @edit_connection_type != "tailscale" && "btn-ghost border border-base-300 text-base-content/70"
+                  @edit_connection_type != "tailscale" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🌐 Tailscale
@@ -540,7 +555,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @edit_connection_type == "ddns" && "btn-primary text-white",
-                  @edit_connection_type != "ddns" && "btn-ghost border border-base-300 text-base-content/70"
+                  @edit_connection_type != "ddns" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 ⚡ Port 53 DDNS

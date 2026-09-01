@@ -67,7 +67,7 @@ defmodule Hermit.Dns.Telemetry do
     # 7. Schedule daily DB cleanup (once on boot after 5s, then every 24h)
     :erlang.send_after(5000, self(), :daily_db_cleanup)
 
-    {:ok, %{log_buffer: []}}
+    {:ok, %{log_buffer: [], cached_config_ids: [], last_config_fetch_at: 0}}
   end
 
   @impl true
@@ -175,7 +175,8 @@ defmodule Hermit.Dns.Telemetry do
       now = System.system_time(:second)
 
       {cached_config_ids, last_config_fetch_at} =
-        if now - Map.get(state, :last_config_fetch_at, 0) >= 60 or Map.get(state, :cached_config_ids, []) == [] do
+        if now - Map.get(state, :last_config_fetch_at, 0) >= 60 or
+             Map.get(state, :cached_config_ids, []) == [] do
           ids =
             try do
               import Ecto.Query

@@ -5,7 +5,7 @@ services:
     # network_mode: host # Uncomment if running standard Docker (runc) on Linux for 100% Direct P2P NAT bypass
     ports:
       - "${HERMIT_PORT:-3000}:3000" # Web dashboard
-      - "41641-41700:41641-41700/udp" # Tailscale UDP port range
+      - "41642-41700:41642-41700/udp" # Tailscale UDP port range
     privileged: true
     env_file:
       - ${HOME}/.hermit/env

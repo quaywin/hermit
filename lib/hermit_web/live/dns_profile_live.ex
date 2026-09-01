@@ -57,7 +57,9 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def handle_params(%{"id" => id_str}, _uri, socket) do
     id = String.to_integer(id_str)
-    profile = Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+
+    profile =
+      Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
     # Hủy đăng ký PubSub cũ
     if socket.assigns.selected_profile do
@@ -132,7 +134,9 @@ defmodule HermitWeb.DnsProfileLive do
 
           {:noreply,
            socket
-           |> assign(selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists]))
+           |> assign(
+             selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+           )
            |> assign(dns_profiles: dns_profiles)
            |> assign(editing_name: false)
            |> assign_name_form()
@@ -521,7 +525,10 @@ defmodule HermitWeb.DnsProfileLive do
 
     selected_profile =
       if socket.assigns.selected_profile,
-        do: Hermit.Repo.preload(socket.assigns.selected_profile, [:dns_endpoints, :blocklists], force: true),
+        do:
+          Hermit.Repo.preload(socket.assigns.selected_profile, [:dns_endpoints, :blocklists],
+            force: true
+          ),
         else: nil
 
     {:noreply,
@@ -567,7 +574,9 @@ defmodule HermitWeb.DnsProfileLive do
 
         {:noreply,
          socket
-         |> assign(selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists]))
+         |> assign(
+           selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+         )
          |> assign(dns_profiles: dns_profiles)
          |> put_flash(:info, success_msg)}
 
@@ -594,9 +603,9 @@ defmodule HermitWeb.DnsProfileLive do
         pattern_fallback_empty = {{{"", :_}, :"$1"}, [], [:"$1"]}
 
         (:ets.select(:dns_query_logs, [pattern_profile]) ++
-         :ets.select(:dns_query_logs, [pattern_fallback_str]) ++
-         :ets.select(:dns_query_logs, [pattern_fallback_nil]) ++
-         :ets.select(:dns_query_logs, [pattern_fallback_empty]))
+           :ets.select(:dns_query_logs, [pattern_fallback_str]) ++
+           :ets.select(:dns_query_logs, [pattern_fallback_nil]) ++
+           :ets.select(:dns_query_logs, [pattern_fallback_empty]))
         |> Enum.map(&to_log_struct/1)
         |> Enum.sort_by(& &1.timestamp, :desc)
         |> Enum.uniq_by(fn log -> {log.timestamp, log.domain, log.client_ip} end)

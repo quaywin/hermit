@@ -94,13 +94,31 @@ defmodule HermitWeb.Layouts do
             >
               Filters
             </.sidebar_link>
+            <.sidebar_link
+              navigate={~p"/settings"}
+              active={@active == :settings}
+              icon="hero-cog-6-tooth"
+            >
+              Settings
+            </.sidebar_link>
           </nav>
         </div>
 
-        <!-- Sidebar Bottom (Info) -->
-        <div class="p-4 border-t border-base-300 space-y-4 bg-base-100">
-          <div class="text-[10px] text-base-content/40 text-center font-mono">
-            v0.1.0-alpha
+        <!-- Sidebar Bottom (Info & Update Badge) -->
+        <div class="p-4 border-t border-base-300 space-y-2 bg-base-100">
+          <% updater_info = Hermit.Updater.status() %>
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] text-base-content/50 font-mono">
+              v{updater_info.current_version}
+            </span>
+            <%= if updater_info.update_available? do %>
+              <.link
+                navigate={~p"/settings"}
+                class="badge badge-warning badge-xs font-mono text-[9px] gap-1 animate-pulse hover:opacity-80"
+              >
+                <.icon name="hero-sparkles" class="size-2.5" /> v{updater_info.latest_version}
+              </.link>
+            <% end %>
           </div>
         </div>
       </aside>
@@ -171,6 +189,13 @@ defmodule HermitWeb.Layouts do
               >
                 <.icon name="hero-shield-check" class="size-5 shrink-0" />
               </.link>
+              <.link
+                navigate={~p"/settings"}
+                class={if @active == :settings, do: "text-emerald-500", else: "text-base-content/60"}
+                title="Settings"
+              >
+                <.icon name="hero-cog-6-tooth" class="size-5 shrink-0" />
+              </.link>
             </nav>
           </div>
         </header>
@@ -225,6 +250,7 @@ defmodule HermitWeb.Layouts do
           HermitWeb.ProviderImportLive -> :providers
           HermitWeb.DnsProfileLive -> :dns_profiles
           HermitWeb.BlocklistLive -> :dns_blocklists
+          HermitWeb.SystemLive -> :settings
           _ -> :tunnels
         end
     end

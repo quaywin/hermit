@@ -179,6 +179,16 @@ If you have already cloned the repository, run `docker compose up -d --build` in
 
 Once started, access the dashboard at **http://localhost:3000**.
 
+### Upgrading Hermit
+
+Hermit supports two convenient upgrade methods:
+
+- **1-Click Web Upgrade (Recommended)**: Go to **Settings** (`/settings`) in your dashboard. When a new version is released on GitHub, click **Upgrade** to pull the latest Docker image and restart automatically with zero configuration loss.
+- **Terminal 1-Line Upgrade**: Run the installer script again at any time. It will automatically detect your existing installation, preserve your configuration, and pull the latest release:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
+  ```
+
 ### 2. Development Mode
 
 Mounts the source code directory directly, enabling incremental compilation and hot-code reloading. You do not need to rebuild the Docker image when editing files.

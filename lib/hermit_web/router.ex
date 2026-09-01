@@ -31,6 +31,7 @@ defmodule HermitWeb.Router do
     live "/inbounds/:id", InboundDetailLive
     live "/dns", DnsProfileLive
     live "/dns/blocklists", BlocklistLive
+    live "/settings", SystemLive
   end
 
   # Other scopes may use custom stacks.

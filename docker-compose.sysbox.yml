@@ -17,8 +17,10 @@ services:
     volumes:
       # Mount storage directory for Sandboxed configurations
       - ${HOME}/.hermit/storage:/app/storage
+      # Mount docker socket for 1-click self-upgrade from Web UI
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PHX_SERVER=true
       - PORT=3000
       - STORAGE_BASE_PATH=/app/storage
-    restart: "on-failure:5"
+    restart: "unless-stopped"

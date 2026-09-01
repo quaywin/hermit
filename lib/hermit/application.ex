@@ -24,6 +24,7 @@ defmodule Hermit.Application do
       {Hermit.Vpn.DnsDdnsResolver, []},
       {Hermit.Dns.Port53Server, []},
       {Hermit.Vpn.DnsSupervisor, []},
+      {Hermit.Updater, []},
       HermitWeb.Endpoint
     ]
 

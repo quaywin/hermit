@@ -2,26 +2,30 @@
 set -e
 
 echo "========================================="
-echo "   Installing Hermit Orchestrator        "
+echo "   Hermit Orchestrator - Installer       "
 echo "========================================="
 
-# Define global configuration directory in user home
+# 1. Define global configuration directory in user home
 HERMIT_DIR="$HOME/.hermit"
 ENV_FILE="$HERMIT_DIR/env"
+COMPOSE_FILE="$HERMIT_DIR/docker-compose.yml"
+IS_UPGRADE=false
 
-# 1. Create storage directory in user home
 mkdir -p "$HERMIT_DIR/storage"
 echo "✓ Prepared config & storage directory at $HERMIT_DIR"
 
-# 2. Automatically generate env file if it does not exist
-if [ ! -f "$ENV_FILE" ]; then
-  # Try openssl or fallback to a simpler generator for SECRET_KEY_BASE
+# 2. Check if this is an upgrade or fresh installation
+if [ -f "$ENV_FILE" ]; then
+  IS_UPGRADE=true
+  echo "✓ Existing configuration detected. Running in UPGRADE mode..."
+else
+  echo "✓ Fresh installation detected. Generating credentials..."
   if command -v openssl >/dev/null 2>&1; then
     SECRET_KEY=$(openssl rand -base64 48 | tr -d '\n')
     BASIC_AUTH_PASS=$(openssl rand -hex 6)
   else
-    SECRET_KEY="fallback_secret_key_please_change_me_$(date +%s)"
-    BASIC_AUTH_PASS="admin123"
+    SECRET_KEY="hermit_secret_key_$(date +%s)_$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
+    BASIC_AUTH_PASS="admin$(head -c 4 /dev/urandom | base64 | tr -dc '0-9' | head -c 4)"
   fi
 
   cat <<EOF > "$ENV_FILE"
@@ -32,86 +36,69 @@ HERMIT_PORT=3000
 HERMIT_BASIC_AUTH_USER=admin
 HERMIT_BASIC_AUTH_PASS=$BASIC_AUTH_PASS
 EOF
-  echo "✓ Generated template environment file at $ENV_FILE"
-  echo "👉 Default login credentials: admin / $BASIC_AUTH_PASS"
+  echo "✓ Generated secure environment file at $ENV_FILE"
 fi
 
-# 3. Check for Sysbox Runtime
+# 3. Setup Docker Compose configuration
 if docker info 2>&1 | grep -q "sysbox-runc"; then
-  echo "✓ Detected Sysbox Runtime on the host system. Using secure Sysbox configuration..."
-  echo "💡 Note: If container creation fails with 'namespace \"time\" does not exist' (Docker 29.5+),"
-  echo "   please disable 'time-namespaces' in /etc/docker/daemon.json on your host and restart Docker."
-  # Download or copy docker-compose.sysbox.yml into docker-compose.yml
+  echo "✓ Detected Sysbox Runtime. Using secure Sysbox configuration..."
   if [ -f docker-compose.sysbox.yml ]; then
-    cp docker-compose.sysbox.yml docker-compose.yml
+    cp docker-compose.sysbox.yml "$COMPOSE_FILE"
   else
-    curl -sL https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.sysbox.yml -o docker-compose.yml
+    curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.sysbox.yml -o "$COMPOSE_FILE"
   fi
 else
-  # Sysbox not found: Warn user about privileged mode security risks
-  echo ""
-  echo "⚠️  IMPORTANT SECURITY WARNING:"
-  echo "Sysbox Runtime was not detected on this system."
-  echo "To run Hermit, we must fall back to the standard Docker configuration with 'privileged: true'."
-  echo "Privileged mode grants the container full root access to the host machine's resources."
-  echo ""
-  echo "Recommendation: Abort this installation and install Sysbox first for maximum security."
-  echo "Quick guide to install Sysbox on Ubuntu/Debian:"
-  echo "  1. Download package: wget https://downloads.nestybox.com/sysbox/releases/v0.6.4/sysbox-ce_0.6.4-0.ubuntu-noble_amd64.deb"
-  echo "  2. Install package:  sudo apt install ./sysbox-ce_0.6.4-0.ubuntu-noble_amd64.deb"
-  echo "  Reference documentation: https://github.com/nestybox/sysbox"
-  echo ""
-
-  # Prompt user for input directly from terminal (/dev/tty)
-  read -p "Do you want to proceed with 'privileged: true' mode? (y/N): " choice < /dev/tty
-
-  if [[ "$choice" =~ ^[Yy]$ ]]; then
-    echo "➜ Proceeding with standard Docker configuration (Privileged)..."
-    if [ -f docker-compose.yml ]; then
-      # Make sure docker-compose.yml contains privileged if it was modified before
-      # Otherwise copy the default template. We assume docker-compose.yml is already present if cloned
-      echo "✓ Using existing docker-compose.yml"
-    else
-      curl -sL https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o docker-compose.yml
-    fi
+  echo "ℹ Using standard Docker configuration (privileged mode)..."
+  if [ -f docker-compose.yml ]; then
+    cp docker-compose.yml "$COMPOSE_FILE"
   else
-    echo "❌ Installation aborted. Please install Sysbox and try again."
-    exit 1
+    curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o "$COMPOSE_FILE"
   fi
 fi
 
-# 3.5 Host-level Tailscale Performance Optimization (Optional but Recommended)
-if command -v ethtool >/dev/null 2>&1; then
-  echo ""
-  echo "=== Tailscale UDP GRO Performance Optimization ==="
-  NETDEV=$(ip -o route get 8.8.8.8 | cut -f 5 -d " " 2>/dev/null || echo "")
-  if [ -n "$NETDEV" ]; then
-    echo "Detected primary network interface: $NETDEV"
-    read -p "Do you want to enable UDP GRO optimization on this interface and make it persist on boot? (y/N): " gro_choice < /dev/tty
-    if [[ "$gro_choice" =~ ^[Yy]$ ]]; then
-      echo "➜ Applying host-level ethtool optimization..."
-      sudo ethtool -K "$NETDEV" rx-udp-gro-forwarding on rx-gro-list off || echo "⚠️  Failed to apply ethtool optimization immediately (requires sudo privileges or card/driver support)."
-      
-      echo "➜ Making optimization persistent on boot via crontab..."
-      (sudo crontab -l 2>/dev/null | grep -v "rx-udp-gro-forwarding" || true; echo "@reboot ethtool -K $NETDEV rx-udp-gro-forwarding on rx-gro-list off") | sudo crontab -
-      echo "✓ Added reboot task to root's crontab."
-    else
-      echo "➜ Skipping host-level network optimization."
-    fi
-  fi
-else
-  echo ""
-  echo "⚠️  Note: 'ethtool' is not installed on the host. Skipping automatic host-level network optimization."
-  echo "   To optimize Tailscale throughput later, install 'ethtool' and run the recommended commands in the README."
+# Create a symlink or local copy in current directory if docker-compose.yml is not here
+if [ ! -f "docker-compose.yml" ]; then
+  cp "$COMPOSE_FILE" ./docker-compose.yml 2>/dev/null || true
 fi
 
-# 4. Launch the application
-echo "=== Starting Container ==="
-docker compose up -d
+# 4. Pull and Start Container
+echo ""
+echo "=== Pulling Latest Image ==="
+if ! docker compose -f "$COMPOSE_FILE" pull; then
+  echo "⚠️ Pull failed. Clearing expired GHCR credentials and retrying anonymously..."
+  docker logout ghcr.io 2>/dev/null || true
+  docker compose -f "$COMPOSE_FILE" pull
+fi
 
 echo ""
-echo "=== INSTALLATION COMPLETED ==="
-echo "Hermit Web Dashboard: http://localhost:$(grep HERMIT_PORT "$ENV_FILE" | cut -d'=' -f2 || echo "3000")"
-echo "Login username: $(grep HERMIT_BASIC_AUTH_USER "$ENV_FILE" | cut -d'=' -f2)"
-echo "Login password: $(grep HERMIT_BASIC_AUTH_PASS "$ENV_FILE" | cut -d'=' -f2)"
+echo "=== Starting Hermit Container ==="
+docker compose -f "$COMPOSE_FILE" up -d
+
+# 5. Display Completion Summary
+PORT=$(grep -E "^HERMIT_PORT=" "$ENV_FILE" | cut -d'=' -f2 || echo "3000")
+USER=$(grep -E "^HERMIT_BASIC_AUTH_USER=" "$ENV_FILE" | cut -d'=' -f2 || echo "admin")
+PASS=$(grep -E "^HERMIT_BASIC_AUTH_PASS=" "$ENV_FILE" | cut -d'=' -f2 || echo "")
+
+echo ""
+if [ "$IS_UPGRADE" = true ]; then
+  echo "========================================="
+  echo "🎉 HERMIT UPGRADED SUCCESSFULLY!"
+  echo "========================================="
+else
+  echo "========================================="
+  echo "🎉 HERMIT INSTALLED SUCCESSFULLY!"
+  echo "========================================="
+fi
+
+echo "Web Dashboard : http://localhost:${PORT:-3000}"
+if [ -n "$USER" ] && [ -n "$PASS" ]; then
+  echo "Username      : $USER"
+  echo "Password      : $PASS"
+fi
+echo "Config Dir    : $HERMIT_DIR"
+echo "Storage Dir   : $HERMIT_DIR/storage"
+echo ""
+echo "💡 To upgrade in the future, simply run:"
+echo "   curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash"
 echo "-----------------------------------------"
+

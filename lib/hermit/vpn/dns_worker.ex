@@ -169,7 +169,8 @@ defmodule Hermit.Vpn.DnsWorker do
       config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
 
       if config && profile do
-        Task.start(fn -> clear_tailscale_dns_config(profile, config) end)
+        ts_ip = state.ts_ip
+        Task.start(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
       end
     end
 
@@ -215,10 +216,11 @@ defmodule Hermit.Vpn.DnsWorker do
           "DNS Server is disabled for endpoint #{state.endpoint_id}. Putting DNS Node offline..."
         )
 
+        ts_ip = state.ts_ip
         new_state = stop_dns_node(state)
 
         if (config.tailscale_override_dns or state.tailscale_override_dns == true) and profile do
-          spawn(fn -> clear_tailscale_dns_config(profile, config) end)
+          spawn(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
         end
 
         {{:ok, :stopped}, %{new_state | tailscale_override_dns: false}}
@@ -229,7 +231,8 @@ defmodule Hermit.Vpn.DnsWorker do
             spawn(fn -> update_tailscale_dns_config(state.ts_ip, profile, config) end)
           else
             if profile do
-              spawn(fn -> clear_tailscale_dns_config(profile, config) end)
+              ts_ip = state.ts_ip
+              spawn(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
             end
           end
 
@@ -780,7 +783,49 @@ defmodule Hermit.Vpn.DnsWorker do
     Hermit.Vpn.Namespace.destroy_endpoint_namespace(endpoint_id)
   end
 
-  # --- Tailscale DNS Config API Update ---
+  # --- Tailscale DNS Config API Update (HA Multi-Nameservers) ---
+
+  @doc """
+  Appends an IP address to the existing resolvers list.
+  """
+  def append_resolver(resolvers, dns_ip)
+      when is_list(resolvers) and is_binary(dns_ip) and dns_ip != "" do
+    existing_ips =
+      Enum.map(resolvers, fn
+        %{"addr" => addr} -> addr
+        %{addr: addr} -> addr
+        addr when is_binary(addr) -> addr
+        _ -> nil
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    new_ips = Enum.uniq(existing_ips ++ [dns_ip])
+    Enum.map(new_ips, fn addr -> %{"addr" => addr} end)
+  end
+
+  def append_resolver(resolvers, _), do: resolvers
+
+  @doc """
+  Removes a specific IP address from the resolvers list while preserving all other nameservers.
+  """
+  def remove_resolver(resolvers, nil), do: resolvers
+
+  def remove_resolver(resolvers, dns_ip) when is_list(resolvers) and is_binary(dns_ip) do
+    Enum.filter(resolvers, fn
+      %{"addr" => addr} -> addr != dns_ip
+      %{addr: addr} -> addr != dns_ip
+      addr when is_binary(addr) -> addr != dns_ip
+      _ -> true
+    end)
+    |> Enum.map(fn
+      %{"addr" => addr} -> %{"addr" => addr}
+      %{addr: addr} -> %{"addr" => addr}
+      addr when is_binary(addr) -> %{"addr" => addr}
+      other -> other
+    end)
+  end
+
+  def remove_resolver(resolvers, _), do: resolvers
 
   def update_tailscale_dns_config(_dns_ip, profile, _dns_config) when is_nil(profile) do
     {:ok, :noop}
@@ -789,69 +834,179 @@ defmodule Hermit.Vpn.DnsWorker do
   def update_tailscale_dns_config(dns_ip, profile, _dns_config) do
     cond do
       mock?() ->
-        Logger.info("Mock: Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
+        Logger.info(
+          "Mock: Registering Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}"
+        )
+
         {:ok, :updated}
 
       true ->
         {_auth_key, api_key, tailnet, _login} = get_dns_credentials(profile)
 
         if api_key != "" and tailnet != "" and dns_ip != "" do
-          Logger.info("Setting Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}")
+          Logger.info(
+            "Registering #{dns_ip} into Tailscale global nameservers (HA Multi-Node mode)..."
+          )
+
           dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
-          payload = %{"resolvers" => [%{"addr" => dns_ip}], "proxied" => true}
+
+          current_resolvers =
+            case Req.get(dns_url, auth: {:basic, "#{api_key}:"}) do
+              {:ok, %{status: 200, body: %{"resolvers" => resolvers}}}
+              when is_list(resolvers) ->
+                resolvers
+
+              _ ->
+                []
+            end
+
+          new_resolvers = append_resolver(current_resolvers, dns_ip)
+          payload = %{"resolvers" => new_resolvers, "proxied" => true}
 
           case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
             {:ok, %{status: 200}} ->
-              Logger.info("Successfully registered Dedicated DNS Node on Tailscale.")
+              Logger.info("Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale.")
+              {:ok, :updated}
 
             {:ok, %{status: status, body: body}} ->
               Logger.error(
                 "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
               )
 
+              {:error, {:http_error, status, body}}
+
             {:error, reason} ->
               Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
+              {:error, reason}
           end
+        else
+          {:ok, :noop}
         end
     end
   end
 
   def clear_tailscale_dns_config(dns_config) do
-    endpoint_id = dns_config.dns_endpoint_id
+    endpoint_id = dns_config && dns_config.dns_endpoint_id
     endpoint = if endpoint_id, do: Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
     profile_id = endpoint && endpoint.inbound_profile_id
     profile = if profile_id, do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
-    clear_tailscale_dns_config(profile, dns_config)
+    clear_tailscale_dns_config(profile, dns_config, nil)
   end
 
-  def clear_tailscale_dns_config(profile, _dns_config) when is_nil(profile) do
+  def clear_tailscale_dns_config(profile, dns_config) do
+    clear_tailscale_dns_config(profile, dns_config, nil)
+  end
+
+  def clear_tailscale_dns_config(profile, _dns_config, _dns_ip) when is_nil(profile) do
     {:ok, :noop}
   end
 
-  def clear_tailscale_dns_config(profile, _dns_config) do
+  def clear_tailscale_dns_config(profile, dns_config, dns_ip) do
     cond do
       mock?() ->
-        Logger.info("Mock: Clearing Tailscale global nameservers")
+        Logger.info("Mock: Removing #{inspect(dns_ip)} from Tailscale global nameservers")
         {:ok, :cleared}
 
       true ->
         {_auth_key, api_key, tailnet, _login} = get_dns_credentials(profile)
 
         if api_key != "" and tailnet != "" do
-          Logger.info("Clearing Tailscale global nameservers...")
-          dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
-          payload = %{"resolvers" => [], "proxied" => false}
+          target_ip = dns_ip || resolve_endpoint_tailscale_ip(dns_config, api_key, tailnet)
 
-          case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
-            {:ok, %{status: 200}} ->
-              Logger.info("Successfully cleared Tailscale DNS configuration.")
+          if target_ip && target_ip != "" do
+            Logger.info(
+              "Deregistering #{target_ip} from Tailscale global nameservers (HA Multi-Node mode)..."
+            )
 
-            _ ->
-              :ok
+            dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
+
+            current_resolvers =
+              case Req.get(dns_url, auth: {:basic, "#{api_key}:"}) do
+                {:ok, %{status: 200, body: %{"resolvers" => resolvers}}}
+                when is_list(resolvers) ->
+                  resolvers
+
+                _ ->
+                  []
+              end
+
+            remaining_resolvers = remove_resolver(current_resolvers, target_ip)
+
+            payload =
+              if Enum.empty?(remaining_resolvers) do
+                %{"resolvers" => [], "proxied" => false}
+              else
+                %{"resolvers" => remaining_resolvers, "proxied" => true}
+              end
+
+            case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
+              {:ok, %{status: 200}} ->
+                Logger.info("Successfully deregistered DNS Node (#{target_ip}) from Tailscale.")
+                {:ok, :cleared}
+
+              {:ok, %{status: status, body: body}} ->
+                Logger.error(
+                  "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
+                )
+
+                {:error, {:http_error, status, body}}
+
+              {:error, reason} ->
+                Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
+                {:error, reason}
+            end
+          else
+            Logger.info(
+              "No active Tailscale IP resolved for endpoint, skipping DNS deregistration."
+            )
+
+            {:ok, :noop}
           end
         else
           {:ok, :noop}
         end
+    end
+  end
+
+  defp resolve_endpoint_tailscale_ip(dns_config, api_key, tailnet) do
+    endpoint_id = dns_config && dns_config.dns_endpoint_id
+
+    if endpoint_id do
+      case get_status(endpoint_id) do
+        {_, ip, _} when is_binary(ip) and ip != "" ->
+          ip
+
+        _ ->
+          expected_hostname = "hermit-dns-#{endpoint_id}"
+          devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
+
+          case Req.get(devices_url, auth: {:basic, "#{api_key}:"}) do
+            {:ok, %{status: 200, body: %{"devices" => devices}}} when is_list(devices) ->
+              device =
+                Enum.find(devices, fn dev ->
+                  dev["hostname"] == expected_hostname or
+                    String.starts_with?(dev["name"] || "", expected_hostname <> ".")
+                end)
+
+              if device do
+                addresses = device["addresses"] || []
+
+                Enum.find(addresses, fn addr ->
+                  case :inet.parse_address(String.to_charlist(addr)) do
+                    {:ok, {100, _, _, _}} -> true
+                    _ -> false
+                  end
+                end)
+              else
+                nil
+              end
+
+            _ ->
+              nil
+          end
+      end
+    else
+      nil
     end
   end
 

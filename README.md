@@ -154,53 +154,92 @@ To simplify creating Outbound Profiles, Hermit provides a dedicated **Providers*
 
 ## Installation & Quick Start with Docker
 
-Hermit can be run in two different modes:
+Hermit is packaged as an all-in-one, multi-arch Docker image supporting both **x86_64 (`amd64`)** and **ARM64 (`arm64`)** architectures (Intel, AMD, Apple Silicon, AWS Graviton, Oracle Cloud ARM, etc.).
 
-### 1. Production Mode (Quick Installer Script)
+---
 
-We recommend using our automated setup script. This script automatically prepares the `~/.hermit/storage` directory, generates a secure random `env` file at `~/.hermit/env`, checks if your host has **Sysbox** installed to run in a non-privileged configuration, and guides you through security settings.
+### 1. Production Mode (Quick 1-Line Installer)
+
+We recommend using our automated installer. It automatically prepares `~/.hermit/storage`, generates cryptographically strong `SECRET_KEY_BASE` and random Web Dashboard credentials, detects available ports to prevent conflicts, and provides zero-configuration setup:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
 ```
 
-Alternatively, you can perform a manual installation without cloning:
+Once installed, the installer outputs your access details:
+* **Web Dashboard**: `http://localhost:3000` (or `http://<your-vps-ip>:3000`)
+* **Default Username**: `admin`
+* **Password**: *Randomly generated and displayed in terminal summary (saved at `~/.hermit/env`)*
 
-```bash
-# Create storage directory in your home folder to prevent root ownership issues
-mkdir -p ~/.hermit/storage
-# Download docker-compose configuration
-curl -L https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o docker-compose.yml
-# Start Hermit
-docker compose up -d
-```
+---
 
-If you have already cloned the repository, run `docker compose up -d --build` instead.
+### 2. Upgrading Hermit
 
-Once started, access the dashboard at **http://localhost:3000**.
+Hermit supports two frictionless upgrade methods without losing any tunnel configurations or database records:
 
-### Upgrading Hermit
-
-Hermit supports two convenient upgrade methods:
-
-- **1-Click Web Upgrade (Recommended)**: Go to **Settings** (`/settings`) in your dashboard. When a new version is released on GitHub, click **Upgrade** to pull the latest Docker image and restart automatically with zero configuration loss.
-- **Terminal 1-Line Upgrade**: Run the installer script again at any time. It will automatically detect your existing installation, preserve your configuration, and pull the latest release:
+* **1-Click Web Upgrade (Zero Terminal)**:
+  Navigate to **Settings** (`/settings`) on the web dashboard. When a new release is available on GitHub, an update banner will appear. Simply click **[Upgrade]** — Hermit will pull the latest Docker image and restart the container seamlessly in ~10 seconds.
+* **Terminal 1-Line Upgrade**:
+  Re-run the installer script on your server at any time. It automatically recognizes your existing installation (`~/.hermit/env`), preserves all data, and updates to the latest release:
   ```bash
   curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
+  # or simply:
+  hermit update
   ```
 
-### 2. Development Mode
+---
 
-Mounts the source code directory directly, enabling incremental compilation and hot-code reloading. You do not need to rebuild the Docker image when editing files.
+### 3. Quick Management via `hermit` CLI
+
+The installer creates a global `hermit` shortcut command on your server for effortless day-to-day operations:
+
+```bash
+hermit status    # View container status and port mappings
+hermit logs      # Follow live container logs
+hermit restart   # Restart Hermit container
+hermit update    # Pull latest image and upgrade
+hermit env       # View credentials and configuration
+```
+
+---
+
+### 4. Manual Installation (Without `install.sh`)
+
+If you prefer to configure Docker Compose manually without the installer script:
+
+```bash
+# 1. Create config & storage directory
+mkdir -p ~/.hermit/storage
+
+# 2. Generate environment secrets
+cat <<EOF > ~/.hermit/env
+SECRET_KEY_BASE=$(openssl rand -base64 48 | tr -d '\n')
+PHX_HOST=localhost
+HERMIT_PORT=3000
+HERMIT_BASIC_AUTH_USER=admin
+HERMIT_BASIC_AUTH_PASS=$(openssl rand -hex 6)
+EOF
+
+# 3. Download docker-compose configuration
+curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o ~/.hermit/docker-compose.yml
+
+# 4. Start Hermit
+docker compose -f ~/.hermit/docker-compose.yml up -d
+```
+
+---
+
+### 5. Development Mode
+
+Mounts the source code directly with live code reloading and incremental compilation in `< 0.5s`:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d
 ```
 
-> [!TIP]
-> Modifying source code on the host machine instantly triggers incremental compilation in less than 0.5 seconds. Subsequent starts are nearly instantaneous because dependency compilation and build artifacts are cached.
+---
 
-### 3. Deploying to Cloud (Fly.io)
+### 6. Deploying to Cloud (Fly.io)
 
 Hermit can be deployed seamlessly to [Fly.io](https://fly.io) MicroVMs with persistent storage and **512MB Swap** safety buffer ($0/month under free credit allowance). See the detailed [Fly.io Deployment Guide](docs/FLY_DEPLOYMENT.md) for full setup instructions.
 
@@ -213,47 +252,31 @@ fly scale memory 512
 fly deploy
 ```
 
-### Customizing the Web Port
+---
 
-By default, the dashboard runs on port `3000`. To use a different port, set `HERMIT_PORT`:
+### 7. Port Reference & Firewall Configuration
 
-```bash
-# Production
-HERMIT_PORT=8080 docker compose up -d
+When running in standard Production Mode (`network_mode: host`):
 
-# Development
-HERMIT_PORT=8080 docker compose -f docker-compose.dev.yml up -d
-```
+| Port / Protocol | Service | Description |
+| :--- | :--- | :--- |
+| **`3000/tcp`** | Web Dashboard | Phoenix LiveView Web UI (Customizable via `HERMIT_PORT` in `~/.hermit/env`). |
+| **`Dynamic UDP`** | Tailscale Inbounds | **Zero-configuration**: Kernel automatically allocates free ephemeral ports for 100% Direct P2P. |
+| **`53/udp, tcp`** | Standalone DNS | Port 53 DNS resolver (optional if using Hermit as LAN DNS server). |
 
-### Enforcing Web Dashboard Authentication (Basic Auth)
+> [!TIP]
+> **Co-existing with Host Tailscale & Services**:
+> In host mode, each VPN tunnel runs in an isolated Linux network namespace (`netns`). It will **never conflict** with your host's Tailscale daemon (`41641/udp`) or drop your SSH connection.
 
-By default, the web dashboard has no authentication enabled. If you are deploying Hermit on a public VPS or a shared network, you can enforce Basic Authentication by setting the following environment variables in your environment configuration file (`~/.hermit/env`):
+#### Customizing the Web Port
+To use a custom web port, set `HERMIT_PORT` in `~/.hermit/env` (e.g. `HERMIT_PORT=8080`) and restart with `hermit restart`.
 
+#### Enforcing Web Authentication (Basic Auth)
+Basic Authentication is enabled automatically by `install.sh`. You can adjust credentials anytime in `~/.hermit/env`:
 ```bash
 HERMIT_BASIC_AUTH_USER=admin
 HERMIT_BASIC_AUTH_PASS=your_secure_password
 ```
-
-> [!WARNING]
-> If these environment variables are unset or commented out, authentication will be bypassed and the dashboard will be open to anyone.
-
-### Tailscale UDP Port & VPS Firewall Configuration
-
-By default, Hermit maps UDP port range `41642-41700` 1-to-1 on the host machine to allow multiple Tailscale nodes to establish direct, peer-to-peer (P2P) connections while leaving port `41641` free for the host machine's own Tailscale daemon.
-
-If you are deploying Hermit on a VPS:
-- **Recommended**: Open UDP port range `41642-41700/udp` in your VPS firewall (and Cloud Provider Security Group, e.g., Tencent Cloud / AWS / GCP).
-- **Direct P2P NAT Bypass (Host Network Mode)**: If your VPS is behind double NAT and Tailscale falls back to DERP relay, you can set `network_mode: host` in `docker-compose.yml` (or `docker-compose.sysbox.yml`) to bypass Docker NAT and achieve 100% Direct P2P connectivity.
-
-If you need to change this port range:
-1. Open `docker-compose.yml` (and/or `docker-compose.dev.yml`).
-2. Change the host-side port mapping:
-   ```yaml
-   ports:
-     - "${HERMIT_PORT:-3000}:3000"
-     - "41642-41700:41642-41700/udp"
-   ```
-3. Open the corresponding port on your firewall instead.
 
 #### Tailscale Performance Optimization (Highly Recommended)
 
@@ -261,7 +284,7 @@ Hermit implements high-performance network tuning for Tailscale:
 - **Namespace UDP GRO Offloading**: Hermit automatically runs `ethtool` to enable `rx-udp-gro-forwarding` and disable `rx-gro-list` on all virtual interfaces inside the isolated network namespaces.
 
 **Host-level Optimization (Manual):**
-Because Hermit runs in an isolated container (especially when using **Sysbox**), it cannot modify the host's physical network hardware. To get the maximum throughput:
+Because Hermit runs in an isolated network namespace, it does not modify the host's physical network hardware directly. To get the maximum throughput:
 1. Ensure your host system runs Linux Kernel **6.2** or later.
 2. Manually enable UDP GRO on your host's primary physical network interface (this single-line command auto-detects the interface and works on all shells including Bash, Zsh, and Fish):
    ```bash
@@ -274,39 +297,7 @@ Because Hermit runs in an isolated container (especially when using **Sysbox**),
 
 Running real-world VPN pairs requires operating-system level root privileges to create network namespaces (`netns`), configure virtual network interfaces, and route traffic via `nftables`.
 - The **`privileged: true`** setting in `docker-compose.yml` grants the container permissions to perform these system-level operations in an isolated manner.
-- Running directly on your host machine risks messing up local network interfaces and requires granting global `sudo` privileges to external scripts, which is unsafe for your development environment.
-
-### Securing the Container: Sysbox Integration (Optional but Recommended)
-
-By default, Docker containers require `privileged: true` to perform network namespace and mounting tasks. If you want to run Hermit in a production environment with maximum security, you can use the **Sysbox Container Runtime** on Linux to run without privileged access.
-
-With Sysbox installed on your host system:
-1. Sysbox intercepts mount and network calls safely using Linux User Namespaces.
-2. The container runs with strict VM-like isolation while still permitting Hermit to configure nested namespaces and routes.
-
-To run with Sysbox, use the dedicated configuration:
-```bash
-docker compose -f docker-compose.sysbox.yml up -d
-```
-*(Our `install.sh` script automatically detects Sysbox and configures it if available).*
-
-#### Troubleshooting Docker 29.5+ & Sysbox Compatibility
-
-If container creation fails with `OCI runtime create failed: namespace {"time" ""} does not exist`, this is due to a compatibility issue between Docker 29.5+ (which enables time namespaces by default) and current Sysbox releases.
-
-To resolve this, disable `time-namespaces` in your host's Docker daemon configuration:
-1. Edit `/etc/docker/daemon.json` and add:
-   ```json
-   {
-     "features": {
-       "time-namespaces": false
-     }
-   }
-   ```
-2. Restart the Docker service:
-   ```bash
-   sudo systemctl restart docker
-   ```
+- Running inside Docker prevents impacting your host machine's network configuration, avoids dependency conflicts, and ensures an easy 1-line installation and upgrade experience.
 
 ---
 

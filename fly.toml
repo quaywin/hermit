@@ -68,13 +68,7 @@ primary_region = 'sin'
   [[services.ports]]
     port = 53
 
-# Tailscale UDP Port Range (41641 - 41700)
-[[services]]
-  internal_port = 41641
-  protocol = "udp"
-  [[services.ports]]
-    port = 41641
-
+# Tailscale UDP Port Range (41642 - 41700)
 [[services]]
   internal_port = 41642
   protocol = "udp"

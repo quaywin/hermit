@@ -123,10 +123,11 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
   end
 
-  defp wait_until_running(view, retries \\ 20) do
+  defp wait_until_running(view, retries \\ 30) do
+    send(view.pid, :tick)
     html = render(view)
 
-    if html =~ "running" or retries == 0 do
+    if (html =~ "100.64.0.100" and html =~ "running") or retries == 0 do
       html
     else
       Process.sleep(100)

@@ -230,13 +230,16 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("delete_endpoint", %{"id" => id_str}, socket) do
     endpoint_id = String.to_integer(id_str)
-    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
+    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id) |> Hermit.Repo.preload(:inbound_profile)
 
     # Dừng DNS node và giải phóng cấu hình Tailscale DNS trước khi xóa
     config = DnsConfig.get_for_endpoint(endpoint_id)
+    {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
 
     if config && config.tailscale_override_dns do
-      Task.start(fn -> DnsWorker.clear_tailscale_dns_config(config) end)
+      Task.start(fn ->
+        DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
+      end)
     end
 
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
@@ -276,7 +279,7 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("toggle_endpoint_enabled", %{"id" => id_str}, socket) do
     endpoint_id = String.to_integer(id_str)
-    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
+    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id) |> Hermit.Repo.preload(:inbound_profile)
     enabled = not endpoint.enabled
 
     case endpoint |> DnsEndpoint.changeset(%{enabled: enabled}) |> Hermit.Repo.update() do
@@ -292,9 +295,12 @@ defmodule HermitWeb.DnsEndpointLive do
           end)
         else
           config = DnsConfig.get_for_endpoint(endpoint_id)
+          {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
 
           if config && config.tailscale_override_dns do
-            Task.start(fn -> DnsWorker.clear_tailscale_dns_config(config) end)
+            Task.start(fn ->
+              DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
+            end)
           end
 
           # Cập nhật DB config tắt luôn override
@@ -446,14 +452,18 @@ defmodule HermitWeb.DnsEndpointLive do
       {:noreply, socket}
     else
       # Nếu đang chạy node cũ, ta tự động dừng nó trước khi chuyển đổi profile mạng
-      {status, _, _} = DnsWorker.get_status(endpoint_id)
+      {status, ts_ip, _} = DnsWorker.get_status(endpoint_id)
 
       if status in [:running, :starting] do
         # Xóa override config cũ nếu có
         config = DnsConfig.get_for_endpoint(endpoint_id)
+        endpoint = Hermit.Repo.preload(endpoint, :inbound_profile)
 
         if config && config.tailscale_override_dns do
-          Task.start(fn -> DnsWorker.clear_tailscale_dns_config(config) end)
+          Task.start(fn ->
+            DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
+          end)
+
           DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
         end
 

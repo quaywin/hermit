@@ -112,9 +112,10 @@ defmodule HermitWeb.InboundDetailLive do
 
       Enum.each(endpoints, fn endpoint ->
         config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint.id)
+        {_, ts_ip, _} = DnsWorker.get_status(endpoint.id)
 
         if config && config.tailscale_override_dns do
-          Task.start(fn -> DnsWorker.clear_tailscale_dns_config(config) end)
+          Task.start(fn -> DnsWorker.clear_tailscale_dns_config(profile, config, ts_ip) end)
         end
 
         Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)

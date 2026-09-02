@@ -2,20 +2,17 @@ services:
   hermit:
     image: ghcr.io/quaywin/hermit:latest
     container_name: hermit_orchestrator
-    # network_mode: host # Uncomment if running standard Docker (runc) on Linux for 100% Direct P2P NAT bypass
-    ports:
-      - "${HERMIT_PORT:-3000}:3000" # Web dashboard
-      - "41642-41700:41642-41700/udp" # Tailscale UDP port range
+    network_mode: host
     privileged: true
     env_file:
       - ${HOME}/.hermit/env
     volumes:
-      # Mount storage directory for Sandboxed configurations
+      # Mount storage directory for database and configurations
       - ${HOME}/.hermit/storage:/app/storage
       # Mount docker socket for 1-click self-upgrade from Web UI
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PHX_SERVER=true
-      - PORT=3000
+      - PORT=${HERMIT_PORT:-3000}
       - STORAGE_BASE_PATH=/app/storage
     restart: "unless-stopped"

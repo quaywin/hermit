@@ -239,6 +239,32 @@ defmodule Hermit.Vpn.GlobalDnsTest do
     :ok = Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
   end
 
+  test "append_resolver and remove_resolver support HA multi-server nameserver lists" do
+    # 1. Append to empty list
+    resolvers = DnsWorker.append_resolver([], "100.64.0.10")
+    assert resolvers == [%{"addr" => "100.64.0.10"}]
+
+    # 2. Append second server IP (Server B) to existing Server A
+    resolvers2 = DnsWorker.append_resolver(resolvers, "100.64.0.20")
+    assert resolvers2 == [%{"addr" => "100.64.0.10"}, %{"addr" => "100.64.0.20"}]
+
+    # 3. Append duplicate IP should be idempotent
+    resolvers3 = DnsWorker.append_resolver(resolvers2, "100.64.0.10")
+    assert resolvers3 == [%{"addr" => "100.64.0.10"}, %{"addr" => "100.64.0.20"}]
+
+    # 4. Remove Server A (100.64.0.10) while keeping Server B (100.64.0.20)
+    remaining = DnsWorker.remove_resolver(resolvers3, "100.64.0.10")
+    assert remaining == [%{"addr" => "100.64.0.20"}]
+
+    # 5. Remove Server B (100.64.0.20) leaves empty list
+    remaining2 = DnsWorker.remove_resolver(remaining, "100.64.0.20")
+    assert remaining2 == []
+
+    # 6. Removing non-existent or nil IP leaves list untouched
+    assert DnsWorker.remove_resolver(resolvers2, nil) == resolvers2
+    assert DnsWorker.remove_resolver(resolvers2, "100.64.0.99") == resolvers2
+  end
+
   defp wait_for_status(endpoint_id, expected_status, retries \\ 20) do
     case DnsWorker.get_status(endpoint_id) do
       {^expected_status, ip, err} ->

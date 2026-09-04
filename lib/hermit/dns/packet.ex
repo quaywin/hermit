@@ -69,13 +69,14 @@ defmodule Hermit.Dns.Packet do
       {domain, <<qtype_val::16, qclass::16, _rest::binary>>} ->
         id_bin = <<id::16>>
         flags_bin = if byte_size(packet) >= 4, do: binary_part(packet, 2, 2), else: <<0, 0>>
+        domain_down = String.downcase(domain)
         query_rec = dns_query(name: domain, class: qclass, type: qtype_val)
 
         {:ok,
          %{
            id: id_bin,
            flags: flags_bin,
-           domain: domain,
+           domain: domain_down,
            qtype: to_qtype(qtype_val),
            qtype_val: qtype_val,
            qclass: qclass,
@@ -119,12 +120,13 @@ defmodule Hermit.Dns.Packet do
 
             id_bin = <<id::16>>
             flags_bin = if byte_size(packet) >= 4, do: binary_part(packet, 2, 2), else: <<0, 0>>
+            domain_down = if is_binary(domain), do: String.downcase(domain), else: domain
 
             {:ok,
              %{
                id: id_bin,
                flags: flags_bin,
-               domain: domain,
+               domain: domain_down,
                qtype: to_qtype(qtype_val),
                qtype_val: qtype_val,
                qclass: qclass,
@@ -206,6 +208,32 @@ defmodule Hermit.Dns.Packet do
       )
 
     :dns.encode_message(msg)
+  end
+
+  @doc """
+  Builds a standard SERVFAIL response for a query ID and query record.
+  """
+  def build_servfail(id_bin, query_record) when Record.is_record(query_record, :dns_query) do
+    servfail = build_nxdomain(id_bin, query_record)
+    patch_rcode(servfail, 2)
+  end
+
+  @doc """
+  Builds a SERVFAIL response packet from a raw DNS query packet.
+  """
+  def build_servfail(query_packet) when is_binary(query_packet) do
+    case parse(query_packet) do
+      {:ok, query} ->
+        build_servfail(query.id, query.query_record)
+
+      _ ->
+        if byte_size(query_packet) >= 12 do
+          <<id::binary-size(2), _::binary>> = query_packet
+          <<id::binary, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+        else
+          <<0x00, 0x00, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
+        end
+    end
   end
 
   @doc """
@@ -431,12 +459,17 @@ defmodule Hermit.Dns.Packet do
     end
   end
 
-  defp ip_to_string(ip) do
+  @doc """
+  Converts an IP tuple or string into a standardized string.
+  """
+  def ip_to_string(ip) when is_tuple(ip) do
     case :inet.ntoa(ip) do
       charlist when is_list(charlist) -> List.to_string(charlist)
-      _ -> ""
+      _ -> "unknown"
     end
   end
+
+  def ip_to_string(other), do: to_string(other)
 
   @doc """
   Injects or updates the EDNS Client Subnet (ECS) option in a raw DNS query packet.

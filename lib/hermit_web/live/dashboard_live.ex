@@ -11,7 +11,7 @@ defmodule HermitWeb.DashboardLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
-      Registry.register(Hermit.Vpn.Registry, "ui_session:#{inspect(self())}", :active)
+      Registry.register(Hermit.Vpn.Registry, {:ui_session, self()}, :active)
     end
 
     pairs = PairWorker.list_pairs()
@@ -205,15 +205,7 @@ defmodule HermitWeb.DashboardLive do
     end
   end
 
-  def format_bytes(nil), do: "0 B"
-
-  def format_bytes(bytes) do
-    cond do
-      bytes < 1024 -> "#{bytes} B"
-      bytes < 1024 * 1024 -> "#{Float.round(bytes / 1024, 1)} KiB"
-      true -> "#{Float.round(bytes / (1024 * 1024), 2)} MiB"
-    end
-  end
+  def format_bytes(bytes), do: Hermit.format_bytes(bytes)
 
   def format_dns_time(timestamp) do
     case DateTime.from_unix(timestamp) do

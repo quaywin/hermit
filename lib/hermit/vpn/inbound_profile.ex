@@ -36,11 +36,7 @@ defmodule Hermit.Vpn.InboundProfile do
     end
   end
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
-  end
-
-  defp stringify_keys(val), do: val
+  defp stringify_keys(val), do: Hermit.stringify_keys(val)
 
   defp validate_config(changeset) do
     type = get_field(changeset, :type)
@@ -95,10 +91,17 @@ defmodule Hermit.Vpn.InboundProfile do
     end
   end
 
-  # Remove get_by_doh_token as it is moved to DnsEndpoint
   def clear_cache do
     try do
       :ets.delete_all_objects(:inbound_profiles_cache)
+    rescue
+      ArgumentError -> :ok
+    end
+
+    try do
+      if :ets.info(:dns_device_cache) != :undefined do
+        :ets.match_delete(:dns_device_cache, {{:is_tailscale, :_}, :_, :_})
+      end
     rescue
       ArgumentError -> :ok
     end

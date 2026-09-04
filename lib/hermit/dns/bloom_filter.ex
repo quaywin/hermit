@@ -82,26 +82,32 @@ defmodule Hermit.Dns.BloomFilter do
   def member?(_domain, nil), do: true
 
   def member?(domain, binary) when is_binary(binary) do
-    bit_size = byte_size(binary) * 8
-    indices = compute_indices(domain, bit_size)
-
-    Enum.all?(indices, fn bit_idx ->
-      byte_idx = div(bit_idx, 8)
-      bit_offset = rem(bit_idx, 8)
-      byte = :binary.at(binary, byte_idx)
-
-      # Extract bit at position using bitwise AND
-      Bitwise.band(byte, 1 <<< (7 - bit_offset)) != 0
-    end)
+    domain_down = String.downcase(domain)
+    member_downcased?(domain_down, binary)
   end
 
-  # Helper to compute K hash indices for a domain
-  defp compute_indices(domain, bit_size) do
-    domain_down = String.downcase(domain)
+  @doc """
+  Check if an already-downcased domain is a member of the Bloom Filter.
+  Short-circuits on the first 0-bit to avoid unnecessary hashing and allocations.
+  """
+  def member_downcased?(_domain, nil), do: true
 
-    Enum.map(@salts, fn salt ->
-      # phash2 returns a hash in range [0, bit_size - 1]
-      :erlang.phash2({domain_down, salt}, bit_size)
-    end)
+  def member_downcased?(domain_down, binary) when is_binary(binary) do
+    bit_size = byte_size(binary) * 8
+
+    check_salt(domain_down, 1, bit_size, binary) and
+      check_salt(domain_down, 2, bit_size, binary) and
+      check_salt(domain_down, 3, bit_size, binary) and
+      check_salt(domain_down, 4, bit_size, binary)
+  end
+
+  defp check_salt(domain_down, salt, bit_size, binary) do
+    bit_idx = :erlang.phash2({domain_down, salt}, bit_size)
+    byte_idx = div(bit_idx, 8)
+    bit_offset = rem(bit_idx, 8)
+    byte = :binary.at(binary, byte_idx)
+
+    # Extract bit at position using bitwise AND
+    Bitwise.band(byte, 1 <<< (7 - bit_offset)) != 0
   end
 end

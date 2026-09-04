@@ -4,12 +4,14 @@ defmodule Hermit.Dns.Cache do
   """
 
   @dns_cache_table :dns_cache
+  @max_entries 50_000
 
   @spec lookup(integer(), String.t(), atom(), boolean()) ::
           {:ok, binary(), String.t(), String.t()}
           | {:stale, binary(), String.t(), String.t()}
           | :error
   def lookup(profile_id, domain, qtype, allow_stale? \\ false) do
+    domain = String.downcase(domain)
     now = System.monotonic_time(:second)
 
     case :ets.lookup(@dns_cache_table, {profile_id, domain, qtype}) do
@@ -31,7 +33,10 @@ defmodule Hermit.Dns.Cache do
 
   @spec store(integer(), String.t(), atom(), binary(), String.t(), String.t(), integer()) :: :ok
   def store(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl) do
+    domain = String.downcase(domain)
     expires_at = System.monotonic_time(:second) + ttl
+
+    maybe_prune_overflow()
 
     :ets.insert(
       @dns_cache_table,
@@ -39,6 +44,22 @@ defmodule Hermit.Dns.Cache do
     )
 
     :ok
+  end
+
+  defp maybe_prune_overflow do
+    case :ets.info(@dns_cache_table, :size) do
+      size when is_integer(size) and size >= @max_entries ->
+        now = System.monotonic_time(:second)
+
+        :ets.select_delete(@dns_cache_table, [
+          {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
+        ])
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   @spec clear(integer()) :: :ok

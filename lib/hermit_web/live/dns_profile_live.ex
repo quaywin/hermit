@@ -36,11 +36,12 @@ defmodule HermitWeb.DnsProfileLive do
 
     {:ok,
      socket
+     |> stream(:dns_logs, dns_logs)
+     |> assign(has_logs: dns_logs != [])
      |> assign(dns_profiles: dns_profiles)
      |> assign(selected_profile: selected_profile)
      |> assign(vpn_pairs: vpn_pairs)
      |> assign(available_blocklists: fetch_available_blocklists())
-     |> assign(dns_logs: dns_logs)
      |> assign(dns_metrics: dns_metrics)
      |> assign(time_range: "24h")
      |> assign(show_create_modal: false)
@@ -82,12 +83,15 @@ defmodule HermitWeb.DnsProfileLive do
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{profile.id}")
     end
 
+    recent_logs = get_recent_logs(profile.id)
+
     {:noreply,
      socket
      |> assign(selected_profile: profile)
      |> assign(available_blocklists: fetch_available_blocklists())
      |> assign(editing_name: false)
-     |> assign(dns_logs: get_recent_logs(profile.id))
+     |> assign(has_logs: recent_logs != [])
+     |> stream(:dns_logs, recent_logs, reset: true)
      |> assign(dns_metrics: get_metrics(profile.id, socket.assigns[:time_range] || "24h"))
      |> assign(custom_rule_action: "block")
      |> assign(custom_rule_domain: "")
@@ -242,7 +246,10 @@ defmodule HermitWeb.DnsProfileLive do
           if next_profile do
             {:noreply, push_patch(socket, to: ~p"/dns?id=#{next_profile.id}")}
           else
-            {:noreply, assign(socket, selected_profile: nil, dns_logs: [])}
+            {:noreply,
+             socket
+             |> assign(selected_profile: nil, has_logs: false)
+             |> stream(:dns_logs, [], reset: true)}
           end
 
         {:error, _} ->
@@ -472,20 +479,25 @@ defmodule HermitWeb.DnsProfileLive do
     :ets.match_delete(:dns_query_logs, {{profile.id, :_}, :_})
 
     {:noreply,
-     assign(socket, dns_logs: [], dns_metrics: get_metrics(profile.id, socket.assigns.time_range))}
+     socket
+     |> assign(has_logs: false, dns_metrics: get_metrics(profile.id, socket.assigns.time_range))
+     |> stream(:dns_logs, [], reset: true)}
   end
 
   # PubSub notifications
   @impl true
   def handle_info({:dns_logs_batch, logs}, socket) when is_list(logs) do
     if socket.assigns.selected_profile do
-      if socket.assigns.pause_logs do
+      if socket.assigns.pause_logs or logs == [] do
         {:noreply, socket}
       else
         new_log_entries = Enum.map(logs, &to_log_struct/1)
-        updated_logs = (new_log_entries ++ socket.assigns.dns_logs) |> Enum.take(200)
         metrics = get_metrics(socket.assigns.selected_profile.id, socket.assigns.time_range)
-        {:noreply, assign(socket, dns_logs: updated_logs, dns_metrics: metrics)}
+
+        {:noreply,
+         socket
+         |> assign(has_logs: true, dns_metrics: metrics)
+         |> stream(:dns_logs, new_log_entries, at: 0, limit: 200)}
       end
     else
       {:noreply, socket}
@@ -495,12 +507,6 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def handle_info({:dns_log, log}, socket) do
     handle_info({:dns_logs_batch, [log]}, socket)
-  end
-
-  @impl true
-  def handle_info({:dns_log_added, _profile_id, _log_entry}, socket) do
-    # Tương thích ngược với các test case cũ nếu có
-    {:noreply, socket}
   end
 
   @impl true
@@ -599,13 +605,11 @@ defmodule HermitWeb.DnsProfileLive do
         # Lấy log của profile này + log fallback từ ETS
         pattern_profile = {{{profile_id, :_}, :"$1"}, [], [:"$1"]}
         pattern_fallback_str = {{{"fallback", :_}, :"$1"}, [], [:"$1"]}
-        pattern_fallback_nil = {{{nil, :_}, :"$1"}, [], [:"$1"]}
-        pattern_fallback_empty = {{{"", :_}, :"$1"}, [], [:"$1"]}
 
-        (:ets.select(:dns_query_logs, [pattern_profile]) ++
-           :ets.select(:dns_query_logs, [pattern_fallback_str]) ++
-           :ets.select(:dns_query_logs, [pattern_fallback_nil]) ++
-           :ets.select(:dns_query_logs, [pattern_fallback_empty]))
+        :ets.select(:dns_query_logs, [
+          pattern_profile,
+          pattern_fallback_str
+        ])
         |> Enum.map(&to_log_struct/1)
         |> Enum.sort_by(& &1.timestamp, :desc)
         |> Enum.uniq_by(fn log -> {log.timestamp, log.domain, log.client_ip} end)
@@ -614,7 +618,21 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   defp to_log_struct(log) do
+    raw_id = Map.get(log, "id") || Map.get(log, :id)
+
+    id =
+      cond do
+        raw_id && raw_id != "" ->
+          to_string(raw_id)
+
+        true ->
+          ts = Map.get(log, "timestamp") || Map.get(log, :timestamp) || System.system_time(:second)
+          ts_val = if is_integer(ts), do: ts, else: System.system_time(:second)
+          "#{ts_val}-#{System.unique_integer([:positive, :monotonic])}"
+      end
+
     %{
+      id: id,
       client_ip: Map.get(log, "client_ip") || Map.get(log, :client_ip) || "-",
       client_name: Map.get(log, "client_name") || Map.get(log, :client_name) || "-",
       endpoint_name: Map.get(log, "endpoint_name") || Map.get(log, :endpoint_name) || "Unknown",

@@ -43,7 +43,7 @@ defmodule Hermit.Dns.Filter do
   end
 
   defp bloom_member_recursive?(domain, bloom_binary) do
-    if Hermit.Dns.BloomFilter.member?(domain, bloom_binary) do
+    if Hermit.Dns.BloomFilter.member_downcased?(domain, bloom_binary) do
       true
     else
       case :binary.match(domain, ".") do

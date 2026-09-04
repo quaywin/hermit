@@ -90,11 +90,7 @@ defmodule Hermit.Vpn.VpnPair do
     end
   end
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
-  end
-
-  defp stringify_keys(val), do: val
+  defp stringify_keys(val), do: Hermit.stringify_keys(val)
 
   @doc """
   Checks if the given outbound profile is already in use by another active tunnel.

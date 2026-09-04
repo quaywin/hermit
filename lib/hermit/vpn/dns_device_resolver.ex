@@ -10,7 +10,8 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @not_found_ttl_seconds 60
+  @not_found_ttl_seconds 300
+  @profile_ttl_seconds 600
 
   def resolve_device(profile_id, client_ip) do
     now = System.system_time(:second)
@@ -23,11 +24,38 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
         name
 
       _ ->
-        # New IP or expired negative cache! Temporarily mark as :not_found with current timestamp
-        # to avoid stampeding GenServer casts for the same IP
-        :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
-        GenServer.cast(__MODULE__, {:trigger_update, profile_id})
-        nil
+        if tailscale_profile?(profile_id, now) do
+          # New IP or expired negative cache! Temporarily mark as :not_found with current timestamp
+          # to avoid stampeding GenServer casts for the same IP
+          :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
+          GenServer.cast(__MODULE__, {:trigger_update, profile_id})
+          nil
+        else
+          nil
+        end
+    end
+  end
+
+  defp tailscale_profile?(profile_id, now) do
+    if mock?() do
+      true
+    else
+      case :ets.lookup(@table, {:is_tailscale, profile_id}) do
+        [{_, is_ts, inserted_at}] when now - inserted_at < @profile_ttl_seconds ->
+          is_ts
+
+        _ ->
+          is_ts =
+            try do
+              profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
+              match?(%Hermit.Vpn.InboundProfile{type: "tailscale"}, profile)
+            rescue
+              _ -> false
+            end
+
+          :ets.insert(@table, {{:is_tailscale, profile_id}, is_ts, now})
+          is_ts
+      end
     end
   end
 
@@ -114,9 +142,7 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
         {{profile_id, "100.64.0.5"}, "mock-client", now}
       ])
     else
-      profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
-
-      if profile && profile.type == "tailscale" do
+      if tailscale_profile?(profile_id, now) do
         dns_socket = "/run/tailscaled.dns_#{profile_id}.socket"
 
         pair_sockets =
@@ -227,8 +253,5 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
     end
   end
 
-  defp mock? do
-    config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false)
-  end
+  defp mock?, do: Hermit.mock?()
 end

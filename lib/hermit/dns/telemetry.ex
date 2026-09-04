@@ -315,7 +315,7 @@ defmodule Hermit.Dns.Telemetry do
       blocklist_id = Map.get(metadata, :blocklist_id)
 
       pair_id = to_string(profile_id)
-      client_ip_str = ip_to_string(client_ip)
+      client_ip_str = Packet.ip_to_string(client_ip)
 
       endpoint_id =
         cond do
@@ -535,15 +535,6 @@ defmodule Hermit.Dns.Telemetry do
   end
 
   # --- General helper functions ---
-
-  defp ip_to_string(ip) when is_tuple(ip) do
-    case :inet.ntoa(ip) do
-      charlist when is_list(charlist) -> List.to_string(charlist)
-      _ -> "unknown"
-    end
-  end
-
-  defp ip_to_string(other), do: to_string(other)
 
   defp prune_logs(id) do
     pattern = {{id, :"$1"}, :_}

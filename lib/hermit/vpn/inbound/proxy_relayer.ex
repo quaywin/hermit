@@ -526,8 +526,5 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     end
   end
 
-  defp mock? do
-    config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false)
-  end
+  defp mock?, do: Hermit.mock?()
 end

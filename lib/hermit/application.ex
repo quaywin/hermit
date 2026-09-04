@@ -317,10 +317,7 @@ defmodule Hermit.Application do
     end
   end
 
-  defp mock? do
-    config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false)
-  end
+  defp mock?, do: Hermit.mock?()
 
   defp clean_stale_netns do
     if :os.type() == {:unix, :linux} and not mock?() do

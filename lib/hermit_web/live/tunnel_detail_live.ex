@@ -9,7 +9,7 @@ defmodule HermitWeb.TunnelDetailLive do
   def mount(%{"id" => id}, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
-      Registry.register(Hermit.Vpn.Registry, "ui_session:#{inspect(self())}", :active)
+      Registry.register(Hermit.Vpn.Registry, {:ui_session, self()}, :active)
       :timer.send_interval(1000, self(), :tick)
     end
 
@@ -646,19 +646,7 @@ defmodule HermitWeb.TunnelDetailLive do
     end
   end
 
-  def format_bytes(nil), do: "0 B"
+  def format_bytes(bytes), do: Hermit.format_bytes(bytes)
 
-  def format_bytes(bytes) do
-    cond do
-      bytes < 1024 -> "#{bytes} B"
-      bytes < 1024 * 1024 -> "#{Float.round(bytes / 1024, 1)} KiB"
-      true -> "#{Float.round(bytes / (1024 * 1024), 2)} MiB"
-    end
-  end
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
-  end
-
-  defp stringify_keys(val), do: val
+  defp stringify_keys(val), do: Hermit.stringify_keys(val)
 end

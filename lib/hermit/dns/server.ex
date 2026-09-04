@@ -76,7 +76,7 @@ defmodule Hermit.Dns.Server do
       Logger.error("DNS Server: Failed to bind any upstream client sockets")
     end
 
-    proxy_ports_cache = pre_populate_proxy_ports_cache()
+    pre_populate_proxy_ports_cache()
 
     # Create dynamic ETS table for pending_queries to allow concurrent read/write
     pending_table = :"dns_pending_queries_#{endpoint_id}"
@@ -107,8 +107,7 @@ defmodule Hermit.Dns.Server do
       active_upstream: active_upstream,
       config: config,
       custom_rules: custom_rules,
-      next_tx_id: 0,
-      proxy_ports_cache: proxy_ports_cache
+      next_tx_id: 0
     }
 
     # Start periodic timeout cleanup timer (every 1 second)
@@ -299,30 +298,31 @@ defmodule Hermit.Dns.Server do
   def handle_info({:vpn_pair_updated, %{id: pair_id, status: status}}, state) do
     status_str = to_string(status) |> String.downcase()
 
-    new_cache =
-      if status_str == "running" do
-        if Map.has_key?(state.proxy_ports_cache, pair_id) do
-          state.proxy_ports_cache
-        else
-          case read_proxy_ports_from_disk(pair_id) do
-            {:ok, http_port, socks5_port} ->
-              Map.put(state.proxy_ports_cache, pair_id, {http_port, socks5_port})
+    if status_str == "running" do
+      case read_proxy_ports_from_disk(pair_id) do
+        {:ok, http_port, socks5_port} ->
+          ensure_proxy_cache_table_exists()
+          :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, socks5_port}})
 
-            _ ->
-              state.proxy_ports_cache
-          end
-        end
-      else
-        Map.delete(state.proxy_ports_cache, pair_id)
+        _ ->
+          :ok
       end
+    else
+      if :ets.info(:dns_proxy_cache) != :undefined do
+        :ets.delete(:dns_proxy_cache, {:ports, pair_id})
+      end
+    end
 
-    {:noreply, %{state | proxy_ports_cache: new_cache}}
+    {:noreply, state}
   end
 
   @impl true
   def handle_info({:vpn_pair_deleted, pair_id}, state) do
-    new_cache = Map.delete(state.proxy_ports_cache, pair_id)
-    {:noreply, %{state | proxy_ports_cache: new_cache}}
+    if :ets.info(:dns_proxy_cache) != :undefined do
+      :ets.delete(:dns_proxy_cache, {:ports, pair_id})
+    end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -555,17 +555,20 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  # Handle periodic lazy timeout cleanups & fallback triggering (every 1s)
   @impl true
   def handle_info(:clean_timeouts, state) do
     now = System.monotonic_time(:millisecond)
-    records = :ets.tab2list(state.pending_table)
+    cutoff = now - 2000
+
+    # Match only queries sent at or before cutoff (min timeout limit) to avoid tab2list heap bloat
+    head = {:"$1", {:_, :_, :_, :"$2", :"$3", :"$4", :_}}
+    guard = [{:"=<", :"$2", cutoff}]
+    result = [{{:"$1", :"$2", :"$3", :"$4"}}]
+    candidates = :ets.select(state.pending_table, [{head, guard, result}])
 
     new_state =
-      Enum.reduce(records, state, fn {tx_id, info}, acc_state ->
-        {_client_ip, _client_port, _original_query, sent_at, target_upstreams, current_index,
-         _original_tx_id} = info
-
+      Enum.reduce(candidates, state, fn {tx_id, sent_at, target_upstreams, current_index},
+                                         acc_state ->
         current_upstream = elem(target_upstreams, current_index)
 
         timeout_limit =
@@ -913,8 +916,7 @@ defmodule Hermit.Dns.Server do
                           "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
                         )
 
-                        servfail = Packet.build_nxdomain(query.id, query.query_record)
-                        servfail = Packet.patch_rcode(servfail, 2)
+                        servfail = Packet.build_servfail(query.id, query.query_record)
                         send_client_response(socket, ip, port, servfail)
                         state
 
@@ -953,8 +955,7 @@ defmodule Hermit.Dns.Server do
                               "DNS Server: SOCKS5/HTTP proxy port missing for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
                             )
 
-                            servfail = Packet.build_nxdomain(query.id, query.query_record)
-                            servfail = Packet.patch_rcode(servfail, 2)
+                            servfail = Packet.build_servfail(query.id, query.query_record)
                             send_client_response(socket, ip, port, servfail)
                             state
                         end
@@ -965,8 +966,7 @@ defmodule Hermit.Dns.Server do
                       "DNS Server: Failed to get proxy ports for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
                     )
 
-                    servfail = Packet.build_nxdomain(query.id, query.query_record)
-                    servfail = Packet.patch_rcode(servfail, 2)
+                    servfail = Packet.build_servfail(query.id, query.query_record)
                     send_client_response(socket, ip, port, servfail)
                     state
                 end
@@ -977,8 +977,7 @@ defmodule Hermit.Dns.Server do
                       "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
                     )
 
-                    servfail = Packet.build_nxdomain(query.id, query.query_record)
-                    servfail = Packet.patch_rcode(servfail, 2)
+                    servfail = Packet.build_servfail(query.id, query.query_record)
                     send_client_response(socket, ip, port, servfail)
                     state
 
@@ -1021,10 +1020,7 @@ defmodule Hermit.Dns.Server do
                         "DNS Server: Failed to get SOCKS5 proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
                       )
 
-                      servfail =
-                        Packet.build_nxdomain(query.id, query.query_record)
-                        |> Packet.patch_rcode(2)
-
+                      servfail = Packet.build_servfail(query.id, query.query_record)
                       send_client_response(socket, ip, port, servfail)
 
                       :telemetry.execute(
@@ -1068,10 +1064,7 @@ defmodule Hermit.Dns.Server do
                         "DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
                       )
 
-                      servfail =
-                        Packet.build_nxdomain(query.id, query.query_record)
-                        |> Packet.patch_rcode(2)
-
+                      servfail = Packet.build_servfail(query.id, query.query_record)
                       send_client_response(socket, ip, port, servfail)
 
                       :telemetry.execute(
@@ -1117,10 +1110,7 @@ defmodule Hermit.Dns.Server do
                         "DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
                       )
 
-                      servfail =
-                        Packet.build_nxdomain(query.id, query.query_record)
-                        |> Packet.patch_rcode(2)
-
+                      servfail = Packet.build_servfail(query.id, query.query_record)
                       send_client_response(socket, ip, port, servfail)
 
                       :telemetry.execute(
@@ -1157,8 +1147,7 @@ defmodule Hermit.Dns.Server do
 
     if sorted_upstreams == [] do
       # Return SERVFAIL if no upstreams configured
-      servfail = Packet.build_nxdomain(query.id, query.query_record)
-      servfail = Packet.patch_rcode(servfail, 2)
+      servfail = Packet.build_servfail(query.id, query.query_record)
       send_client_response(socket, ip, port, servfail)
       state
     else
@@ -1371,8 +1360,7 @@ defmodule Hermit.Dns.Server do
 
             _ ->
               # Nếu thực sự không có stale cache, trả SERVFAIL như cũ
-              servfail = Packet.build_nxdomain(original_tx_id, original_query.query_record)
-              servfail = Packet.patch_rcode(servfail, 2)
+              servfail = Packet.build_servfail(original_tx_id, original_query.query_record)
               send_client_response(state.socket, client_ip, client_port, servfail)
 
               # Lưu cache lỗi SERVFAIL trong 5 giây (Negative Caching)
@@ -1479,14 +1467,7 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp ip_to_string(ip) when is_tuple(ip) do
-    case :inet.ntoa(ip) do
-      charlist when is_list(charlist) -> List.to_string(charlist)
-      _ -> "unknown"
-    end
-  end
-
-  defp ip_to_string(other), do: to_string(other)
+  defp ip_to_string(ip), do: Packet.ip_to_string(ip)
 
   defp get_proxy_ports_for_pair(pair_id, state) do
     if mock?() do
@@ -1890,8 +1871,5 @@ defmodule Hermit.Dns.Server do
 
   defp find_available_tx_id(_pending_table, candidate_id, _retries), do: candidate_id
 
-  defp mock? do
-    config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false)
-  end
+  defp mock?, do: Hermit.mock?()
 end

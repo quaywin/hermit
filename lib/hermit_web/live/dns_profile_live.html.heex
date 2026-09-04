@@ -762,64 +762,68 @@
                   </th>
                 </tr>
               </thead>
-              <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
-                <%= if @dns_logs == [] do %>
-                  <tr>
-                    <td colspan="9" class="py-8 text-center text-base-content/30 italic">
-                      No logs captured yet. Capture will start when queries begin.
-                    </td>
-                  </tr>
-                <% else %>
-                  <tr
-                    :for={{log, idx} <- Enum.with_index(@dns_logs)}
-                    class="hover:bg-base-200/30 transition-all"
+              <tbody
+                id="dns-query-logs-table"
+                phx-update="stream"
+                class="divide-y divide-base-300/40 text-base-content/80 font-mono"
+              >
+                <tr
+                  :for={{dom_id, log} <- @streams.dns_logs}
+                  id={dom_id}
+                  class="hover:bg-base-200/30 transition-all"
+                >
+                  <td class="py-2.5 pr-2 font-mono text-base-content/75">{log.client_ip}</td>
+                  <td class="py-2.5 pr-2 text-base-content/65 truncate max-w-[120px]">
+                    <%= if log.client_name && log.client_name != log.client_ip do %>
+                      {log.client_name}
+                    <% else %>
+                      -
+                    <% end %>
+                  </td>
+                  <td class="py-2.5 pr-2 font-sans text-base-content/65 truncate max-w-[120px]">
+                    {log.endpoint_name}
+                  </td>
+                  <td class="py-2.5 pr-2 font-mono truncate max-w-xs">{log.domain}</td>
+                  <td class="py-2.5 pr-2 font-mono uppercase text-base-content/65">
+                    {log.qtype}
+                  </td>
+                  <td class="py-2.5 pr-2 font-sans font-semibold">
+                    <span class={[
+                      "px-2 py-0.5 rounded-full text-[10px] uppercase font-mono border",
+                      case log.status do
+                        "blocked" -> "bg-red-500/10 text-red-500 border-red-500/20"
+                        "redirected" -> "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                        "resolved" -> "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                        "fallback" -> "bg-sky-500/10 text-sky-500 border-sky-500/20"
+                        _ -> "bg-base-content/10 text-base-content/75 border-base-content/20"
+                      end
+                    ]}>
+                      {log.status}
+                    </span>
+                  </td>
+                  <td class="py-2.5 pr-2 font-mono text-[10px] text-base-content/50">
+                    {log.resolver}
+                  </td>
+                  <td class="py-2.5 pr-2 text-base-content/60 truncate max-w-xs">
+                    {log.answer}
+                  </td>
+                  <td
+                    id={"log-time-#{dom_id}"}
+                    phx-hook="LocalTime"
+                    data-timestamp={DateTime.to_unix(log.timestamp)}
+                    class="py-2.5 text-right text-base-content/40"
                   >
-                    <td class="py-2.5 pr-2 font-mono text-base-content/75">{log.client_ip}</td>
-                    <td class="py-2.5 pr-2 text-base-content/65 truncate max-w-[120px]">
-                      <%= if log.client_name && log.client_name != log.client_ip do %>
-                        {log.client_name}
-                      <% else %>
-                        -
-                      <% end %>
-                    </td>
-                    <td class="py-2.5 pr-2 font-sans text-base-content/65 truncate max-w-[120px]">
-                      {log.endpoint_name}
-                    </td>
-                    <td class="py-2.5 pr-2 font-mono truncate max-w-xs">{log.domain}</td>
-                    <td class="py-2.5 pr-2 font-mono uppercase text-base-content/65">
-                      {log.qtype}
-                    </td>
-                    <td class="py-2.5 pr-2 font-sans font-semibold">
-                      <span class={[
-                        "px-2 py-0.5 rounded-full text-[10px] uppercase font-mono border",
-                        case log.status do
-                          "blocked" -> "bg-red-500/10 text-red-500 border-red-500/20"
-                          "redirected" -> "bg-amber-500/10 text-amber-500 border-amber-500/20"
-                          "resolved" -> "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                          "fallback" -> "bg-sky-500/10 text-sky-500 border-sky-500/20"
-                          _ -> "bg-base-content/10 text-base-content/75 border-base-content/20"
-                        end
-                      ]}>
-                        {log.status}
-                      </span>
-                    </td>
-                    <td class="py-2.5 pr-2 font-mono text-[10px] text-base-content/50">
-                      {log.resolver}
-                    </td>
-                    <td class="py-2.5 pr-2 text-base-content/60 truncate max-w-xs">
-                      {log.answer}
-                    </td>
-                    <td
-                      id={"log-time-#{idx}-#{DateTime.to_unix(log.timestamp)}"}
-                      phx-hook="LocalTime"
-                      data-timestamp={DateTime.to_unix(log.timestamp)}
-                      class="py-2.5 text-right text-base-content/40"
-                    >
-                      {Calendar.strftime(log.timestamp, "%H:%M:%S")}
-                    </td>
-                  </tr>
-                <% end %>
+                    {Calendar.strftime(log.timestamp, "%H:%M:%S")}
+                  </td>
+                </tr>
               </tbody>
+              <tfoot id="empty-logs-tfoot" class={if @has_logs, do: "hidden"}>
+                <tr>
+                  <td colspan="9" class="py-8 text-center text-base-content/30 italic">
+                    No logs captured yet. Capture will start when queries begin.
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>

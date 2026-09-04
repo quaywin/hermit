@@ -30,14 +30,14 @@ defmodule HermitWeb.DNSController do
                   catch
                     :exit, {:timeout, _} ->
                       Logger.error("DNS query timed out for endpoint: #{endpoint_id}")
-                      {:servfail, build_servfail_packet(query_packet)}
+                      {:servfail, Hermit.Dns.Packet.build_servfail(query_packet)}
 
                     :exit, reason ->
                       Logger.error(
                         "DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}"
                       )
 
-                      {:servfail, build_servfail_packet(query_packet)}
+                      {:servfail, Hermit.Dns.Packet.build_servfail(query_packet)}
                   end
 
                 case result do
@@ -408,22 +408,6 @@ defmodule HermitWeb.DNSController do
         String.contains?(ua, "Linux") -> "Linux"
         true -> "Generic Device"
       end
-    end
-  end
-
-  defp build_servfail_packet(query_packet) do
-    case Hermit.Dns.Packet.parse(query_packet) do
-      {:ok, query} ->
-        servfail = Hermit.Dns.Packet.build_nxdomain(query.id, query.query_record)
-        Hermit.Dns.Packet.patch_rcode(servfail, 2)
-
-      _ ->
-        if byte_size(query_packet) >= 12 do
-          <<id::binary-size(2), _::binary>> = query_packet
-          <<id::binary, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
-        else
-          <<0x00, 0x00, 0x81, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>>
-        end
     end
   end
 end

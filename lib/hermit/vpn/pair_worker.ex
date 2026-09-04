@@ -1885,12 +1885,21 @@ defmodule Hermit.Vpn.PairWorker do
   defp has_inbound_info?(_metrics, _module), do: false
 
   defp has_active_ui? do
+    match_spec = [
+      {{{:ui_session, :_}, :_, :_}, [], [true]},
+      {{:"$1", :_, :_},
+       [
+         {:andalso, {:is_binary, :"$1"},
+          {:andalso, {:>=, {:byte_size, :"$1"}, 11},
+           {:==, {:binary_part, :"$1", 0, 11}, "ui_session:"}}}
+       ], [true]}
+    ]
+
     try do
-      Registry.select(Hermit.Vpn.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.any?(fn
-        key when is_binary(key) -> String.starts_with?(key, "ui_session:")
+      case Registry.select(Hermit.Vpn.Registry, match_spec) do
+        [_ | _] -> true
         _ -> false
-      end)
+      end
     rescue
       _ -> false
     end

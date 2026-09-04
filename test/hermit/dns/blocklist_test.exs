@@ -40,47 +40,15 @@ defmodule Hermit.Dns.BlocklistTest do
   end
 
   test "check if real facebook domains are blocked" do
-    # Wait for blocklists to load since they load asynchronously on startup
-    Process.sleep(2000)
-
-    IO.inspect(Filter.match_ets_blocklist?("facebook.com", :adguard_blocklist),
-      label: "facebook.com adguard"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("facebook.com", :goodbyeads_blocklist),
-      label: "facebook.com goodbyeads"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("www.facebook.com", :adguard_blocklist),
-      label: "www.facebook.com adguard"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("www.facebook.com", :goodbyeads_blocklist),
-      label: "www.facebook.com goodbyeads"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("fbcdn.net", :adguard_blocklist),
-      label: "fbcdn.net adguard"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("fbcdn.net", :goodbyeads_blocklist),
-      label: "fbcdn.net goodbyeads"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("scontent.xx.fbcdn.net", :adguard_blocklist),
-      label: "scontent.xx.fbcdn.net adguard"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("scontent.xx.fbcdn.net", :goodbyeads_blocklist),
-      label: "scontent.xx.fbcdn.net goodbyeads"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("graph.facebook.com", :adguard_blocklist),
-      label: "graph.facebook.com adguard"
-    )
-
-    IO.inspect(Filter.match_ets_blocklist?("graph.facebook.com", :goodbyeads_blocklist),
-      label: "graph.facebook.com goodbyeads"
-    )
+    refute Filter.match_ets_blocklist?("facebook.com", :adguard_blocklist)
+    refute Filter.match_ets_blocklist?("facebook.com", :goodbyeads_blocklist)
+    refute Filter.match_ets_blocklist?("www.facebook.com", :adguard_blocklist)
+    refute Filter.match_ets_blocklist?("www.facebook.com", :goodbyeads_blocklist)
+    refute Filter.match_ets_blocklist?("fbcdn.net", :adguard_blocklist)
+    refute Filter.match_ets_blocklist?("fbcdn.net", :goodbyeads_blocklist)
+    refute Filter.match_ets_blocklist?("scontent.xx.fbcdn.net", :adguard_blocklist)
+    refute Filter.match_ets_blocklist?("scontent.xx.fbcdn.net", :goodbyeads_blocklist)
+    refute Filter.match_ets_blocklist?("graph.facebook.com", :adguard_blocklist)
+    refute Filter.match_ets_blocklist?("graph.facebook.com", :goodbyeads_blocklist)
   end
 end

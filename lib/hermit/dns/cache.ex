@@ -46,14 +46,35 @@ defmodule Hermit.Dns.Cache do
     :ok
   end
 
+  @doc """
+  Deletes expired entries from the cache.
+  """
+  @spec prune_expired() :: :ok
+  def prune_expired do
+    now = System.monotonic_time(:second)
+
+    :ets.select_delete(@dns_cache_table, [
+      {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
+    ])
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   defp maybe_prune_overflow do
+    now = System.monotonic_time(:second)
+
     case :ets.info(@dns_cache_table, :size) do
       size when is_integer(size) and size >= @max_entries ->
-        now = System.monotonic_time(:second)
+        case :ets.lookup(@dns_cache_table, :_last_overflow_prune) do
+          [{_, last_prune}] when now - last_prune < 10 ->
+            :ok
 
-        :ets.select_delete(@dns_cache_table, [
-          {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
-        ])
+          _ ->
+            :ets.insert(@dns_cache_table, {:_last_overflow_prune, now})
+            prune_expired()
+        end
 
       _ ->
         :ok

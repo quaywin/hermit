@@ -114,10 +114,16 @@ defmodule Hermit.Updater do
   end
 
   @impl true
-  def handle_call({:check_updates, _force}, _from, state) do
-    new_state = fetch_latest_release(state)
-    broadcast_status(new_state)
-    {:reply, new_state, new_state}
+  def handle_call({:check_updates, _force}, from, state) do
+    parent = self()
+
+    Task.start(fn ->
+      new_state = fetch_latest_release(state)
+      GenServer.reply(from, new_state)
+      send(parent, {:release_fetched, new_state})
+    end)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -162,16 +168,32 @@ defmodule Hermit.Updater do
 
   @impl true
   def handle_info(:initial_check, state) do
-    new_state = fetch_latest_release(state)
-    broadcast_status(new_state)
-    {:noreply, new_state}
+    parent = self()
+
+    Task.start(fn ->
+      new_state = fetch_latest_release(state)
+      send(parent, {:release_fetched, new_state})
+    end)
+
+    {:noreply, state}
   end
 
   @impl true
   def handle_info(:periodic_check, state) do
-    new_state = fetch_latest_release(state)
+    parent = self()
+
+    Task.start(fn ->
+      new_state = fetch_latest_release(state)
+      send(parent, {:release_fetched, new_state})
+    end)
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:release_fetched, new_state}, state) do
     broadcast_status(new_state)
-    {:noreply, new_state}
+    {:noreply, Map.merge(state, new_state)}
   end
 
   # ============================================================================

@@ -24,14 +24,16 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
         name
 
       _ ->
-        if tailscale_profile?(profile_id, now) do
-          # New IP or expired negative cache! Temporarily mark as :not_found with current timestamp
-          # to avoid stampeding GenServer casts for the same IP
-          :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
-          GenServer.cast(__MODULE__, {:trigger_update, profile_id})
-          nil
-        else
-          nil
+        case :ets.lookup(@table, {:is_tailscale, profile_id}) do
+          [{_, false, inserted_at}] when now - inserted_at < @profile_ttl_seconds ->
+            nil
+
+          _ ->
+            # Not in cache or is tailscale: mark :not_found temporarily to avoid duplicate casts,
+            # and trigger async resolution in background
+            :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
+            GenServer.cast(__MODULE__, {:trigger_update, profile_id})
+            nil
         end
     end
   end
@@ -47,8 +49,23 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
         _ ->
           is_ts =
             try do
-              profile = Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
-              match?(%Hermit.Vpn.InboundProfile{type: "tailscale"}, profile)
+              case Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id) do
+                %Hermit.Vpn.InboundProfile{type: "tailscale"} ->
+                  true
+
+                _ ->
+                  case Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, profile_id) do
+                    %Hermit.Vpn.DnsEndpoint{inbound_profile_id: inbound_id}
+                    when not is_nil(inbound_id) ->
+                      case Hermit.Repo.get(Hermit.Vpn.InboundProfile, inbound_id) do
+                        %Hermit.Vpn.InboundProfile{type: "tailscale"} -> true
+                        _ -> false
+                      end
+
+                    _ ->
+                      false
+                  end
+              end
             rescue
               _ -> false
             end

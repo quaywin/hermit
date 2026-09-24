@@ -288,25 +288,31 @@ defmodule Hermit.Dns.Port53Server do
 
   @doc false
   def resolve_via_endpoint_dns_server(endpoint_id, packet, client_ip) do
-    case get_or_start_dns_server(endpoint_id) do
-      {:ok, pid} ->
-        try do
-          GenServer.call(pid, {:resolve_query, packet, client_ip}, 4000)
-        catch
-          :exit, {:timeout, _} ->
-            Logger.error("Port53 Server: DNS query timed out for endpoint: #{endpoint_id}")
-            {:servfail, Packet.build_servfail(packet)}
+    case Hermit.Dns.Server.resolve_fast_path(endpoint_id, packet, client_ip) do
+      {:ok, response_packet} ->
+        {:ok, response_packet}
 
-          :exit, reason ->
-            Logger.error(
-              "Port53 Server: DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}"
-            )
+      :miss ->
+        case get_or_start_dns_server(endpoint_id) do
+          {:ok, pid} ->
+            try do
+              GenServer.call(pid, {:resolve_query, packet, client_ip}, 4000)
+            catch
+              :exit, {:timeout, _} ->
+                Logger.error("Port53 Server: DNS query timed out for endpoint: #{endpoint_id}")
+                {:servfail, Packet.build_servfail(packet)}
 
+              :exit, reason ->
+                Logger.error(
+                  "Port53 Server: DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}"
+                )
+
+                {:servfail, Packet.build_servfail(packet)}
+            end
+
+          :error ->
             {:servfail, Packet.build_servfail(packet)}
         end
-
-      :error ->
-        {:servfail, Packet.build_servfail(packet)}
     end
   end
 

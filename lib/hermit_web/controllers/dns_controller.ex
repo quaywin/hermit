@@ -15,54 +15,63 @@ defmodule HermitWeb.DNSController do
 
         case get_dns_packet(conn, params) do
           {:ok, query_packet} ->
-            case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
-              [{pid, _}] ->
-                client_ip = get_client_ip(conn)
-                device_name = get_device_name(conn)
+            client_ip = get_client_ip(conn)
+            device_name = get_device_name(conn)
+            client_id = {:doh, client_ip, device_name}
 
-                result =
-                  try do
-                    GenServer.call(
-                      pid,
-                      {:resolve_query, query_packet, {:doh, client_ip, device_name}},
-                      4000
-                    )
-                  catch
-                    :exit, {:timeout, _} ->
-                      Logger.error("DNS query timed out for endpoint: #{endpoint_id}")
-                      {:servfail, Hermit.Dns.Packet.build_servfail(query_packet)}
-
-                    :exit, reason ->
-                      Logger.error(
-                        "DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}"
-                      )
-
-                      {:servfail, Hermit.Dns.Packet.build_servfail(query_packet)}
-                  end
-
-                case result do
-                  {:ok, response_packet} ->
-                    conn
-                    |> put_resp_header("content-type", "application/dns-message")
-                    |> send_resp(200, response_packet)
-
-                  {:servfail, servfail_packet} ->
-                    conn
-                    |> put_resp_header("content-type", "application/dns-message")
-                    |> send_resp(200, servfail_packet)
-
-                  {:error, reason} ->
-                    Logger.error("DNS Server call failed: #{inspect(reason)}")
-
-                    conn
-                    |> put_status(500)
-                    |> text("Internal Server Error")
-                end
-
-              [] ->
+            case Hermit.Dns.Server.resolve_fast_path(endpoint_id, query_packet, client_id) do
+              {:ok, response_packet} ->
                 conn
-                |> put_status(404)
-                |> text("DNS Server not running for endpoint")
+                |> put_resp_header("content-type", "application/dns-message")
+                |> send_resp(200, response_packet)
+
+              :miss ->
+                case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
+                  [{pid, _}] ->
+                    result =
+                      try do
+                        GenServer.call(
+                          pid,
+                          {:resolve_query, query_packet, client_id},
+                          4000
+                        )
+                      catch
+                        :exit, {:timeout, _} ->
+                          Logger.error("DNS query timed out for endpoint: #{endpoint_id}")
+                          {:servfail, Hermit.Dns.Packet.build_servfail(query_packet)}
+
+                        :exit, reason ->
+                          Logger.error(
+                            "DNS Server call exited for endpoint #{endpoint_id}: #{inspect(reason)}"
+                          )
+
+                          {:servfail, Hermit.Dns.Packet.build_servfail(query_packet)}
+                      end
+
+                    case result do
+                      {:ok, response_packet} ->
+                        conn
+                        |> put_resp_header("content-type", "application/dns-message")
+                        |> send_resp(200, response_packet)
+
+                      {:servfail, servfail_packet} ->
+                        conn
+                        |> put_resp_header("content-type", "application/dns-message")
+                        |> send_resp(200, servfail_packet)
+
+                      {:error, reason} ->
+                        Logger.error("DNS Server call failed: #{inspect(reason)}")
+
+                        conn
+                        |> put_status(500)
+                        |> text("Internal Server Error")
+                    end
+
+                  [] ->
+                    conn
+                    |> put_status(404)
+                    |> text("DNS Server not running for endpoint")
+                end
             end
 
           {:error, :missing_dns_parameter} ->

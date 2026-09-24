@@ -27,14 +27,31 @@ defmodule Hermit.Dns.Rules do
   @spec precompile(list() | map() | nil) :: map()
   def precompile(rules) when is_list(rules) do
     rules
-    |> Enum.map(fn rule ->
+    |> Enum.flat_map(fn rule ->
       domain = Map.get(rule, "domain") || Map.get(rule, :domain)
       action = Map.get(rule, "action") || Map.get(rule, :action)
       value = Map.get(rule, "value") || Map.get(rule, :value)
       proxy_pair_id = Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
-      {domain, {action, value, proxy_pair_id}}
+
+      if is_binary(domain) and String.trim(domain) != "" do
+        norm_domain = domain |> String.trim() |> String.downcase()
+
+        clean_domain =
+          if String.starts_with?(norm_domain, "*."),
+            do: String.slice(norm_domain, 2..-1//1),
+            else: norm_domain
+
+        entry = {action, value, proxy_pair_id}
+
+        if clean_domain != norm_domain do
+          [{norm_domain, entry}, {clean_domain, entry}]
+        else
+          [{norm_domain, entry}]
+        end
+      else
+        []
+      end
     end)
-    |> Enum.reject(fn {domain, _} -> is_nil(domain) end)
     |> Map.new()
   end
 

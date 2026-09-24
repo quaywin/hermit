@@ -79,15 +79,26 @@ defmodule Hermit.Dns.BlocklistLoader do
 
   @impl true
   def handle_info(:prune_cache, state) do
-    now = System.monotonic_time(:second)
-    # Delete all expired entries from :dns_cache
-    :ets.select_delete(:dns_cache, [
-      {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
-    ])
+    # 1. Prune expired DNS cache entries
+    Hermit.Dns.Cache.prune_expired()
 
-    # Prune dns_filter_cache if too large to prevent memory leak
-    if :ets.info(:dns_filter_cache) != :undefined and :ets.info(:dns_filter_cache, :size) > 50_000 do
-      :ets.delete_all_objects(:dns_filter_cache)
+    # 2. Prune dns_filter_cache: delete entries older than 1 hour (3600s)
+    if :ets.info(:dns_filter_cache) != :undefined do
+      now = System.monotonic_time(:second)
+      cutoff = now - 3600
+
+      :ets.select_delete(:dns_filter_cache, [
+        {{:_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}
+      ])
+
+      # Safety cap: if still > 50_000, prune entries older than 10 minutes
+      if :ets.info(:dns_filter_cache, :size) > 50_000 do
+        panic_cutoff = now - 600
+
+        :ets.select_delete(:dns_filter_cache, [
+          {{:_, :_, :"$1"}, [{:<, :"$1", panic_cutoff}], [true]}
+        ])
+      end
     end
 
     :erlang.send_after(60_000, self(), :prune_cache)

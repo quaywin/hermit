@@ -124,7 +124,14 @@ case "$1" in
     ;;
   update|upgrade)
     echo "Pulling latest image and upgrading Hermit..."
-    docker compose -f "$COMPOSE_FILE" pull
+    if ! docker compose -f "$COMPOSE_FILE" pull; then
+      echo "⚠️ Pull failed. Clearing expired GHCR credentials and retrying anonymously..."
+      docker logout ghcr.io 2>/dev/null || true
+      if ! docker compose -f "$COMPOSE_FILE" pull; then
+        echo "❌ Error: Failed to pull latest image from ghcr.io/quaywin/hermit:latest"
+        exit 1
+      fi
+    fi
     docker compose -f "$COMPOSE_FILE" up -d
     echo "✓ Hermit updated successfully!"
     ;;

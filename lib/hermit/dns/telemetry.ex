@@ -343,24 +343,7 @@ defmodule Hermit.Dns.Telemetry do
                 name
 
               _ ->
-                try do
-                  case Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id) do
-                    nil ->
-                      "Port 53 Fallback"
-
-                    endpoint ->
-                      :ets.insert(
-                        :inbound_profiles_cache,
-                        {{:endpoint_name, endpoint_id}, endpoint.name}
-                      )
-
-                      endpoint.name
-                  end
-                rescue
-                  _ -> "Port 53 Fallback"
-                catch
-                  _, _ -> "Port 53 Fallback"
-                end
+                "Endpoint #{endpoint_id}"
             end
 
           true ->
@@ -450,82 +433,84 @@ defmodule Hermit.Dns.Telemetry do
       active_ids = Repo.all(from(d in Hermit.Vpn.DnsConfig, select: d.id))
       active_ids_set = MapSet.new(active_ids)
 
-      Enum.each(records, fn
-        {{config_id, hour_timestamp}, total, blocked, ipv6, adguard, goodbyeads, adult, custom}
-        when is_integer(config_id) ->
-          if MapSet.member?(active_ids_set, config_id) do
-            stat_attrs = %{
-              dns_config_id: config_id,
-              hour_timestamp: hour_timestamp,
-              total_queries: total,
-              blocked_queries: blocked,
-              ipv6_blocked_count: ipv6,
-              adguard_blocked_count: adguard,
-              goodbyeads_blocked_count: goodbyeads,
-              adult_blocked_count: adult,
-              custom_blocked_count: custom
-            }
+      Repo.transaction(fn ->
+        Enum.each(records, fn
+          {{config_id, hour_timestamp}, total, blocked, ipv6, adguard, goodbyeads, adult, custom}
+          when is_integer(config_id) ->
+            if MapSet.member?(active_ids_set, config_id) do
+              stat_attrs = %{
+                dns_config_id: config_id,
+                hour_timestamp: hour_timestamp,
+                total_queries: total,
+                blocked_queries: blocked,
+                ipv6_blocked_count: ipv6,
+                adguard_blocked_count: adguard,
+                goodbyeads_blocked_count: goodbyeads,
+                adult_blocked_count: adult,
+                custom_blocked_count: custom
+              }
 
-            changeset =
-              %HourlyStat{}
-              |> HourlyStat.changeset(stat_attrs)
+              changeset =
+                %HourlyStat{}
+                |> HourlyStat.changeset(stat_attrs)
 
-            case Repo.insert(
-                   changeset,
-                   on_conflict:
-                     {:replace,
-                      [
-                        :total_queries,
-                        :blocked_queries,
-                        :ipv6_blocked_count,
-                        :adguard_blocked_count,
-                        :goodbyeads_blocked_count,
-                        :adult_blocked_count,
-                        :custom_blocked_count,
-                        :updated_at
-                      ]},
-                   conflict_target: [:dns_config_id, :hour_timestamp]
-                 ) do
-              {:ok, _} ->
-                :ok
+              case Repo.insert(
+                     changeset,
+                     on_conflict:
+                       {:replace,
+                        [
+                          :total_queries,
+                          :blocked_queries,
+                          :ipv6_blocked_count,
+                          :adguard_blocked_count,
+                          :goodbyeads_blocked_count,
+                          :adult_blocked_count,
+                          :custom_blocked_count,
+                          :updated_at
+                        ]},
+                     conflict_target: [:dns_config_id, :hour_timestamp]
+                   ) do
+                {:ok, _} ->
+                  :ok
 
-              {:error, changeset} ->
-                Logger.warning(
-                  "Telemetry: Failed to sync hourly metrics to SQLite: #{inspect(changeset.errors)}"
-                )
+                {:error, changeset} ->
+                  Logger.warning(
+                    "Telemetry: Failed to sync hourly metrics to SQLite: #{inspect(changeset.errors)}"
+                  )
+              end
             end
-          end
 
-        {{:blocklist, config_id, blocklist_id, hour_timestamp}, count} ->
-          if MapSet.member?(active_ids_set, config_id) do
-            stat_attrs = %{
-              dns_config_id: config_id,
-              dns_blocklist_id: blocklist_id,
-              hour_timestamp: hour_timestamp,
-              blocked_count: count
-            }
+          {{:blocklist, config_id, blocklist_id, hour_timestamp}, count} ->
+            if MapSet.member?(active_ids_set, config_id) do
+              stat_attrs = %{
+                dns_config_id: config_id,
+                dns_blocklist_id: blocklist_id,
+                hour_timestamp: hour_timestamp,
+                blocked_count: count
+              }
 
-            changeset =
-              %Hermit.Dns.BlocklistHourlyStat{}
-              |> Hermit.Dns.BlocklistHourlyStat.changeset(stat_attrs)
+              changeset =
+                %Hermit.Dns.BlocklistHourlyStat{}
+                |> Hermit.Dns.BlocklistHourlyStat.changeset(stat_attrs)
 
-            case Repo.insert(
-                   changeset,
-                   on_conflict: {:replace, [:blocked_count, :updated_at]},
-                   conflict_target: [:dns_config_id, :dns_blocklist_id, :hour_timestamp]
-                 ) do
-              {:ok, _} ->
-                :ok
+              case Repo.insert(
+                     changeset,
+                     on_conflict: {:replace, [:blocked_count, :updated_at]},
+                     conflict_target: [:dns_config_id, :dns_blocklist_id, :hour_timestamp]
+                   ) do
+                {:ok, _} ->
+                  :ok
 
-              {:error, changeset} ->
-                Logger.warning(
-                  "Telemetry: Failed to sync blocklist hourly metrics to SQLite: #{inspect(changeset.errors)}"
-                )
+                {:error, changeset} ->
+                  Logger.warning(
+                    "Telemetry: Failed to sync blocklist hourly metrics to SQLite: #{inspect(changeset.errors)}"
+                  )
+              end
             end
-          end
 
-        _ ->
-          :ok
+          _ ->
+            :ok
+        end)
       end)
     rescue
       e -> Logger.warning("Telemetry: Failed to sync hourly metrics to SQLite: #{inspect(e)}")

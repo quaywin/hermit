@@ -52,6 +52,13 @@ defmodule Hermit.Dns.Server do
 
     custom_rules = Rules.precompile(config.custom_rules)
 
+    if :ets.info(:inbound_profiles_cache) != :undefined do
+      :ets.insert(
+        :inbound_profiles_cache,
+        {{:endpoint_config, endpoint_id}, {config, custom_rules}}
+      )
+    end
+
     # Initialize a shared Req client for DoH queries to reuse TLS connections
     doh_client =
       Req.new(
@@ -263,6 +270,13 @@ defmodule Hermit.Dns.Server do
 
     new_state = sync_upstreams_config(state, upstreams)
     custom_rules = Rules.precompile(updated_config.custom_rules)
+
+    if :ets.info(:inbound_profiles_cache) != :undefined do
+      :ets.insert(
+        :inbound_profiles_cache,
+        {{:endpoint_config, state.endpoint_id}, {updated_config, custom_rules}}
+      )
+    end
 
     # Flush cache for this profile on configuration changes
     Cache.clear(state.profile_id)
@@ -568,7 +582,7 @@ defmodule Hermit.Dns.Server do
 
     new_state =
       Enum.reduce(candidates, state, fn {tx_id, sent_at, target_upstreams, current_index},
-                                         acc_state ->
+                                        acc_state ->
         current_upstream = elem(target_upstreams, current_index)
 
         timeout_limit =
@@ -630,6 +644,15 @@ defmodule Hermit.Dns.Server do
   end
 
   @impl true
+  def terminate(_reason, state) do
+    if :ets.info(:inbound_profiles_cache) != :undefined do
+      :ets.delete(:inbound_profiles_cache, {:endpoint_config, state.endpoint_id})
+    end
+
+    :ok
+  end
+
+  @impl true
   def handle_cast({:update_latency, upstream, latency}, state) do
     upstreams_map = Map.put(state.upstreams_map, upstream, latency)
 
@@ -672,16 +695,40 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp process_query_fast_path(socket, ip, port, packet, query, state) do
-    profile_id = state.profile_id
-    config = state.config
-    upstreams = state.upstreams
+  @doc """
+  Directly resolves a DNS query from the fast path (Cache hit, IPv6 block, Custom Rule block/redirect,
+  or Blocklist match) without message-passing or spawning tasks.
+  Returns `{:ok, response_packet}` if resolved locally, or `:miss` if resolution requires upstream forwarding.
+  """
+  @spec resolve_fast_path(integer(), binary(), term()) :: {:ok, binary()} | :miss
+  def resolve_fast_path(endpoint_id, packet, client_ip) do
+    if :ets.info(:inbound_profiles_cache) != :undefined do
+      case :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint_id}) do
+        [{_, {config, custom_rules}}] ->
+          case Packet.parse(packet) do
+            {:ok, query} ->
+              do_resolve_fast_path(endpoint_id, config, custom_rules, packet, query, client_ip)
+
+            _ ->
+              :miss
+          end
+
+        _ ->
+          :miss
+      end
+    else
+      :miss
+    end
+  rescue
+    _ -> :miss
+  end
+
+  defp do_resolve_fast_path(profile_id, config, custom_rules, _packet, query, client_ip) do
     enable_query_logging = config.enable_query_logging
 
     # 0. AAAA Blocking (Filter IPv6)
     if query.qtype == :AAAA and Map.get(config, :block_ipv6, false) do
       resp = Packet.build_empty_response(query.id, query.query_record)
-      send_client_response(socket, ip, port, resp)
 
       :telemetry.execute(
         [:hermit, :dns, :query],
@@ -689,7 +736,7 @@ defmodule Hermit.Dns.Server do
         %{
           profile_id: profile_id,
           config_id: config.id,
-          client_ip: ip,
+          client_ip: client_ip,
           domain: query.domain,
           qtype: query.qtype,
           status: "blocked",
@@ -700,14 +747,13 @@ defmodule Hermit.Dns.Server do
         }
       )
 
-      state
+      {:ok, resp}
     else
       # 1. Lookup cache first (max optimization)
       case Cache.lookup(profile_id, query.domain, query.qtype) do
         {:ok, cached_packet, status, answer_log_info} ->
           <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
           resp_packet = query.id <> rest_packet
-          send_client_response(socket, ip, port, resp_packet)
 
           cached_answer =
             if status == "resolved" do
@@ -736,7 +782,7 @@ defmodule Hermit.Dns.Server do
             %{
               profile_id: profile_id,
               config_id: config.id,
-              client_ip: ip,
+              client_ip: client_ip,
               domain: query.domain,
               qtype: query.qtype,
               status: status,
@@ -747,18 +793,18 @@ defmodule Hermit.Dns.Server do
             }
           )
 
-          state
+          {:ok, resp_packet}
 
         :error ->
           # 2. Match custom rules
-          {action, redirect_val, proxy_pair_id, block_reason} =
-            case Rules.match(query.domain, state.custom_rules) do
-              {"block", nil, _} -> {"block", nil, nil, "custom_rule"}
-              {act, val, p_id} -> {act, val, p_id, nil}
+          {action, redirect_val, block_reason} =
+            case Rules.match(query.domain, custom_rules) do
+              {"block", nil, _} -> {"block", nil, "custom_rule"}
+              {act, val, _p_id} -> {act, val, nil}
             end
 
           # 3. Match dynamic blocklists if not matched by custom rules
-          {action, redirect_val, proxy_pair_id, block_reason, blocklist_id} =
+          {action, redirect_val, block_reason, blocklist_id} =
             if is_nil(action) do
               blocklists_list =
                 case config.blocklists do
@@ -786,12 +832,12 @@ defmodule Hermit.Dns.Server do
                     b -> b.name
                   end
 
-                {"block", nil, nil, matched_name, matched_id}
+                {"block", nil, matched_name, matched_id}
               else
-                {nil, nil, nil, nil, nil}
+                {nil, nil, nil, nil}
               end
             else
-              {action, redirect_val, proxy_pair_id, block_reason, nil}
+              {action, redirect_val, block_reason, nil}
             end
 
           case action do
@@ -817,15 +863,13 @@ defmodule Hermit.Dns.Server do
                 5
               )
 
-              send_client_response(socket, ip, port, resp)
-
               :telemetry.execute(
                 [:hermit, :dns, :query],
                 %{duration: 0},
                 %{
                   profile_id: profile_id,
                   config_id: config.id,
-                  client_ip: ip,
+                  client_ip: client_ip,
                   domain: query.domain,
                   qtype: query.qtype,
                   status: "blocked",
@@ -837,11 +881,12 @@ defmodule Hermit.Dns.Server do
                 }
               )
 
-              state
+              {:ok, resp}
 
             "redirect" when not is_nil(redirect_val) ->
               if query.qtype == :A do
                 resp = Packet.build_a_response(query.id, query.query_record, redirect_val)
+
                 # Store redirects in cache with 5s TTL
                 Cache.store(
                   profile_id,
@@ -853,15 +898,13 @@ defmodule Hermit.Dns.Server do
                   5
                 )
 
-                send_client_response(socket, ip, port, resp)
-
                 :telemetry.execute(
                   [:hermit, :dns, :query],
                   %{duration: 0},
                   %{
                     profile_id: profile_id,
                     config_id: config.id,
-                    client_ip: ip,
+                    client_ip: client_ip,
                     domain: query.domain,
                     qtype: query.qtype,
                     status: "redirected",
@@ -870,8 +913,11 @@ defmodule Hermit.Dns.Server do
                     enable_query_logging: enable_query_logging
                   }
                 )
+
+                {:ok, resp}
               else
                 resp = Packet.build_nxdomain(query.id, query.query_record)
+
                 # Store redirect failures in cache with 5s TTL
                 Cache.store(
                   profile_id,
@@ -883,15 +929,13 @@ defmodule Hermit.Dns.Server do
                   5
                 )
 
-                send_client_response(socket, ip, port, resp)
-
                 :telemetry.execute(
                   [:hermit, :dns, :query],
                   %{duration: 0},
                   %{
                     profile_id: profile_id,
                     config_id: config.id,
-                    client_ip: ip,
+                    client_ip: client_ip,
                     domain: query.domain,
                     qtype: query.qtype,
                     status: "redirected",
@@ -900,243 +944,267 @@ defmodule Hermit.Dns.Server do
                     enable_query_logging: enable_query_logging
                   }
                 )
+
+                {:ok, resp}
               end
 
-              state
+            _ ->
+              :miss
+          end
+      end
+    end
+  end
 
-            "forward_dns" when not is_nil(redirect_val) ->
-              if not is_nil(proxy_pair_id) and proxy_pair_id != "" do
-                {proxy_ports, state} = get_proxy_ports_for_pair(proxy_pair_id, state)
+  defp process_query_fast_path(socket, ip, port, packet, query, state) do
+    profile_id = state.profile_id
+    config = state.config
+    upstreams = state.upstreams
+
+    case do_resolve_fast_path(profile_id, config, state.custom_rules, packet, query, ip) do
+      {:ok, resp} ->
+        send_client_response(socket, ip, port, resp)
+        state
+
+      :miss ->
+        {action, redirect_val, proxy_pair_id} =
+          case Rules.match(query.domain, state.custom_rules) do
+            {act, val, p_id} -> {act, val, p_id}
+            _ -> {nil, nil, nil}
+          end
+
+        case action do
+          "forward_dns" when not is_nil(redirect_val) ->
+            if not is_nil(proxy_pair_id) and proxy_pair_id != "" do
+              {proxy_ports, state} = get_proxy_ports_for_pair(proxy_pair_id, state)
+
+              case proxy_ports do
+                {:ok, http_port, socks5_port} ->
+                  case parse_upstreams(redirect_val) do
+                    [] ->
+                      Logger.error(
+                        "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
+                      )
+
+                      servfail = Packet.build_servfail(query.id, query.query_record)
+                      send_client_response(socket, ip, port, servfail)
+                      state
+
+                    target_upstreams ->
+                      first_upstream = List.first(target_upstreams)
+
+                      case first_upstream do
+                        {:udp, _} when not is_nil(socks5_port) ->
+                          async_forward_to_udp_proxy(
+                            socket,
+                            ip,
+                            port,
+                            packet,
+                            query,
+                            first_upstream,
+                            socks5_port,
+                            proxy_pair_id,
+                            state
+                          )
+
+                        {:doh, url} when not is_nil(http_port) ->
+                          async_forward_to_proxy(
+                            socket,
+                            ip,
+                            port,
+                            packet,
+                            query,
+                            url,
+                            http_port,
+                            proxy_pair_id,
+                            state
+                          )
+
+                        _ ->
+                          Logger.error(
+                            "DNS Server: SOCKS5/HTTP proxy port missing for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
+                          )
+
+                          servfail = Packet.build_servfail(query.id, query.query_record)
+                          send_client_response(socket, ip, port, servfail)
+                          state
+                      end
+                  end
+
+                _ ->
+                  Logger.error(
+                    "DNS Server: Failed to get proxy ports for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
+                  )
+
+                  servfail = Packet.build_servfail(query.id, query.query_record)
+                  send_client_response(socket, ip, port, servfail)
+                  state
+              end
+            else
+              case parse_upstreams(redirect_val) do
+                [] ->
+                  Logger.error(
+                    "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
+                  )
+
+                  servfail = Packet.build_servfail(query.id, query.query_record)
+                  send_client_response(socket, ip, port, servfail)
+                  state
+
+                target_upstreams ->
+                  async_forward_to_upstream(
+                    socket,
+                    ip,
+                    port,
+                    packet,
+                    query,
+                    target_upstreams,
+                    state
+                  )
+              end
+            end
+
+          "forward_proxy" when not is_nil(redirect_val) ->
+            first_upstream = List.first(upstreams)
+
+            case first_upstream do
+              {:udp, _} ->
+                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
 
                 case proxy_ports do
-                  {:ok, http_port, socks5_port} ->
-                    case parse_upstreams(redirect_val) do
-                      [] ->
-                        Logger.error(
-                          "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
-                        )
-
-                        servfail = Packet.build_servfail(query.id, query.query_record)
-                        send_client_response(socket, ip, port, servfail)
-                        state
-
-                      target_upstreams ->
-                        first_upstream = List.first(target_upstreams)
-
-                        case first_upstream do
-                          {:udp, _} when not is_nil(socks5_port) ->
-                            async_forward_to_udp_proxy(
-                              socket,
-                              ip,
-                              port,
-                              packet,
-                              query,
-                              first_upstream,
-                              socks5_port,
-                              proxy_pair_id,
-                              state
-                            )
-
-                          {:doh, url} when not is_nil(http_port) ->
-                            async_forward_to_proxy(
-                              socket,
-                              ip,
-                              port,
-                              packet,
-                              query,
-                              url,
-                              http_port,
-                              proxy_pair_id,
-                              state
-                            )
-
-                          _ ->
-                            Logger.error(
-                              "DNS Server: SOCKS5/HTTP proxy port missing for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
-                            )
-
-                            servfail = Packet.build_servfail(query.id, query.query_record)
-                            send_client_response(socket, ip, port, servfail)
-                            state
-                        end
-                    end
-
-                  _ ->
-                    Logger.error(
-                      "DNS Server: Failed to get proxy ports for tunnel #{proxy_pair_id}, returning SERVFAIL to prevent DNS leak"
-                    )
-
-                    servfail = Packet.build_servfail(query.id, query.query_record)
-                    send_client_response(socket, ip, port, servfail)
-                    state
-                end
-              else
-                case parse_upstreams(redirect_val) do
-                  [] ->
-                    Logger.error(
-                      "DNS Server: Invalid target server IP/URL for forward_dns: #{redirect_val}, returning SERVFAIL"
-                    )
-
-                    servfail = Packet.build_servfail(query.id, query.query_record)
-                    send_client_response(socket, ip, port, servfail)
-                    state
-
-                  target_upstreams ->
-                    async_forward_to_upstream(
+                  {:ok, _http_port, socks5_port} when not is_nil(socks5_port) ->
+                    async_forward_to_udp_proxy(
                       socket,
                       ip,
                       port,
                       packet,
                       query,
-                      target_upstreams,
+                      first_upstream,
+                      socks5_port,
+                      redirect_val,
                       state
                     )
+
+                  _ ->
+                    Logger.error(
+                      "DNS Server: Failed to get SOCKS5 proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
+                    )
+
+                    servfail = Packet.build_servfail(query.id, query.query_record)
+                    send_client_response(socket, ip, port, servfail)
+
+                    :telemetry.execute(
+                      [:hermit, :dns, :query],
+                      %{duration: 0},
+                      %{
+                        profile_id: state.profile_id,
+                        config_id: state.config.id,
+                        client_ip: ip,
+                        domain: query.domain,
+                        qtype: query.qtype,
+                        status: "resolved",
+                        answer: "SERVFAIL",
+                        resolver: "Proxy Failure (UDP)",
+                        enable_query_logging: state.config.enable_query_logging
+                      }
+                    )
+
+                    state
                 end
-              end
 
-            "forward_proxy" when not is_nil(redirect_val) ->
-              first_upstream = List.first(upstreams)
+              {:doh, url} ->
+                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
 
-              case first_upstream do
-                {:udp, _} ->
-                  {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
-
-                  case proxy_ports do
-                    {:ok, _http_port, socks5_port} when not is_nil(socks5_port) ->
-                      async_forward_to_udp_proxy(
-                        socket,
-                        ip,
-                        port,
-                        packet,
-                        query,
-                        first_upstream,
-                        socks5_port,
-                        redirect_val,
-                        state
-                      )
-
-                    _ ->
-                      Logger.error(
-                        "DNS Server: Failed to get SOCKS5 proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
-                      )
-
-                      servfail = Packet.build_servfail(query.id, query.query_record)
-                      send_client_response(socket, ip, port, servfail)
-
-                      :telemetry.execute(
-                        [:hermit, :dns, :query],
-                        %{duration: 0},
-                        %{
-                          profile_id: state.profile_id,
-                          config_id: state.config.id,
-                          client_ip: ip,
-                          domain: query.domain,
-                          qtype: query.qtype,
-                          status: "resolved",
-                          answer: "SERVFAIL",
-                          resolver: "Proxy Failure (UDP)",
-                          enable_query_logging: state.config.enable_query_logging
-                        }
-                      )
-
+                case proxy_ports do
+                  {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
+                    async_forward_to_proxy(
+                      socket,
+                      ip,
+                      port,
+                      packet,
+                      query,
+                      url,
+                      http_port,
+                      redirect_val,
                       state
-                  end
+                    )
 
-                {:doh, url} ->
-                  {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                  _ ->
+                    Logger.error(
+                      "DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
+                    )
 
-                  case proxy_ports do
-                    {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
-                      async_forward_to_proxy(
-                        socket,
-                        ip,
-                        port,
-                        packet,
-                        query,
-                        url,
-                        http_port,
-                        redirect_val,
-                        state
-                      )
+                    servfail = Packet.build_servfail(query.id, query.query_record)
+                    send_client_response(socket, ip, port, servfail)
 
-                    _ ->
-                      Logger.error(
-                        "DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
-                      )
+                    :telemetry.execute(
+                      [:hermit, :dns, :query],
+                      %{duration: 0},
+                      %{
+                        profile_id: state.profile_id,
+                        config_id: state.config.id,
+                        client_ip: ip,
+                        domain: query.domain,
+                        qtype: query.qtype,
+                        status: "resolved",
+                        answer: "SERVFAIL",
+                        resolver: "Proxy Failure (DoH)",
+                        enable_query_logging: state.config.enable_query_logging
+                      }
+                    )
 
-                      servfail = Packet.build_servfail(query.id, query.query_record)
-                      send_client_response(socket, ip, port, servfail)
+                    state
+                end
 
-                      :telemetry.execute(
-                        [:hermit, :dns, :query],
-                        %{duration: 0},
-                        %{
-                          profile_id: state.profile_id,
-                          config_id: state.config.id,
-                          client_ip: ip,
-                          domain: query.domain,
-                          qtype: query.qtype,
-                          status: "resolved",
-                          answer: "SERVFAIL",
-                          resolver: "Proxy Failure (DoH)",
-                          enable_query_logging: state.config.enable_query_logging
-                        }
-                      )
+              _ ->
+                doh_url = "https://cloudflare-dns.com/dns-query"
 
+                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+
+                case proxy_ports do
+                  {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
+                    async_forward_to_proxy(
+                      socket,
+                      ip,
+                      port,
+                      packet,
+                      query,
+                      doh_url,
+                      http_port,
+                      redirect_val,
                       state
-                  end
+                    )
 
-                _ ->
-                  doh_url = "https://cloudflare-dns.com/dns-query"
+                  _ ->
+                    Logger.error(
+                      "DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
+                    )
 
-                  {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                    servfail = Packet.build_servfail(query.id, query.query_record)
+                    send_client_response(socket, ip, port, servfail)
 
-                  case proxy_ports do
-                    {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
-                      async_forward_to_proxy(
-                        socket,
-                        ip,
-                        port,
-                        packet,
-                        query,
-                        doh_url,
-                        http_port,
-                        redirect_val,
-                        state
-                      )
+                    :telemetry.execute(
+                      [:hermit, :dns, :query],
+                      %{duration: 0},
+                      %{
+                        profile_id: state.profile_id,
+                        config_id: state.config.id,
+                        client_ip: ip,
+                        domain: query.domain,
+                        qtype: query.qtype,
+                        status: "resolved",
+                        answer: "SERVFAIL",
+                        resolver: "Proxy Failure (DoH Fallback)",
+                        enable_query_logging: state.config.enable_query_logging
+                      }
+                    )
 
-                    _ ->
-                      Logger.error(
-                        "DNS Server: Failed to get HTTP proxy port for pair #{redirect_val}, returning SERVFAIL to prevent DNS leak"
-                      )
+                    state
+                end
+            end
 
-                      servfail = Packet.build_servfail(query.id, query.query_record)
-                      send_client_response(socket, ip, port, servfail)
-
-                      :telemetry.execute(
-                        [:hermit, :dns, :query],
-                        %{duration: 0},
-                        %{
-                          profile_id: state.profile_id,
-                          config_id: state.config.id,
-                          client_ip: ip,
-                          domain: query.domain,
-                          qtype: query.qtype,
-                          status: "resolved",
-                          answer: "SERVFAIL",
-                          resolver: "Proxy Failure (DoH Fallback)",
-                          enable_query_logging: state.config.enable_query_logging
-                        }
-                      )
-
-                      state
-                  end
-              end
-
-            _ ->
-              async_forward_to_upstream(socket, ip, port, packet, query, upstreams, state)
-          end
-      end
+          _ ->
+            async_forward_to_upstream(socket, ip, port, packet, query, upstreams, state)
+        end
     end
   end
 
@@ -1151,16 +1219,18 @@ defmodule Hermit.Dns.Server do
       send_client_response(socket, ip, port, servfail)
       state
     else
-      # Sinh transaction ID 16-bit tuan tu khong trung lap
-      upstream_tx_id = generate_unique_tx_id(state.pending_table)
+      now = System.monotonic_time(:millisecond)
+      upstreams_tuple = List.to_tuple(sorted_upstreams)
+      query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
+
+      # Sinh và đăng ký transaction ID 16-bit nguyên tử (atomic) chống race condition
+      upstream_tx_id = register_unique_pending_query(state.pending_table, query_info)
       upstream_tx_id_bin = <<upstream_tx_id::16>>
 
       # Rewrite Transaction ID trong gói tin gửi đi
       <<_old_id::binary-size(2), rest_packet::binary>> = packet
       rewritten_packet = upstream_tx_id_bin <> rest_packet
       final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
-
-      now = System.monotonic_time(:millisecond)
 
       # Send asynchronously to the first upstream in the sorted list (index 0)
       first_upstream = hd(sorted_upstreams)
@@ -1172,12 +1242,6 @@ defmodule Hermit.Dns.Server do
         final_packet,
         state.server_pid
       )
-
-      # Save query context in pending_queries table
-      # Struct: {client_ip, client_port, original_query, sent_at, target_upstreams_tuple, current_index, original_tx_id}
-      upstreams_tuple = List.to_tuple(sorted_upstreams)
-      query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
-      :ets.insert(state.pending_table, {upstream_tx_id, query_info})
 
       state
     end
@@ -1598,15 +1662,17 @@ defmodule Hermit.Dns.Server do
     server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 
-    # Sinh transaction ID 16-bit tuan tu khong trung lap
-    upstream_tx_id = generate_unique_tx_id(state.pending_table)
+    now = System.monotonic_time(:millisecond)
+    upstreams_tuple = {{:doh_proxy, doh_url, pair_id}}
+    query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
+
+    # Sinh và đăng ký transaction ID 16-bit nguyên tử (atomic) chống race condition
+    upstream_tx_id = register_unique_pending_query(state.pending_table, query_info)
     upstream_tx_id_bin = <<upstream_tx_id::16>>
 
     <<_old_id::binary-size(2), rest_packet::binary>> = packet
     rewritten_packet = upstream_tx_id_bin <> rest_packet
     final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
-
-    now = System.monotonic_time(:millisecond)
 
     Task.start(fn ->
       start = System.monotonic_time()
@@ -1648,10 +1714,6 @@ defmodule Hermit.Dns.Server do
       end
     end)
 
-    upstreams_tuple = {{:doh_proxy, doh_url, pair_id}}
-    query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
-    :ets.insert(state.pending_table, {upstream_tx_id, query_info})
-
     state
   end
 
@@ -1670,16 +1732,6 @@ defmodule Hermit.Dns.Server do
     server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 
-    # Sinh transaction ID 16-bit tuan tu khong trung lap
-    upstream_tx_id = generate_unique_tx_id(state.pending_table)
-    upstream_tx_id_bin = <<upstream_tx_id::16>>
-
-    <<_old_id::binary-size(2), rest_packet::binary>> = packet
-    rewritten_packet = upstream_tx_id_bin <> rest_packet
-    final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
-
-    now = System.monotonic_time(:millisecond)
-
     {target_ip, target_port} =
       case udp_upstream do
         {:udp, {tip, tport}} -> {tip, tport}
@@ -1688,6 +1740,18 @@ defmodule Hermit.Dns.Server do
 
     target_ip_str = ip_to_string(target_ip)
     udp_proxy_url = "udp://#{target_ip_str}:#{target_port}"
+
+    now = System.monotonic_time(:millisecond)
+    upstreams_tuple = {{:doh_proxy, udp_proxy_url, pair_id}}
+    query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
+
+    # Sinh và đăng ký transaction ID 16-bit nguyên tử (atomic) chống race condition
+    upstream_tx_id = register_unique_pending_query(state.pending_table, query_info)
+    upstream_tx_id_bin = <<upstream_tx_id::16>>
+
+    <<_old_id::binary-size(2), rest_packet::binary>> = packet
+    rewritten_packet = upstream_tx_id_bin <> rest_packet
+    final_packet = maybe_inject_ecs(rewritten_packet, ip, state)
 
     Task.start(fn ->
       start = System.monotonic_time()
@@ -1721,10 +1785,6 @@ defmodule Hermit.Dns.Server do
           send(server_pid, {:doh_failure, upstream_tx_id, udp_proxy_url})
       end
     end)
-
-    upstreams_tuple = {{:doh_proxy, udp_proxy_url, pair_id}}
-    query_info = {ip, port, query, now, upstreams_tuple, 0, query.id}
-    :ets.insert(state.pending_table, {upstream_tx_id, query_info})
 
     state
   end
@@ -1855,21 +1915,25 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp generate_unique_tx_id(pending_table) do
+  defp register_unique_pending_query(pending_table, query_info) do
     base_id = rem(System.unique_integer([:positive, :monotonic]), 65535) + 1
-    find_available_tx_id(pending_table, base_id, 0)
+    do_register_pending_query(pending_table, query_info, base_id, 0)
   end
 
-  defp find_available_tx_id(pending_table, candidate_id, retries) when retries < 100 do
-    if :ets.member(pending_table, candidate_id) do
-      next_candidate = if candidate_id >= 65535, do: 1, else: candidate_id + 1
-      find_available_tx_id(pending_table, next_candidate, retries + 1)
-    else
+  defp do_register_pending_query(pending_table, query_info, candidate_id, retries)
+       when retries < 100 do
+    if :ets.insert_new(pending_table, {candidate_id, query_info}) do
       candidate_id
+    else
+      next_candidate = if candidate_id >= 65535, do: 1, else: candidate_id + 1
+      do_register_pending_query(pending_table, query_info, next_candidate, retries + 1)
     end
   end
 
-  defp find_available_tx_id(_pending_table, candidate_id, _retries), do: candidate_id
+  defp do_register_pending_query(pending_table, query_info, candidate_id, _retries) do
+    :ets.insert(pending_table, {candidate_id, query_info})
+    candidate_id
+  end
 
   defp mock?, do: Hermit.mock?()
 end

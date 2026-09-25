@@ -216,8 +216,29 @@
               </div>
 
               <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
-                <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
-                  {@pair.ts_error_reason}
+                <div class="bg-red-500/10 border border-red-500/30 rounded-[10px] p-4 text-xs space-y-2">
+                  <div class="flex items-start gap-2.5">
+                    <.icon name="hero-exclamation-circle" class="size-5 text-red-500 shrink-0 mt-0.5" />
+                    <div class="space-y-1">
+                      <div class="font-semibold text-red-500 text-sm">
+                        Tailscale Inbound Error
+                      </div>
+                      <div class="text-red-400 font-mono text-xs whitespace-pre-wrap">
+                        {@pair.ts_error_reason}
+                      </div>
+                    </div>
+                  </div>
+                  <%= if (String.contains?(@pair.ts_error_reason, "Auth Key") or String.contains?(@pair.ts_error_reason, "key")) and Map.get(@pair, :inbound_profile_id) do %>
+                    <div class="pt-2 border-t border-red-500/20 flex items-center justify-between">
+                      <span class="text-base-content/70 text-xs">Auth Key may have expired or been revoked.</span>
+                      <.link
+                        navigate={~p"/inbounds/#{Map.get(@pair, :inbound_profile_id)}?tab=config"}
+                        class="btn btn-xs btn-error text-white font-semibold"
+                      >
+                        Update Auth Key
+                      </.link>
+                    </div>
+                  <% end %>
                 </div>
               <% end %>
 
@@ -592,8 +613,29 @@
             </div>
 
             <%= if @pair.wg_status == :error and @pair.wg_error_reason do %>
-              <div class="bg-red-500/5 border border-red-500/20 rounded-[8px] p-3 text-xs text-red-500 whitespace-pre-wrap font-mono">
-                {@pair.wg_error_reason}
+              <div class="bg-red-500/10 border border-red-500/30 rounded-[10px] p-4 text-xs space-y-2">
+                <div class="flex items-start gap-2.5">
+                  <.icon name="hero-exclamation-circle" class="size-5 text-red-500 shrink-0 mt-0.5" />
+                  <div class="space-y-1">
+                    <div class="font-semibold text-red-500 text-sm">
+                      WireGuard Outbound Error
+                    </div>
+                    <div class="text-red-400 font-mono text-xs whitespace-pre-wrap">
+                      {@pair.wg_error_reason}
+                    </div>
+                  </div>
+                </div>
+                <%= if Map.get(@pair, :outbound_profile_id) do %>
+                  <div class="pt-2 border-t border-red-500/20 flex items-center justify-between">
+                    <span class="text-base-content/70 text-xs">Verify WireGuard keys, server endpoint, or network.</span>
+                    <.link
+                      navigate={~p"/outbounds/#{Map.get(@pair, :outbound_profile_id)}?tab=config"}
+                      class="btn btn-xs btn-warning text-white font-semibold"
+                    >
+                      Check Outbound Config
+                    </.link>
+                  </div>
+                <% end %>
               </div>
             <% end %>
 
@@ -717,12 +759,6 @@
             </div>
             <div class="text-2xl font-bold mt-1 font-mono">
               <%= case Map.get(@pair.metrics, :latency) do %>
-                <% nil -> %>
-                  <%= if @pair.status in [:running, :starting_wg, :starting_ts] do %>
-                    <span class="text-base-content/40">Checking...</span>
-                  <% else %>
-                    <span class="text-base-content/40">-</span>
-                  <% end %>
                 <% :error -> %>
                   <span class="text-red-500 font-semibold">Timeout/Error</span>
                 <% :n_a -> %>

@@ -4,15 +4,20 @@ defmodule HermitWeb.InboundLive do
   alias Hermit.Vpn.InboundProfile
   alias Hermit.Vpn.DnsEndpoint
   alias Hermit.Vpn.DnsWorker
-  require Logger
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "vpn_pairs")
+    end
+
     inbound_profiles = Hermit.Repo.all(InboundProfile)
+    inbound_errors = compute_inbound_errors()
 
     {:ok,
      socket
      |> assign(inbound_profiles: inbound_profiles)
+     |> assign(inbound_errors: inbound_errors)
      |> assign(show_create_modal: false)
      |> assign_inbound_form()}
   end
@@ -118,7 +123,50 @@ defmodule HermitWeb.InboundLive do
     end
   end
 
+  # --- PubSub Handling ---
+
+  @impl true
+  def handle_info({:vpn_pair_updated, state}, socket) do
+    current = socket.assigns[:inbound_errors] || %{}
+
+    updated =
+      cond do
+        state.ts_status == :error and state.inbound_profile_id ->
+          Map.put(current, state.inbound_profile_id, state.ts_error_reason)
+
+        state.inbound_profile_id && Map.has_key?(current, state.inbound_profile_id) ->
+          compute_inbound_errors()
+
+        true ->
+          current
+      end
+
+    if updated == current do
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, inbound_errors: updated)}
+    end
+  end
+
+  @impl true
+  def handle_info({:vpn_pair_deleted, _id}, socket) do
+    {:noreply, assign(socket, inbound_errors: compute_inbound_errors())}
+  end
+
   # --- Helpers ---
+
+  defp compute_inbound_errors do
+    try do
+      Hermit.Vpn.PairWorker.list_pairs()
+      |> Enum.filter(fn p ->
+        p.ts_status == :error and not is_nil(p.ts_error_reason) and not is_nil(p.inbound_profile_id)
+      end)
+      |> Enum.map(fn p -> {p.inbound_profile_id, p.ts_error_reason} end)
+      |> Enum.into(%{})
+    rescue
+      _ -> %{}
+    end
+  end
 
   defp assign_inbound_form(socket) do
     changeset = InboundProfile.changeset(%InboundProfile{type: "tailscale"}, %{})

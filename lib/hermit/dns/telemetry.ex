@@ -183,6 +183,8 @@ defmodule Hermit.Dns.Telemetry do
               Repo.all(from(d in Hermit.Vpn.DnsConfig, select: d.id))
             rescue
               _ -> Map.get(state, :cached_config_ids, [])
+            catch
+              _, _ -> Map.get(state, :cached_config_ids, [])
             end
 
           {ids, now}

@@ -3,7 +3,6 @@ defmodule HermitWeb.DashboardLive do
   alias Hermit.Vpn.Form
   alias Hermit.Vpn.PairWorker
   alias Hermit.Vpn.DynamicSupervisor
-  require Logger
 
   @topic "vpn_pairs"
 
@@ -15,12 +14,14 @@ defmodule HermitWeb.DashboardLive do
     end
 
     pairs = PairWorker.list_pairs()
+    error_tunnels = Enum.filter(pairs, fn p -> p.ts_status == :error or p.wg_status == :error end)
     inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile)
     outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
 
     {:ok,
      socket
      |> stream(:vpn_pairs, pairs)
+     |> assign(error_tunnels: error_tunnels)
      |> assign(inbound_profiles: inbound_profiles)
      |> assign(outbound_profiles: outbound_profiles)
      |> assign(show_create_modal: false)
@@ -167,8 +168,12 @@ defmodule HermitWeb.DashboardLive do
         {:noreply, put_flash(socket, :info, "VPN Pair '#{id}' deleted.")}
 
       {:error, :not_found} ->
+        current_errors = socket.assigns[:error_tunnels] || []
+        updated_errors = Enum.reject(current_errors, &(&1.id == id))
+
         {:noreply,
          socket
+         |> assign(error_tunnels: updated_errors)
          |> stream_delete(:vpn_pairs, %{id: id})
          |> put_flash(:info, "VPN Pair '#{id}' deleted.")}
     end
@@ -178,39 +183,57 @@ defmodule HermitWeb.DashboardLive do
 
   @impl true
   def handle_info({:vpn_pair_updated, state}, socket) do
-    {:noreply, stream_insert(socket, :vpn_pairs, state)}
+    current_errors = socket.assigns[:error_tunnels] || []
+
+    updated_errors =
+      current_errors
+      |> Enum.reject(&(&1.id == state.id))
+      |> then(fn list ->
+        if state.ts_status == :error or state.wg_status == :error do
+          [state | list]
+        else
+          list
+        end
+      end)
+
+    {:noreply,
+     socket
+     |> assign(error_tunnels: updated_errors)
+     |> stream_insert(:vpn_pairs, state)}
   end
 
   @impl true
   def handle_info({:vpn_pair_deleted, id}, socket) do
-    {:noreply, stream_delete(socket, :vpn_pairs, %{id: id})}
+    current_errors = socket.assigns[:error_tunnels] || []
+    updated_errors = Enum.reject(current_errors, &(&1.id == id))
+
+    {:noreply,
+     socket
+     |> assign(error_tunnels: updated_errors)
+     |> stream_delete(:vpn_pairs, %{id: id})}
   end
 
   # --- Helpers ---
+
+  def summarize_error(nil), do: ""
+
+  def summarize_error(reason) when is_binary(reason) do
+    cond do
+      String.contains?(reason, "Auth Key") -> "Auth Key Invalid / Expired"
+      String.contains?(reason, "ACL Tag") -> "ACL Tag Not Found"
+      String.contains?(reason, "Handshake Refused") -> "Handshake Refused"
+      String.contains?(reason, "Handshake Timeout") -> "Handshake Timeout"
+      String.contains?(reason, "Node Key") -> "Node Key Expired"
+      true -> String.slice(reason, 0, 45)
+    end
+  end
+
+  def summarize_error(reason), do: inspect(reason) |> String.slice(0, 45)
 
   defp assign_form(socket) do
     changeset = Form.changeset(%Form{}, %{})
     assign(socket, form: to_form(changeset))
   end
 
-  def format_uptime(nil), do: "-"
-
-  def format_uptime(started_at) do
-    diff = max(0, System.system_time(:second) - started_at)
-
-    cond do
-      diff < 60 -> "#{diff}s"
-      diff < 3600 -> "#{div(diff, 60)}m #{rem(diff, 60)}s"
-      true -> "#{div(diff, 3600)}h #{rem(div(diff, 60), 60)}m"
-    end
-  end
-
   def format_bytes(bytes), do: Hermit.format_bytes(bytes)
-
-  def format_dns_time(timestamp) do
-    case DateTime.from_unix(timestamp) do
-      {:ok, datetime} -> Calendar.strftime(datetime, "%H:%M:%S")
-      _ -> "-"
-    end
-  end
 end

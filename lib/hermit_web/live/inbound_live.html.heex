@@ -19,6 +19,18 @@
     </div>
   </header>
 
+  <%= if map_size(@inbound_errors) > 0 do %>
+    <div class="bg-red-500/10 border border-red-500/30 rounded-[12px] p-4 text-sm text-base-content space-y-2 shadow-sm">
+      <div class="flex items-center gap-2 font-semibold text-red-500">
+        <.icon name="hero-exclamation-triangle" class="size-5 text-red-500 shrink-0" />
+        <span>One or more Inbound Profiles have active tunnel errors:</span>
+      </div>
+      <p class="text-xs text-base-content/70">
+        Active VPN tunnels are unable to authenticate with Tailscale. Please check and update the Auth Key or ACL configuration.
+      </p>
+    </div>
+  <% end %>
+
   <!-- List Inbound Profiles -->
   <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
     <div class="overflow-x-auto">
@@ -43,7 +55,24 @@
               :for={profile <- @inbound_profiles}
               class="hover:bg-base-200/50 transition-colors"
             >
-              <td class="py-4 px-4 font-semibold text-base-content">{profile.name}</td>
+              <td class="py-4 px-4 font-semibold text-base-content">
+                <div class="flex items-center gap-2">
+                  <span>{profile.name}</span>
+                  <%= if err = Map.get(@inbound_errors, profile.id) do %>
+                    <span
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-500/10 text-red-500 border border-red-500/20"
+                      title={err}
+                    >
+                      <.icon name="hero-exclamation-triangle" class="size-3 text-red-500" />
+                      <%= if String.contains?(err, "Auth Key") do %>
+                        Auth Key Error
+                      <% else %>
+                        Connection Error
+                      <% end %>
+                    </span>
+                  <% end %>
+                </div>
+              </td>
               <td class="py-4 px-4">
                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 uppercase font-mono">
                   {profile.type}

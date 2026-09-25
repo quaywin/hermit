@@ -19,6 +19,63 @@
     </div>
   </header>
 
+  <%= if @error_tunnels != [] do %>
+    <div class="bg-red-500/10 border border-red-500/30 rounded-[12px] p-4 text-sm text-base-content space-y-3 shadow-sm">
+      <div class="flex items-center gap-2 font-semibold text-red-500">
+        <.icon name="hero-exclamation-triangle" class="size-5 text-red-500 shrink-0" />
+        <span>{length(@error_tunnels)} VPN Tunnel(s) encountered errors and need attention:</span>
+      </div>
+      <div class="space-y-2">
+        <%= for tunnel <- @error_tunnels do %>
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-base-100 rounded-[8px] border border-red-500/20">
+            <div class="space-y-1">
+              <div class="flex items-center gap-2">
+                <span class="font-mono font-bold text-base-content">{tunnel.id}</span>
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-500/10 text-red-500 border border-red-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                </span>
+              </div>
+              <div class="text-xs text-red-500 font-medium">
+                {tunnel.ts_error_reason || tunnel.wg_error_reason || "Connection Error"}
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 shrink-0">
+              <%= if tunnel.ts_status == :error and Map.get(tunnel, :inbound_profile_id) do %>
+                <.link
+                  navigate={~p"/inbounds/#{Map.get(tunnel, :inbound_profile_id)}?tab=config"}
+                  class="btn btn-xs btn-error text-white font-medium text-xs"
+                >
+                  Update Inbound Key
+                </.link>
+              <% end %>
+              <%= if tunnel.wg_status == :error and Map.get(tunnel, :outbound_profile_id) do %>
+                <.link
+                  navigate={~p"/outbounds/#{Map.get(tunnel, :outbound_profile_id)}?tab=config"}
+                  class="btn btn-xs btn-warning text-white font-medium text-xs"
+                >
+                  Check Outbound
+                </.link>
+              <% end %>
+              <.link
+                navigate={~p"/tunnels/#{tunnel.id}"}
+                class="btn btn-xs btn-ghost border border-base-300 font-medium text-xs"
+              >
+                View Details
+              </.link>
+              <button
+                phx-click="restart_tunnel"
+                phx-value-id={tunnel.id}
+                class="btn btn-xs btn-primary font-medium text-xs"
+              >
+                Restart
+              </button>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+
   <!-- Live Datagrid for Tunnels -->
   <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm">
     <div class="w-full overflow-x-auto">
@@ -98,12 +155,22 @@
                     <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
                   </span>
                 <% :error -> %>
-                  <span
-                    class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
-                    title={pair.ts_error_reason}
-                  >
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                  </span>
+                  <div class="space-y-1">
+                    <span
+                      class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
+                      title={pair.ts_error_reason}
+                    >
+                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                    </span>
+                    <%= if pair.ts_error_reason do %>
+                      <div class="flex items-center gap-1 text-[11px] text-red-500 font-medium" title={pair.ts_error_reason}>
+                        <.icon name="hero-exclamation-triangle" class="size-3.5 shrink-0 text-red-500" />
+                        <span class="truncate max-w-[130px]">
+                          {summarize_error(pair.ts_error_reason)}
+                        </span>
+                      </div>
+                    <% end %>
+                  </div>
               <% end %>
             </td>
             <td class="py-4 px-4">
@@ -123,12 +190,22 @@
                     <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
                   </span>
                 <% :error -> %>
-                  <span
-                    class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
-                    title={pair.wg_error_reason}
-                  >
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                  </span>
+                  <div class="space-y-1">
+                    <span
+                      class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
+                      title={pair.wg_error_reason}
+                    >
+                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                    </span>
+                    <%= if pair.wg_error_reason do %>
+                      <div class="flex items-center gap-1 text-[11px] text-red-500 font-medium" title={pair.wg_error_reason}>
+                        <.icon name="hero-exclamation-triangle" class="size-3.5 shrink-0 text-red-500" />
+                        <span class="truncate max-w-[130px]">
+                          {summarize_error(pair.wg_error_reason)}
+                        </span>
+                      </div>
+                    <% end %>
+                  </div>
               <% end %>
             </td>
             <td class="py-4 px-4 text-xs font-mono text-base-content/60">

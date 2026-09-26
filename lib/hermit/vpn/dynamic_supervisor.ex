@@ -44,7 +44,7 @@ defmodule Hermit.Vpn.DynamicSupervisor do
             inbound_config
           else
             if existing_pair.inbound_config && map_size(existing_pair.inbound_config) > 0 do
-              existing_pair.inbound_config
+              Map.merge(existing_pair.inbound_config, inbound_config)
             else
               inbound_config
             end
@@ -55,7 +55,7 @@ defmodule Hermit.Vpn.DynamicSupervisor do
             outbound_config
           else
             if existing_pair.outbound_config && map_size(existing_pair.outbound_config) > 0 do
-              existing_pair.outbound_config
+              Map.merge(existing_pair.outbound_config, outbound_config)
             else
               outbound_config
             end

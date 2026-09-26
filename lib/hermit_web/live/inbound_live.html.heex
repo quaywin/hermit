@@ -201,6 +201,16 @@
                   />
                 </div>
                 <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Login Server (Optional, Headscale)</label>
+                  <input
+                    type="text"
+                    name="inbound_profile[config][login_server]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["login_server"]}
+                    placeholder="e.g., https://controlplane.tailscale.com"
+                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                  />
+                </div>
+                <div class="space-y-1.5">
                   <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Port Range (Optional, default: 41642-41700)</label>
                   <input
                     type="text"

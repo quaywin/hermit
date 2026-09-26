@@ -118,7 +118,8 @@ defmodule HermitWeb.OutboundLive do
     changeset = OutboundProfile.changeset(profile, params)
 
     case Hermit.Repo.update(changeset) do
-      {:ok, _profile} ->
+      {:ok, updated_profile} ->
+        sync_and_restart_linked_vpn_pairs(updated_profile)
         outbound_profiles = Hermit.Repo.all(OutboundProfile)
 
         {:noreply,
@@ -208,5 +209,55 @@ defmodule HermitWeb.OutboundLive do
   defp assign_outbound_form(socket) do
     changeset = OutboundProfile.changeset(%OutboundProfile{type: "wireguard"}, %{})
     assign(socket, outbound_form: to_form(changeset))
+  end
+
+  defp sync_and_restart_linked_vpn_pairs(updated_profile) do
+    pairs =
+      Hermit.Repo.all(
+        from(p in Hermit.Vpn.VpnPair, where: p.outbound_profile_id == ^updated_profile.id)
+      )
+
+    profile_keys = [
+      "wg_config",
+      "local_ip",
+      "host_ip"
+    ]
+
+    Enum.each(pairs, fn pair ->
+      existing_config = pair.outbound_config || %{}
+
+      cleaned_config =
+        Map.drop(
+          existing_config,
+          profile_keys ++ Enum.map(profile_keys, &String.to_atom/1)
+        )
+
+      new_pair_config = Map.merge(cleaned_config, updated_profile.config || %{})
+
+      pair
+      |> Hermit.Vpn.VpnPair.changeset(%{
+        outbound_type: updated_profile.type,
+        outbound_config: new_pair_config
+      })
+      |> Hermit.Repo.update!()
+
+      case GenServer.whereis({:via, Registry, {Hermit.Vpn.Registry, pair.pair_id}}) do
+        nil ->
+          :ok
+
+        pid ->
+          try do
+            state = GenServer.call(pid, :get_state)
+
+            if state.wg_status in [:running, :starting, :error] do
+              Hermit.Vpn.PairWorker.restart_pair(pair.pair_id)
+            else
+              DynamicSupervisor.terminate_child(Hermit.Vpn.DynamicSupervisor, pid)
+            end
+          catch
+            :exit, _ -> :ok
+          end
+      end
+    end)
   end
 end

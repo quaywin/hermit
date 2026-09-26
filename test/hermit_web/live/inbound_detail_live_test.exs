@@ -61,6 +61,27 @@ defmodule HermitWeb.InboundDetailLiveTest do
       }
     }
 
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound",
+        type: "wireguard",
+        config: %{"wg_config" => "[Interface]\nPrivateKey = pkey\n"}
+      })
+
+    {:ok, _vpn_pair} =
+      Hermit.Repo.insert(%Hermit.Vpn.VpnPair{
+        pair_id: "test_linked_pair",
+        inbound_profile_id: inbound_profile.id,
+        outbound_profile_id: outbound_profile.id,
+        status: "running",
+        wg_status: "stopped",
+        ts_status: "stopped",
+        inbound_config: %{
+          "ts_auth_key" => "tskey-old",
+          "advertise_exit_node" => true
+        }
+      })
+
     html =
       view
       |> form("#edit-inbound-profile-form", valid_form)
@@ -69,10 +90,14 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert html =~ "Inbound Profile updated successfully"
     assert html =~ "inbound_updated"
 
-    # Verify update in DB
+    # Verify update in DB for both profile and linked VPN pairs
     updated = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, inbound_profile.id)
     assert updated.name == "inbound_updated"
     assert updated.config["ts_auth_key"] == "tskey-new"
+
+    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_linked_pair")
+    assert updated_pair.inbound_config["ts_auth_key"] == "tskey-new"
+    assert updated_pair.inbound_config["advertise_exit_node"] == true
   end
 
   test "delete_inbound via details view", %{conn: conn} do

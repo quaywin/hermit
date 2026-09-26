@@ -62,6 +62,19 @@ defmodule Hermit.Vpn.DnsWorker do
     Process.flag(:trap_exit, true)
     endpoint_id = opts[:endpoint_id]
     inbound_profile_id = opts[:inbound_profile_id]
+
+    if :erlang.whereis(Hermit.PubSub) != :undefined do
+      try do
+        config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
+
+        if config && config.id do
+          Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
+        end
+      rescue
+        _ -> :ok
+      end
+    end
+
     # Perform initial sync on startup
     send(self(), :initial_sync)
     {:ok, %__MODULE__{endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id}}
@@ -80,6 +93,12 @@ defmodule Hermit.Vpn.DnsWorker do
 
   @impl true
   def handle_info(:initial_sync, state) do
+    {_, new_state} = do_sync_state(state)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info({:dns_config_updated, _updated_config}, state) do
     {_, new_state} = do_sync_state(state)
     {:noreply, new_state}
   end

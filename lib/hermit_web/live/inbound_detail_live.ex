@@ -75,6 +75,9 @@ defmodule HermitWeb.InboundDetailLive do
         # Reboot all active DNS endpoints linked to this Inbound Profile if credentials changed
         reboot_linked_dns_endpoints(updated_profile.id)
 
+        # Synchronize and restart linked VPN pairs with updated inbound credentials
+        sync_and_restart_linked_vpn_pairs(updated_profile)
+
         reloaded_profile = Hermit.Repo.get!(InboundProfile, updated_profile.id)
         changeset_new = InboundProfile.changeset(reloaded_profile, %{})
 
@@ -323,12 +326,77 @@ defmodule HermitWeb.InboundDetailLive do
     Enum.each(endpoints, fn endpoint ->
       {status, _, _} = DnsWorker.get_status(endpoint.id)
 
-      if status == :running do
+      if status in [:running, :starting, :error] do
         Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
 
         if endpoint.enabled do
           Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, inbound_profile_id)
         end
+      else
+        if endpoint.enabled do
+          Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, inbound_profile_id)
+        end
+      end
+    end)
+  end
+
+  defp sync_and_restart_linked_vpn_pairs(updated_profile) do
+    pairs =
+      Hermit.Repo.all(
+        from(p in Hermit.Vpn.VpnPair, where: p.inbound_profile_id == ^updated_profile.id)
+      )
+
+    profile_keys = [
+      "ts_auth_key",
+      "ts_api_key",
+      "ts_tailnet",
+      "ts_port_range",
+      "ts_port",
+      "port",
+      "login_server"
+    ]
+
+    Enum.each(pairs, fn pair ->
+      existing_config = pair.inbound_config || %{}
+
+      cleaned_config =
+        Map.drop(
+          existing_config,
+          profile_keys ++ Enum.map(profile_keys, &String.to_atom/1)
+        )
+
+      new_pair_config = Map.merge(cleaned_config, updated_profile.config || %{})
+
+      pair
+      |> Hermit.Vpn.VpnPair.changeset(%{
+        inbound_type: updated_profile.type,
+        inbound_config: new_pair_config
+      })
+      |> Hermit.Repo.update!()
+
+      case GenServer.whereis({:via, Registry, {Hermit.Vpn.Registry, pair.pair_id}}) do
+        nil ->
+          :ok
+
+        pid ->
+          try do
+            GenServer.call(pid, {:set_inbound_config, new_pair_config})
+
+            state = GenServer.call(pid, :get_state)
+
+            cond do
+              state.inbound_type != updated_profile.type and pair.status == "running" ->
+                Hermit.Vpn.PairWorker.restart_pair(pair.pair_id)
+
+              state.ts_status in [:running, :starting, :error] and state.wg_status == :running ->
+                GenServer.call(pid, {:restart_ts})
+
+              true ->
+                :ok
+            end
+          catch
+            :exit, _ -> :ok
+          end
       end
     end)
   end

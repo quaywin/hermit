@@ -57,6 +57,28 @@ defmodule HermitWeb.OutboundLiveTest do
 
     assert html =~ "Edit Outbound Profile"
 
+    # Create an inbound profile and a linked vpn pair to verify sync
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_for_outbound_test",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-1"}
+      })
+
+    {:ok, _vpn_pair} =
+      Hermit.Repo.insert(%Hermit.Vpn.VpnPair{
+        pair_id: "test_linked_outbound_pair",
+        inbound_profile_id: inbound_profile.id,
+        outbound_profile_id: profile.id,
+        status: "stopped",
+        wg_status: "stopped",
+        ts_status: "stopped",
+        outbound_config: %{
+          "wg_config" => "old_key",
+          "use_tailscale_dns" => true
+        }
+      })
+
     # Save edit with updated name
     edit_form = %{
       "outbound_profile" => %{
@@ -75,6 +97,13 @@ defmodule HermitWeb.OutboundLiveTest do
 
     assert html =~ "Outbound Profile updated successfully"
     assert html =~ "Mullvad WG US Updated"
+
+    # Verify linked pair was updated in DB
+    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_linked_outbound_pair")
+    assert updated_pair.outbound_config["wg_config"] == "[Interface]\nPrivateKey = outbound_test_key_updated\n"
+    assert updated_pair.outbound_config["use_tailscale_dns"] == true
+
+    Hermit.Repo.delete_all(from(p in Hermit.Vpn.VpnPair, where: p.pair_id == "test_linked_outbound_pair"))
 
     # Delete the profile
     html =

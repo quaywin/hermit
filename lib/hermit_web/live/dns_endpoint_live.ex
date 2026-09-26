@@ -202,9 +202,16 @@ defmodule HermitWeb.DnsEndpointLive do
         # Reboot DNS node if it was running with old config
         {status, _, _} = DnsWorker.get_status(updated_endpoint.id)
 
-        if status == :running do
+        if status in [:running, :starting, :error] do
           Hermit.Vpn.DnsSupervisor.stop_dns(updated_endpoint.id)
 
+          if updated_endpoint.enabled do
+            Hermit.Vpn.DnsSupervisor.start_dns(
+              updated_endpoint.id,
+              updated_endpoint.inbound_profile_id
+            )
+          end
+        else
           if updated_endpoint.enabled do
             Hermit.Vpn.DnsSupervisor.start_dns(
               updated_endpoint.id,

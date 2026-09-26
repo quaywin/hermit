@@ -396,7 +396,11 @@ defmodule HermitWeb.TunnelDetailLive do
 
       vpn_pair ->
         vpn_pair = Hermit.Repo.preload(vpn_pair, :outbound_profile)
-        wg_config = vpn_pair.outbound_profile && vpn_pair.outbound_profile.config["wg_config"]
+
+        wg_config =
+          (vpn_pair.outbound_config && vpn_pair.outbound_config["wg_config"]) ||
+            (vpn_pair.outbound_profile && vpn_pair.outbound_profile.config["wg_config"])
+
         vpn_pair = %{vpn_pair | wg_config: wg_config}
         changeset = Hermit.Vpn.VpnPair.changeset(vpn_pair, %{})
 
@@ -417,7 +421,11 @@ defmodule HermitWeb.TunnelDetailLive do
     id = socket.assigns.id
     vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
     vpn_pair = Hermit.Repo.preload(vpn_pair, :outbound_profile)
-    wg_config = vpn_pair.outbound_profile && vpn_pair.outbound_profile.config["wg_config"]
+
+    wg_config =
+      (vpn_pair.outbound_config && vpn_pair.outbound_config["wg_config"]) ||
+        (vpn_pair.outbound_profile && vpn_pair.outbound_profile.config["wg_config"])
+
     vpn_pair = %{vpn_pair | wg_config: wg_config}
 
     changeset =
@@ -577,12 +585,17 @@ defmodule HermitWeb.TunnelDetailLive do
 
     connector_access_mode = Map.get(inbound_config, "advertise_connector_access_mode") || "all"
 
+    wg_content =
+      Map.get(pair, :wg_config_content) || Map.get(pair, :wg_config) ||
+        (is_map(pair.outbound_config) &&
+           (pair.outbound_config["wg_config"] || pair.outbound_config[:wg_config]))
+
     socket
     |> assign(pair: pair)
     |> assign(use_tailscale_dns: use_tailscale_dns)
     |> assign(connector_access_mode: connector_access_mode)
     |> assign(system_dns: get_system_dns())
-    |> assign(wg_info: parse_wg_config(pair.wg_config_content))
+    |> assign(wg_info: parse_wg_config(wg_content))
   end
 
   def parse_wg_config(nil), do: %{}

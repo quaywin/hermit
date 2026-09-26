@@ -115,26 +115,36 @@
                 <h2 class="text-base sm:text-lg font-medium tracking-display-md text-base-content flex items-center gap-2">
                   🔌 Dual Proxy Connection
                 </h2>
-                <%= case @pair.ts_status do %>
-                  <% :running -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      Running
-                    </span>
-                  <% :starting -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                      Starting
-                    </span>
-                  <% :stopped -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                      <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
-                    </span>
-                  <% :error -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                    </span>
-                <% end %>
+                <div class="flex items-center gap-2.5">
+                  <%= if Map.get(@pair, :inbound_profile_id) do %>
+                    <.link
+                      navigate={~p"/inbounds/#{Map.get(@pair, :inbound_profile_id)}?tab=config"}
+                      class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs flex items-center gap-1"
+                    >
+                      <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
+                    </.link>
+                  <% end %>
+                  <%= case @pair.ts_status do %>
+                    <% :running -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Running
+                      </span>
+                    <% :starting -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                        Starting
+                      </span>
+                    <% :stopped -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                        <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
+                      </span>
+                    <% :error -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                      </span>
+                  <% end %>
+                </div>
               </div>
 
               <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>
@@ -193,26 +203,36 @@
                   </svg>
                   Tailscale Connection
                 </h2>
-                <%= case @pair.ts_status do %>
-                  <% :running -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      Running
-                    </span>
-                  <% :starting -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                      Starting
-                    </span>
-                  <% :stopped -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                      <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
-                    </span>
-                  <% :error -> %>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                      <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
-                    </span>
-                <% end %>
+                <div class="flex items-center gap-2.5">
+                  <%= if Map.get(@pair, :inbound_profile_id) do %>
+                    <.link
+                      navigate={~p"/inbounds/#{Map.get(@pair, :inbound_profile_id)}?tab=config"}
+                      class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs flex items-center gap-1"
+                    >
+                      <.icon name="hero-pencil-square" class="size-3.5" /> Edit Config
+                    </.link>
+                  <% end %>
+                  <%= case @pair.ts_status do %>
+                    <% :running -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Running
+                      </span>
+                    <% :starting -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                        Starting
+                      </span>
+                    <% :stopped -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                        <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Stopped
+                      </span>
+                    <% :error -> %>
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20">
+                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
+                      </span>
+                  <% end %>
+                </div>
               </div>
 
               <%= if @pair.ts_status == :error and @pair.ts_error_reason do %>

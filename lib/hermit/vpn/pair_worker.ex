@@ -124,12 +124,12 @@ defmodule Hermit.Vpn.PairWorker do
           case pair
                |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: updated_outbound_config})
                |> Hermit.Repo.update() do
-            {:ok, _} ->
+            {:ok, updated_pair} ->
               case GenServer.whereis(via_tuple(id)) do
                 nil ->
                   case ensure_worker_running(id) do
                     {:ok, pid} -> GenServer.call(pid, {:update_wg_config, new_wg_config})
-                    _ -> {:ok, :updated_offline}
+                    _ -> {:ok, updated_pair}
                   end
 
                 pid ->
@@ -162,7 +162,7 @@ defmodule Hermit.Vpn.PairWorker do
                     GenServer.call(pid, {:update_inbound_config, updated_pair.inbound_config})
 
                   _ ->
-                    {:ok, :updated_offline}
+                    {:ok, updated_pair}
                 end
 
               pid ->
@@ -192,7 +192,7 @@ defmodule Hermit.Vpn.PairWorker do
                     GenServer.call(pid, {:update_outbound_config, updated_pair.outbound_config})
 
                   _ ->
-                    {:ok, :updated_offline}
+                    {:ok, updated_pair}
                 end
 
               pid ->
@@ -272,8 +272,10 @@ defmodule Hermit.Vpn.PairWorker do
     {inbound_type, inbound_config} =
       cond do
         pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
-          sanitized = sanitize_inbound_config(id, pair.inbound_config)
-          {pair.inbound_type || "tailscale", sanitized}
+          profile_cfg = (pair.inbound_profile && pair.inbound_profile.config) || %{}
+          merged = Map.merge(pair.inbound_config, profile_cfg)
+          sanitized = sanitize_inbound_config(id, merged)
+          {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) || "tailscale", sanitized}
 
         pair && pair.inbound_profile ->
           sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
@@ -286,7 +288,9 @@ defmodule Hermit.Vpn.PairWorker do
     {outbound_type, outbound_config} =
       cond do
         pair && pair.outbound_config && map_size(pair.outbound_config) > 0 ->
-          {pair.outbound_type || "wireguard", pair.outbound_config}
+          profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
+          merged = Map.merge(pair.outbound_config, profile_cfg)
+          {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) || "wireguard", merged}
 
         pair && pair.outbound_profile ->
           {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
@@ -397,8 +401,10 @@ defmodule Hermit.Vpn.PairWorker do
             {inbound_type, inbound_config} =
               cond do
                 pair.inbound_config && map_size(pair.inbound_config) > 0 ->
-                  sanitized = sanitize_inbound_config(id, pair.inbound_config)
-                  {pair.inbound_type || "tailscale", sanitized}
+                  profile_cfg = (pair.inbound_profile && pair.inbound_profile.config) || %{}
+                  merged = Map.merge(pair.inbound_config, profile_cfg)
+                  sanitized = sanitize_inbound_config(id, merged)
+                  {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) || "tailscale", sanitized}
 
                 pair.inbound_profile ->
                   sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
@@ -412,7 +418,9 @@ defmodule Hermit.Vpn.PairWorker do
             {outbound_type, outbound_config} =
               cond do
                 pair.outbound_config && map_size(pair.outbound_config) > 0 ->
-                  {pair.outbound_type || "wireguard", pair.outbound_config}
+                  profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
+                  merged = Map.merge(pair.outbound_config, profile_cfg)
+                  {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) || "wireguard", merged}
 
                 pair.outbound_profile ->
                   cfg = pair.outbound_profile.config || %{}
@@ -827,7 +835,7 @@ defmodule Hermit.Vpn.PairWorker do
 
       updated_state = broadcast_update(updated_state)
 
-      if updated_state.wg_status in [:running, :starting] do
+      if updated_state.wg_status in [:running, :starting, :error] do
         if state.ts_port do
           stop_inbound_process(state.ts_port)
         end
@@ -897,7 +905,7 @@ defmodule Hermit.Vpn.PairWorker do
 
       updated_state = broadcast_update(updated_state)
 
-      if updated_state.wg_status in [:running, :starting] do
+      if updated_state.wg_status in [:running, :starting, :error] do
         if state.ts_port do
           stop_inbound_process(state.ts_port)
         end
@@ -952,31 +960,57 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_call({:update_inbound_config, new_config}, _from, state) do
+    old_auth_key =
+      Map.get(state.inbound_config || %{}, "ts_auth_key") ||
+        Map.get(state.inbound_config || %{}, :ts_auth_key)
+
+    new_auth_key =
+      Map.get(new_config, "ts_auth_key") ||
+        Map.get(new_config, :ts_auth_key)
+
+    auth_key_changed? = new_auth_key != nil and new_auth_key != old_auth_key
+
     updated_state = %{state | inbound_config: new_config}
     updated_state = broadcast_update(updated_state)
 
-    if state.ts_status == :running do
-      parent = self()
+    cond do
+      auth_key_changed? and state.wg_status == :running ->
+        {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
 
-      Task.start(fn ->
-        case state.inbound_module.update_settings(state.id, new_config) do
-          {:ok, _} ->
-            state.inbound_module.approve_exit_node(state.id)
-            send(parent, {:inbound_config_updated, new_config})
+      state.inbound_type == "proxy" and state.wg_status == :running ->
+        state = maybe_shutdown_bootstrap_task(state)
+        if state.ts_port, do: stop_inbound_process(state.ts_port)
+        state.inbound_module.cleanup(state.id, state.storage_dir)
+        updated_state = %{updated_state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
+        updated_state = broadcast_update(updated_state)
+        {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
 
-          :ok ->
-            state.inbound_module.approve_exit_node(state.id)
-            send(parent, {:inbound_config_updated, new_config})
+      state.ts_status == :running ->
+        parent = self()
 
-          {:error, reason} ->
-            Logger.error("Failed to dynamically update Tailscale settings: #{inspect(reason)}")
-            send(parent, {:inbound_config_update_failed, reason})
-        end
-      end)
+        Task.start(fn ->
+          case state.inbound_module.update_settings(state.id, new_config) do
+            {:ok, _} ->
+              state.inbound_module.approve_exit_node(state.id)
+              send(parent, {:inbound_config_updated, new_config})
 
-      {:reply, {:ok, updated_state}, updated_state}
-    else
-      {:reply, {:ok, updated_state}, updated_state}
+            :ok ->
+              state.inbound_module.approve_exit_node(state.id)
+              send(parent, {:inbound_config_updated, new_config})
+
+            {:error, reason} ->
+              Logger.error("Failed to dynamically update Tailscale settings: #{inspect(reason)}")
+              send(parent, {:inbound_config_update_failed, reason})
+          end
+        end)
+
+        {:reply, {:ok, updated_state}, updated_state}
+
+      state.ts_status == :error and state.wg_status == :running ->
+        {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
+
+      true ->
+        {:reply, {:ok, updated_state}, updated_state}
     end
   end
 

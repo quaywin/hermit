@@ -55,37 +55,46 @@ defmodule Hermit.Vpn.PairWorker do
     GenServer.start_link(__MODULE__, args, name: via_tuple(args.id))
   end
 
+  defp safe_call(pid, msg, timeout \\ 15_000) do
+    try do
+      GenServer.call(pid, msg, timeout)
+    catch
+      :exit, {:timeout, _} -> {:error, :timeout}
+      :exit, reason -> {:error, reason}
+    end
+  end
+
   def get_state(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, :get_state)
+      {:ok, pid} -> safe_call(pid, :get_state)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def pause_pair(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, :pause)
+      {:ok, pid} -> safe_call(pid, :pause)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def resume_pair(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, :resume)
+      {:ok, pid} -> safe_call(pid, :resume)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def restart_pair(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, :restart)
+      {:ok, pid} -> safe_call(pid, :restart)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def start_wg(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, {:start_wg})
+      {:ok, pid} -> safe_call(pid, {:start_wg})
       {:error, reason} -> {:error, reason}
     end
   end
@@ -93,13 +102,13 @@ defmodule Hermit.Vpn.PairWorker do
   def stop_wg(id) do
     case GenServer.whereis(via_tuple(id)) do
       nil -> {:error, :not_found}
-      pid -> GenServer.call(pid, {:stop_wg})
+      pid -> safe_call(pid, {:stop_wg})
     end
   end
 
   def restart_wg(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, {:restart_wg})
+      {:ok, pid} -> safe_call(pid, {:restart_wg})
       {:error, reason} -> {:error, reason}
     end
   end
@@ -128,12 +137,12 @@ defmodule Hermit.Vpn.PairWorker do
               case GenServer.whereis(via_tuple(id)) do
                 nil ->
                   case ensure_worker_running(id) do
-                    {:ok, pid} -> GenServer.call(pid, {:update_wg_config, new_wg_config})
+                    {:ok, pid} -> safe_call(pid, {:update_wg_config, new_wg_config})
                     _ -> {:ok, updated_pair}
                   end
 
                 pid ->
-                  GenServer.call(pid, {:update_wg_config, new_wg_config})
+                  safe_call(pid, {:update_wg_config, new_wg_config})
               end
 
             {:error, changeset} ->
@@ -159,14 +168,14 @@ defmodule Hermit.Vpn.PairWorker do
               nil ->
                 case ensure_worker_running(id) do
                   {:ok, pid} ->
-                    GenServer.call(pid, {:update_inbound_config, updated_pair.inbound_config})
+                    safe_call(pid, {:update_inbound_config, updated_pair.inbound_config})
 
                   _ ->
                     {:ok, updated_pair}
                 end
 
               pid ->
-                GenServer.call(pid, {:update_inbound_config, updated_pair.inbound_config})
+                safe_call(pid, {:update_inbound_config, updated_pair.inbound_config})
             end
 
           {:error, changeset} ->
@@ -189,14 +198,14 @@ defmodule Hermit.Vpn.PairWorker do
               nil ->
                 case ensure_worker_running(id) do
                   {:ok, pid} ->
-                    GenServer.call(pid, {:update_outbound_config, updated_pair.outbound_config})
+                    safe_call(pid, {:update_outbound_config, updated_pair.outbound_config})
 
                   _ ->
                     {:ok, updated_pair}
                 end
 
               pid ->
-                GenServer.call(pid, {:update_outbound_config, updated_pair.outbound_config})
+                safe_call(pid, {:update_outbound_config, updated_pair.outbound_config})
             end
 
           {:error, changeset} ->
@@ -207,7 +216,7 @@ defmodule Hermit.Vpn.PairWorker do
 
   def start_ts(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, {:start_ts})
+      {:ok, pid} -> safe_call(pid, {:start_ts})
       {:error, reason} -> {:error, reason}
     end
   end
@@ -215,13 +224,13 @@ defmodule Hermit.Vpn.PairWorker do
   def stop_ts(id) do
     case GenServer.whereis(via_tuple(id)) do
       nil -> {:error, :not_found}
-      pid -> GenServer.call(pid, {:stop_ts})
+      pid -> safe_call(pid, {:stop_ts})
     end
   end
 
   def restart_ts(id) do
     case ensure_worker_running(id) do
-      {:ok, pid} -> GenServer.call(pid, {:restart_ts})
+      {:ok, pid} -> safe_call(pid, {:restart_ts})
       {:error, reason} -> {:error, reason}
     end
   end

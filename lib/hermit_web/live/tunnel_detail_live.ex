@@ -20,6 +20,12 @@ defmodule HermitWeb.TunnelDetailLive do
          |> put_flash(:error, "Tunnel '#{id}' not found.")
          |> push_navigate(to: ~p"/")}
 
+      {:error, reason} ->
+        {:ok,
+         socket
+         |> put_flash(:error, "Tunnel '#{id}' unavailable: #{inspect(reason)}")
+         |> push_navigate(to: ~p"/")}
+
       pair ->
         {:ok,
          socket

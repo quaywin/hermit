@@ -368,7 +368,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       :ok
     else
       # 1. Attempt to delete the device from Tailscale tailnet via API
-      try_delete_via_api(pair_id)
+      api_delete_result = try_delete_via_api(pair_id)
+
+      deleted_via_api? =
+        case api_delete_result do
+          {:ok, status} when status in [:deleted, :not_found] -> true
+          _ -> false
+        end
 
       # 1b. Attempt to clean up ACL from Tailscale via API
       try_cleanup_acl_via_api(pair_id)
@@ -378,14 +384,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
       socket_path = "/run/tailscaled.#{pair_id}.socket"
 
-      # 2. Attempt to logout from Tailscale to remove the node from tailnet (if ephemeral), then shutdown
+      # 2. Attempt to logout from Tailscale to remove the node from tailnet (if ephemeral and not already deleted via API), then shutdown
       if File.exists?(socket_path) do
         try do
-          Logger.info("Logging out Tailscale node for pair: hermit_ts_#{pair_id}")
-          System.cmd("tailscale", ["--socket=#{socket_path}", "logout"])
-          Process.sleep(1000)
+          if not deleted_via_api? do
+            Logger.info("Logging out Tailscale node for pair: hermit_ts_#{pair_id}")
+            run_cmd_timeout("tailscale", ["--socket=#{socket_path}", "logout"], 3)
+            Process.sleep(500)
+          end
 
-          System.cmd("tailscale", ["--socket=#{socket_path}", "shutdown"])
+          run_cmd_timeout("tailscale", ["--socket=#{socket_path}", "shutdown"], 2)
           Process.sleep(200)
         rescue
           _ -> :ok
@@ -457,7 +465,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                       "Successfully deleted Tailscale device #{expected_hostname} from tailnet."
                     )
 
-                    :ok
+                    {:ok, :deleted}
 
                   {:ok, %{status: status, body: body}} ->
                     Logger.error(
@@ -475,7 +483,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                   "Tailscale device #{expected_hostname} not found in tailnet, skipping API delete."
                 )
 
-                :ok
+                {:ok, :not_found}
               end
 
             {:ok, %{status: status, body: body}} ->
@@ -494,13 +502,39 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           end
         else
           Logger.info("Tailscale API credentials not configured. Skipping API device deletion.")
-          :ok
+          {:ok, :skipped}
         end
     end
   rescue
     e ->
       Logger.error("Error during try_delete_via_api: #{inspect(e)}")
-      :ok
+      {:error, {:exception, e}}
+  end
+
+  defp run_cmd_timeout(cmd, args, timeout_secs) do
+    case System.find_executable("timeout") do
+      nil ->
+        task =
+          Task.async(fn ->
+            try do
+              System.cmd(cmd, args, stderr_to_stdout: true)
+            rescue
+              _ -> {"error", 1}
+            end
+          end)
+
+        case Task.yield(task, timeout_secs * 1000) || Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> result
+          nil -> {"timeout", 124}
+        end
+
+      timeout_bin ->
+        try do
+          System.cmd(timeout_bin, ["#{timeout_secs}", cmd | args], stderr_to_stdout: true)
+        rescue
+          _ -> {"error", 1}
+        end
+    end
   end
 
   defp try_cleanup_acl_via_api(pair_id) do
@@ -1246,9 +1280,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     tag = if String.starts_with?(tag, "tag:"), do: tag, else: "tag:#{tag}"
 
     if not enabled do
-      tag_owners = Map.get(acl_map, "tagOwners", %{})
-      updated_tag_owners = Map.delete(tag_owners, tag)
-
       node_attrs = Map.get(acl_map, "nodeAttrs", [])
       updated_node_attrs = update_node_attrs(node_attrs, tag, [])
 
@@ -1267,9 +1298,50 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
       updated_auto_approvers = Map.put(auto_approvers, "routes", updated_routes)
 
       grants = Map.get(acl_map, "grants", [])
-      updated_grants = Enum.reject(grants, fn grant -> Map.get(grant, "dst") == [tag] end)
 
-      acl_map
+      updated_grants =
+        grants
+        |> Enum.map(fn grant ->
+          dst = List.wrap(Map.get(grant, "dst", []))
+          updated_dst = Enum.reject(dst, &tag_matches?(&1, tag))
+          Map.put(grant, "dst", updated_dst)
+        end)
+        |> Enum.reject(fn grant -> Map.get(grant, "dst") == [] end)
+
+      updated_acl_map =
+        case Map.fetch(acl_map, "acls") do
+          {:ok, acls} when is_list(acls) ->
+            cleaned_acls =
+              acls
+              |> Enum.map(fn rule ->
+                dst = List.wrap(Map.get(rule, "dst", []))
+                updated_dst = Enum.reject(dst, &tag_matches?(&1, tag))
+                Map.put(rule, "dst", updated_dst)
+              end)
+              |> Enum.reject(fn rule -> Map.get(rule, "dst") == [] end)
+
+            Map.put(acl_map, "acls", cleaned_acls)
+
+          _ ->
+            acl_map
+        end
+
+      tag_owners = Map.get(acl_map, "tagOwners", %{})
+
+      # Only delete tag from tagOwners if it is not referenced anywhere in the remaining ACL policy.
+      # Deleting tagOwners when the tag is referenced anywhere (e.g. in custom rules, ssh, or tests)
+      # causes Tailscale API to fail validation with HTTP 400 (tag not found).
+      tag_still_referenced? =
+        tag_referenced_in_acl?(updated_acl_map, updated_grants, tag)
+
+      updated_tag_owners =
+        if tag_still_referenced? do
+          tag_owners
+        else
+          Map.delete(tag_owners, tag)
+        end
+
+      updated_acl_map
       |> Map.put("tagOwners", updated_tag_owners)
       |> Map.put("nodeAttrs", updated_node_attrs)
       |> Map.put("autoApprovers", updated_auto_approvers)
@@ -1312,6 +1384,45 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     end
   end
 
+  defp tag_matches?(item, tag) when is_binary(item) and is_binary(tag) do
+    item == tag or item == "#{tag}:*" or String.starts_with?(item, "#{tag}:")
+  end
+
+  defp tag_matches?(_, _), do: false
+
+  defp tag_referenced_in_acl?(acl_map, grants, tag) do
+    in_grants =
+      Enum.any?(grants, fn grant ->
+        dst = List.wrap(Map.get(grant, "dst", []))
+        src = List.wrap(Map.get(grant, "src", []))
+        Enum.any?(dst ++ src, &tag_matches?(&1, tag))
+      end)
+
+    in_acls =
+      Enum.any?(Map.get(acl_map, "acls", []), fn rule ->
+        dst = List.wrap(Map.get(rule, "dst", []))
+        src = List.wrap(Map.get(rule, "src", []))
+        Enum.any?(dst ++ src, &tag_matches?(&1, tag))
+      end)
+
+    in_ssh =
+      Enum.any?(Map.get(acl_map, "ssh", []), fn rule ->
+        dst = List.wrap(Map.get(rule, "dst", []))
+        src = List.wrap(Map.get(rule, "src", []))
+        Enum.any?(dst ++ src, &tag_matches?(&1, tag))
+      end)
+
+    in_tests =
+      Enum.any?(Map.get(acl_map, "tests", []), fn test ->
+        src = Map.get(test, "src")
+        accept = List.wrap(Map.get(test, "accept", []))
+        deny = List.wrap(Map.get(test, "deny", []))
+        tag_matches?(src, tag) or Enum.any?(accept ++ deny, &tag_matches?(&1, tag))
+      end)
+
+    in_grants or in_acls or in_ssh or in_tests
+  end
+
   defp has_connector_tag?(acl_map, tag) do
     tag_owners = Map.get(acl_map, "tagOwners", %{})
     has_tag_owner? = Map.has_key?(tag_owners, tag)
@@ -1340,10 +1451,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
     has_grant? =
       Enum.any?(grants, fn grant ->
-        tag in Map.get(grant, "dst", [])
+        Enum.any?(List.wrap(Map.get(grant, "dst", [])), &tag_matches?(&1, tag))
       end)
 
-    has_tag_owner? or has_node_attr? or has_auto_approve? or has_grant?
+    acls = Map.get(acl_map, "acls", [])
+
+    has_acl? =
+      Enum.any?(acls, fn rule ->
+        Enum.any?(List.wrap(Map.get(rule, "dst", [])), &tag_matches?(&1, tag))
+      end)
+
+    has_tag_owner? or has_node_attr? or has_auto_approve? or has_grant? or has_acl?
   end
 
   defp update_node_attrs(node_attrs, tag, domains) do

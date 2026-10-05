@@ -237,6 +237,61 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       refute Enum.any?(updated["grants"], &(tag in &1["dst"]))
       assert Enum.any?(updated["grants"], &("tag:keep-me" in &1["dst"]))
     end
+
+    test "cleans up acls and grants with wildcard dst patterns and multiple destinations" do
+      tag = "tag:connector-singapore-1"
+
+      acl_map = %{
+        "tagOwners" => %{
+          tag => ["autogroup:admin"],
+          "tag:keep-me" => ["autogroup:admin"]
+        },
+        "nodeAttrs" => [],
+        "autoApprovers" => %{"routes" => %{}},
+        "acls" => [
+          %{"action" => "accept", "src" => ["*"], "dst" => ["#{tag}:*"]},
+          %{"action" => "accept", "src" => ["*"], "dst" => ["tag:keep-me:*"]}
+        ],
+        "grants" => [
+          %{"src" => ["*"], "dst" => [tag, "tag:keep-me"], "ip" => ["*"]},
+          %{"src" => ["*"], "dst" => ["#{tag}:*"], "ip" => ["*"]}
+        ]
+      }
+
+      updated = Tailscale.update_acl_for_app_connector(acl_map, tag, [])
+
+      # 1. tag:connector-singapore-1 should be removed from tagOwners since no references remain
+      refute Map.has_key?(updated["tagOwners"], tag)
+      assert Map.has_key?(updated["tagOwners"], "tag:keep-me")
+
+      # 2. acls should have rule for tag removed, but keep the other
+      assert length(updated["acls"]) == 1
+      assert hd(updated["acls"])["dst"] == ["tag:keep-me:*"]
+
+      # 3. grants should have tag removed from multi-dst grant and standalone grant removed
+      assert length(updated["grants"]) == 1
+      assert hd(updated["grants"])["dst"] == ["tag:keep-me"]
+    end
+
+    test "preserves tagOwners when tag is still referenced in other ACL sections" do
+      tag = "tag:connector-singapore-1"
+
+      acl_map = %{
+        "tagOwners" => %{
+          tag => ["autogroup:admin"]
+        },
+        "nodeAttrs" => [],
+        "autoApprovers" => %{"routes" => %{}},
+        "ssh" => [
+          %{"action" => "check", "src" => ["autogroup:admin"], "dst" => [tag], "users" => ["root"]}
+        ]
+      }
+
+      updated = Tailscale.update_acl_for_app_connector(acl_map, tag, [])
+
+      # tagOwners should PRESERVE the tag so Tailscale API doesn't return HTTP 400 (tag not found)
+      assert Map.has_key?(updated["tagOwners"], tag)
+    end
   end
 
   describe "update_dns_settings_local/3" do

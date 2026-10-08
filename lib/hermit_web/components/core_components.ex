@@ -509,4 +509,36 @@ defmodule HermitWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Renders a copy-to-clipboard button with visual feedback.
+  """
+  attr :text, :string, required: true, doc: "the text to copy to clipboard"
+  attr :label, :string, default: nil, doc: "optional button label"
+  attr :title, :string, default: "Copy to clipboard", doc: "tooltip title"
+  attr :copied_text, :string, default: "Copied!", doc: "text to show when copied"
+  attr :class, :string, default: "", doc: "additional CSS classes"
+  attr :size, :string, default: "btn-xs", doc: "daisyUI button size"
+  attr :rest, :global
+
+  def copy_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-hook="Clipboard"
+      data-clipboard-text={@text}
+      data-copied-text={@copied_text}
+      title={@title}
+      class={["btn btn-ghost border border-base-300 hover:border-emerald-500/50 hover:bg-emerald-500/5 gap-1.5 transition-all text-base-content/70 hover:text-emerald-500 cursor-pointer", @size, @class]}
+      {@rest}
+    >
+      <.icon name="hero-clipboard-document" class="size-3.5 shrink-0" />
+      <%= if @label do %>
+        <span class="copy-feedback text-xs font-medium">{@label}</span>
+      <% else %>
+        <span class="copy-feedback hidden text-[11px] font-medium text-emerald-500">Copied!</span>
+      <% end %>
+    </button>
+    """
+  end
 end

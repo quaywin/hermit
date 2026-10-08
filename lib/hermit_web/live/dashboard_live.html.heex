@@ -432,6 +432,45 @@
           Link an isolated inbound network interface SOCKS5/Tailscale to an outbound Wireguard gateway.
         </p>
 
+        <%= if Enum.empty?(@inbound_profiles) or Enum.empty?(@outbound_profiles) do %>
+          <div class="bg-amber-500/10 border border-amber-500/30 rounded-[10px] p-3.5 text-xs space-y-2">
+            <div class="font-semibold text-amber-500 flex items-center gap-1.5">
+              <.icon name="hero-information-circle" class="size-4 shrink-0" />
+              <span>Setup Required Before Deploying:</span>
+            </div>
+            <p class="text-base-content/80 leading-relaxed text-[11px]">
+              A tunnel requires at least one <strong>Inbound Profile</strong> (client ingress) and one <strong>Outbound Profile</strong> (egress gateway):
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <%= if Enum.empty?(@inbound_profiles) do %>
+                <.link
+                  navigate={~p"/inbounds"}
+                  class="btn btn-xs btn-outline btn-warning gap-1.5 justify-start text-[11px]"
+                >
+                  <.icon name="hero-plus" class="size-3" /> Create Inbound Profile
+                </.link>
+              <% else %>
+                <div class="flex items-center gap-1 text-emerald-500 font-medium text-[11px] py-0.5">
+                  <.icon name="hero-check-circle" class="size-3.5" /> Inbound Ready
+                </div>
+              <% end %>
+
+              <%= if Enum.empty?(@outbound_profiles) do %>
+                <.link
+                  navigate={~p"/outbounds"}
+                  class="btn btn-xs btn-outline btn-warning gap-1.5 justify-start text-[11px]"
+                >
+                  <.icon name="hero-plus" class="size-3" /> Create Outbound Profile
+                </.link>
+              <% else %>
+                <div class="flex items-center gap-1 text-emerald-500 font-medium text-[11px] py-0.5">
+                  <.icon name="hero-check-circle" class="size-3.5" /> Outbound Ready
+                </div>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+
         <.form
           :let={f}
           for={@form}

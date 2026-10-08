@@ -14,7 +14,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     storage_dir = opts[:storage_dir]
     wg_name = "hermit_wg_#{pair_id}"
     proxy_port = opts[:port] || 0
-    octet = :erlang.phash2(pair_id, 255)
+    {:ok, subnet_info} = Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id)
 
     unique_suffix =
       :crypto.hash(:md5, pair_id) |> Base.encode16(case: :lower) |> String.slice(0, 10)
@@ -22,8 +22,8 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     vh_name = "vh_#{unique_suffix}"
     vn_name = "vn_#{unique_suffix}"
 
-    host_ip = "172.29.#{octet}.1"
-    ns_ip = "172.29.#{octet}.2"
+    host_ip = subnet_info.proxy_host_ip
+    ns_ip = subnet_info.proxy_ns_ip
 
     socks_port = 1080
     http_port = 8080
@@ -227,6 +227,9 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     if state.http_listen_socket do
       :gen_tcp.close(state.http_listen_socket)
     end
+
+    ports = Enum.filter([state[:actual_socks_port], state[:actual_http_port]], &is_integer/1)
+    if ports != [], do: Hermit.Vpn.PortAllocator.release_ports(ports)
 
     # Kill microsocks and tinyproxy inside the netns
     unless state.mock? do

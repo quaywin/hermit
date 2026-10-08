@@ -13,15 +13,15 @@ defmodule Hermit.Vpn.Namespace do
     ns = "hermit_wg_#{pair_id}"
 
     if mock?() do
+      {:ok, subnet_info} = Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id)
       Logger.info("Mock: Created namespace #{ns}")
-      {:ok, %{ns: ns, ns_ip: "10.200.1.2", subnet: "10.200.1.0/30", host_if: "loc_mock"}}
+      {:ok, %{ns: ns, ns_ip: subnet_info.ns_ip, subnet: subnet_info.subnet, host_if: "loc_mock", host_ip: subnet_info.host_ip, gateway_ip: subnet_info.gateway_ip}}
     else
-      # Calculate dynamic subnet based on pair_id hash
-      hash = :erlang.phash2(pair_id, 250) + 1
-      ns_ip = "10.200.#{hash}.2"
-      local_ip = "10.200.#{hash}.2/30"
-      host_ip = "10.200.#{hash}.1/30"
-      subnet = "10.200.#{hash}.0/30"
+      {:ok, subnet_info} = Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id)
+      ns_ip = subnet_info.ns_ip
+      local_ip = subnet_info.local_ip
+      host_ip = subnet_info.host_ip
+      subnet = subnet_info.subnet
 
       unique_suffix =
         :crypto.hash(:md5, pair_id) |> Base.encode16(case: :lower) |> String.slice(0, 11)
@@ -76,7 +76,15 @@ defmodule Hermit.Vpn.Namespace do
         # Setup host NAT table
         Hermit.Vpn.Nat.setup_nat("hermit_local_#{pair_id}", subnet, ns_ip)
 
-        {:ok, %{ns: ns, ns_ip: ns_ip, subnet: subnet, host_if: veth_host_if}}
+        {:ok,
+         %{
+           ns: ns,
+           ns_ip: ns_ip,
+           subnet: subnet,
+           host_if: veth_host_if,
+           host_ip: host_ip,
+           gateway_ip: subnet_info.gateway_ip
+         }}
       rescue
         e ->
           Logger.warning("Failed to create network namespace #{ns}: #{inspect(e)}")
@@ -89,6 +97,7 @@ defmodule Hermit.Vpn.Namespace do
   Tears down the network namespace, veth interfaces, and host NAT rules for a pair_id.
   """
   def destroy_pair_namespace(pair_id) when is_binary(pair_id) do
+    Hermit.Vpn.SubnetPool.release_subnet(pair_id)
     ns = "hermit_wg_#{pair_id}"
 
     if mock?() do

@@ -177,15 +177,11 @@
                   <div class="flex items-center gap-1.5">
                     <div class="flex items-center gap-1 bg-base-200/60 border border-base-300 rounded-[6px] px-2 py-1 max-w-[150px] sm:max-w-[180px]">
                       <code class="text-[11px] text-emerald-500 truncate flex-1 select-all">{doh_url}</code>
-                      <button
-                        type="button"
-                        data-url={doh_url}
-                        onclick="navigator.clipboard.writeText(this.getAttribute('data-url')).then(() => alert('DoH URL Copied!'))"
-                        class="text-base-content/40 hover:text-emerald-500 cursor-pointer p-0.5"
+                      <.copy_button
+                        text={doh_url}
                         title="Copy DoH URL"
-                      >
-                        <.icon name="hero-clipboard" class="size-3.5" />
-                      </button>
+                        class="border-0 !p-0.5 !bg-transparent text-base-content/40 hover:text-emerald-500"
+                      />
                     </div>
 
                     <a
@@ -202,11 +198,14 @@
                       </label>
                       <div tabindex="0" class="dropdown-content z-50 p-3 bg-base-100 border border-base-300 rounded-[12px] shadow-xl mb-2 text-center w-40">
                         <div class="bg-white p-2 rounded-[6px] border border-base-300 shadow-inner inline-block">
-                          <img
-                            src={"https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=#{URI.encode_www_form(doh_url)}"}
-                            alt="QR Code"
-                            class="size-[110px]"
-                          />
+                          <canvas
+                            id={"qr-canvas-#{endpoint.id}"}
+                            phx-hook="QRCode"
+                            data-qr-content={doh_url}
+                            data-qr-size="110"
+                            class="size-[110px] block"
+                          >
+                          </canvas>
                         </div>
                         <span class="text-[9px] uppercase tracking-wider text-base-content/50 font-semibold block mt-1">Scan for DoH</span>
                       </div>

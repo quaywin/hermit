@@ -17,13 +17,12 @@ defmodule Hermit.Vpn.Outbound.Local do
       true ->
         Logger.info("Creating local netns: #{wg_name}")
 
-        hash = :erlang.phash2(pair_id, 250) + 1
-        gateway = "10.200.#{hash}.1"
         block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
         netns_dns_dir = "/etc/netns/#{wg_name}"
 
         result =
-          with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
+          with {:ok, info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
+               gateway = info.gateway_ip,
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",

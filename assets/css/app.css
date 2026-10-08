@@ -58,6 +58,41 @@
     --noise: 0;
 }
 
+@plugin "../vendor/daisyui-theme" {
+    name: "dark";
+    default: false;
+    prefersdark: true;
+    color-scheme: "dark";
+    --color-base-100: #121316;
+    --color-base-200: #181a20;
+    --color-base-300: #262933;
+    --color-base-content: #f3f4f6;
+    --color-primary: #10b981;
+    --color-primary-content: #ffffff;
+    --color-secondary: #262933;
+    --color-secondary-content: #f3f4f6;
+    --color-accent: #10b981;
+    --color-accent-content: #ffffff;
+    --color-neutral: #181a20;
+    --color-neutral-content: #f3f4f6;
+    --color-info: #1f2937;
+    --color-info-content: #f3f4f6;
+    --color-success: #10b981;
+    --color-success-content: #ffffff;
+    --color-warning: #f59e0b;
+    --color-warning-content: #171717;
+    --color-error: #ef4444;
+    --color-error-content: #ffffff;
+    --radius-selector: 0.375rem;
+    --radius-field: 0.25rem;
+    --radius-box: 0.75rem;
+    --size-selector: 0.21875rem;
+    --size-field: 0.21875rem;
+    --border: 1px;
+    --depth: 0;
+    --noise: 0;
+}
+
 /* Add variants based on LiveView classes */
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);

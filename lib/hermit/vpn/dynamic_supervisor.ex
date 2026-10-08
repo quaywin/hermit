@@ -146,8 +146,8 @@ defmodule Hermit.Vpn.DynamicSupervisor do
   def init(_init_arg) do
     DynamicSupervisor.init(
       strategy: :one_for_one,
-      max_restarts: 100,
-      max_seconds: 1
+      max_restarts: 3,
+      max_seconds: 5
     )
   end
 

@@ -163,15 +163,25 @@
                 </div>
 
                 <%= if @pair.ts_status == :running do %>
-                  <div>
-                    <span class="text-base-content/60 font-medium">SOCKS5 Proxy URL:</span>
-                    <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between">
+                      <span class="text-base-content/60 font-medium">SOCKS5 Proxy URL:</span>
+                      <%= if socks_url = Map.get(@pair.metrics, :proxy_socks5_url) do %>
+                        <.copy_button text={socks_url} label="Copy SOCKS5" class="!py-0.5 !px-2" />
+                      <% end %>
+                    </div>
+                    <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[6px] border border-base-300 truncate select-all">
                       {Map.get(@pair.metrics, :proxy_socks5_url, "socks5://127.0.0.1:xxx")}
                     </div>
                   </div>
-                  <div>
-                    <span class="text-base-content/60 font-medium">HTTP Proxy URL:</span>
-                    <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[4px] border border-base-300 mt-1 truncate">
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between">
+                      <span class="text-base-content/60 font-medium">HTTP Proxy URL:</span>
+                      <%= if http_url = Map.get(@pair.metrics, :proxy_http_url) do %>
+                        <.copy_button text={http_url} label="Copy HTTP" class="!py-0.5 !px-2" />
+                      <% end %>
+                    </div>
+                    <div class="text-xs font-mono text-emerald-600 bg-base-200 p-2 rounded-[6px] border border-base-300 truncate select-all">
                       {Map.get(@pair.metrics, :proxy_http_url, "http://127.0.0.1:xxx")}
                     </div>
                   </div>
@@ -726,15 +736,15 @@
                   </div>
                 </div>
               <% else %>
-                <% hash = :erlang.phash2(@id, 250) + 1
+                <% subnet_info = Hermit.Vpn.SubnetPool.get_or_allocate_subnet(@id) |> elem(1)
 
                 local_ip =
                   Map.get(@pair.outbound_config || %{}, "local_ip") ||
-                    Map.get(@pair.outbound_config || %{}, :local_ip) || "10.200.#{hash}.2/30"
+                    Map.get(@pair.outbound_config || %{}, :local_ip) || subnet_info.local_ip
 
                 host_ip =
                   Map.get(@pair.outbound_config || %{}, "host_ip") ||
-                    Map.get(@pair.outbound_config || %{}, :host_ip) || "10.200.#{hash}.1/30"
+                    Map.get(@pair.outbound_config || %{}, :host_ip) || subnet_info.host_ip
 
                 gateway = String.split(host_ip, "/") |> hd() %>
                 <div>

@@ -104,21 +104,35 @@ defmodule HermitWeb.Layouts do
           </nav>
         </div>
 
-        <!-- Sidebar Bottom (Info & Update Badge) -->
+        <!-- Sidebar Bottom (Info & Update Badge + Theme Toggle) -->
         <div class="p-4 border-t border-base-300 space-y-2 bg-base-100">
           <% updater_info = Hermit.Updater.status() %>
           <div class="flex items-center justify-between">
-            <span class="text-[10px] text-base-content/50 font-mono">
-              v{updater_info.current_version}
-            </span>
-            <%= if updater_info.update_available? do %>
-              <.link
-                navigate={~p"/settings"}
-                class="badge badge-warning badge-xs font-mono text-[9px] gap-1 animate-pulse hover:opacity-80"
-              >
-                <.icon name="hero-sparkles" class="size-2.5" /> v{updater_info.latest_version}
-              </.link>
-            <% end %>
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] text-base-content/50 font-mono">
+                v{updater_info.current_version}
+              </span>
+              <%= if updater_info.update_available? do %>
+                <.link
+                  navigate={~p"/settings"}
+                  class="badge badge-warning badge-xs font-mono text-[9px] gap-1 animate-pulse hover:opacity-80"
+                >
+                  <.icon name="hero-sparkles" class="size-2.5" /> v{updater_info.latest_version}
+                </.link>
+              <% end %>
+            </div>
+
+            <button
+              type="button"
+              id="theme-toggle-desktop"
+              phx-hook="ThemeToggle"
+              class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content cursor-pointer p-1"
+              title="Toggle Dark/Light Mode"
+              aria-label="Toggle Theme"
+            >
+              <.icon name="hero-sun" class="size-3.5 hidden [[data-theme=dark]_&]:block" />
+              <.icon name="hero-moon" class="size-3.5 block [[data-theme=dark]_&]:hidden" />
+            </button>
           </div>
         </div>
       </aside>
@@ -196,6 +210,18 @@ defmodule HermitWeb.Layouts do
               >
                 <.icon name="hero-cog-6-tooth" class="size-5 shrink-0" />
               </.link>
+
+              <button
+                type="button"
+                id="theme-toggle-mobile"
+                phx-hook="ThemeToggle"
+                class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content cursor-pointer p-1 shrink-0 ml-1"
+                title="Toggle Dark/Light Mode"
+                aria-label="Toggle Theme"
+              >
+                <.icon name="hero-sun" class="size-4 hidden [[data-theme=dark]_&]:block" />
+                <.icon name="hero-moon" class="size-4 block [[data-theme=dark]_&]:hidden" />
+              </button>
             </nav>
           </div>
         </header>

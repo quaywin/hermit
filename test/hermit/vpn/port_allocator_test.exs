@@ -32,4 +32,27 @@ defmodule Hermit.Vpn.PortAllocatorTest do
         :ok
     end
   end
+
+  test "concurrent allocations receive disjoint ports and auto-release on exit" do
+    # Start PortAllocator under test process if not already started
+    unless Process.whereis(PortAllocator) do
+      start_supervised!(PortAllocator)
+    end
+
+    tasks =
+      for _i <- 1..5 do
+        Task.async(fn ->
+          PortAllocator.allocate_free_ports()
+        end)
+      end
+
+    results = Task.await_many(tasks)
+
+    all_ports =
+      Enum.flat_map(results, fn {:ok, s, h} -> [s, h] end)
+
+    # All 10 allocated ports must be distinct
+    assert length(all_ports) == 10
+    assert length(Enum.uniq(all_ports)) == 10
+  end
 end

@@ -24,6 +24,7 @@ import { Socket } from "phoenix";
 import { LiveSocket } from "phoenix_live_view";
 import { hooks as colocatedHooks } from "phoenix-colocated/hermit";
 import topbar from "../vendor/topbar";
+import QRCode from "../vendor/qrcode";
 
 const csrfToken = document
   .querySelector("meta[name='csrf-token']")
@@ -89,8 +90,100 @@ const Hooks = {
         this.el.textContent = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
       }
     }
+  },
+  Clipboard: {
+    mounted() {
+      this.init();
+    },
+    updated() {
+      this.init();
+    },
+    init() {
+      if (this.el._clipboardInitialized) return;
+      this.el._clipboardInitialized = true;
+
+      this.el.addEventListener("click", (e) => {
+        e.preventDefault();
+        const text = this.el.getAttribute("data-clipboard-text");
+
+        if (text) {
+          navigator.clipboard.writeText(text).then(() => {
+            const feedbackEl = this.el.querySelector(".copy-feedback");
+            this.el.classList.add("text-emerald-500");
+
+            if (feedbackEl) {
+              const prev = feedbackEl.textContent;
+              feedbackEl.textContent = this.el.getAttribute("data-copied-text") || "Copied!";
+              feedbackEl.classList.remove("hidden");
+              setTimeout(() => {
+                feedbackEl.textContent = prev;
+                this.el.classList.remove("text-emerald-500");
+              }, 2000);
+            }
+
+            const existingToast = document.getElementById("clipboard-toast");
+            if (existingToast) existingToast.remove();
+
+            const toast = document.createElement("div");
+            toast.id = "clipboard-toast";
+            toast.className =
+              "fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-base-100 border border-emerald-500/30 text-emerald-500 px-3.5 py-2 rounded-[10px] shadow-xl text-xs font-medium";
+            toast.innerHTML = `
+              <svg class="size-4 shrink-0 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+              </svg>
+              <span>Copied to clipboard!</span>
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+              toast.style.opacity = "0";
+              toast.style.transition = "opacity 0.3s ease";
+              setTimeout(() => toast.remove(), 300);
+            }, 1800);
+          });
+        }
+      });
+    }
+  },
+  QRCode: {
+    mounted() {
+      this.render();
+    },
+    updated() {
+      this.render();
+    },
+    render() {
+      const text = this.el.getAttribute("data-qr-content");
+      const size = parseInt(this.el.getAttribute("data-qr-size") || "110", 10);
+      if (text && QRCode && QRCode.drawCanvas) {
+        try {
+          QRCode.drawCanvas(this.el, text, size);
+        } catch (e) {
+          console.error("Local QRCode error:", e);
+        }
+      }
+    }
+  },
+  ThemeToggle: {
+    mounted() {
+      this.el.addEventListener("click", () => {
+        const current =
+          document.documentElement.getAttribute("data-theme") || "light";
+        const next = current === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("hermit_theme", next);
+      });
+    }
   }
 };
+
+// Initialize theme from localStorage or system preference
+const savedTheme =
+  localStorage.getItem("hermit_theme") ||
+  (window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light");
+document.documentElement.setAttribute("data-theme", savedTheme);
 
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,

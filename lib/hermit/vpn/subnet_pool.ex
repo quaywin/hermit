@@ -56,7 +56,12 @@ defmodule Hermit.Vpn.SubnetPool do
           {:ok, index} ->
             new_pair_to_index = Map.put(state.pair_to_index, pair_id, index)
             new_index_to_pair = Map.put(state.index_to_pair, index, pair_id)
-            new_state = %{state | pair_to_index: new_pair_to_index, index_to_pair: new_index_to_pair}
+
+            new_state = %{
+              state
+              | pair_to_index: new_pair_to_index,
+                index_to_pair: new_index_to_pair
+            }
 
             Logger.info("SubnetPool: Allocated subnet index #{index} for pair #{pair_id}")
             {:reply, {:ok, format_subnet(index)}, new_state}

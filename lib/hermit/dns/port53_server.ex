@@ -331,12 +331,6 @@ defmodule Hermit.Dns.Port53Server do
               {:ok, {_worker, server_pid}} when is_pid(server_pid) ->
                 {:ok, server_pid}
 
-              {:ok, server_pid} when is_pid(server_pid) ->
-                {:ok, server_pid}
-
-              {:error, {:already_started, pid}} ->
-                {:ok, pid}
-
               _ ->
                 case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
                   [{pid, _}] -> {:ok, pid}

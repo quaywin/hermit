@@ -1875,7 +1875,7 @@ defmodule Hermit.Dns.Server do
     case :gen_tcp.recv(socket, 1, 2000) do
       {:ok, <<len>>} ->
         case :gen_tcp.recv(socket, len + 2, 2000) do
-          {:ok, <<domain::binary-size(len), port::16>>} ->
+          {:ok, <<domain::binary-size(^len), port::16>>} ->
             {:ok, String.to_charlist(domain), port}
 
           {:error, reason} ->

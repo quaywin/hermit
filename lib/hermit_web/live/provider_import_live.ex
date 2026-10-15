@@ -1,6 +1,5 @@
 defmodule HermitWeb.ProviderImportLive do
   use HermitWeb, :live_view
-  require Logger
   alias Hermit.Vpn.Provider
   alias Hermit.Vpn.Setting
 
@@ -306,9 +305,6 @@ defmodule HermitWeb.ProviderImportLive do
               |> assign_saved_configs()
 
             {:noreply, socket}
-
-          _ ->
-            {:noreply, put_flash(socket, :error, "Failed to import profiles.")}
         end
     end
   end
@@ -436,9 +432,6 @@ defmodule HermitWeb.ProviderImportLive do
               |> assign_saved_configs()
 
             {:noreply, socket}
-
-          _ ->
-            {:noreply, put_flash(socket, :error, "Failed to import profiles.")}
         end
     end
   end
@@ -500,9 +493,6 @@ defmodule HermitWeb.ProviderImportLive do
            |> assign(paste_text: "")
            |> assign(paste_name: "Imported WireGuard")
            |> assign_saved_configs()}
-
-        _ ->
-          {:noreply, put_flash(socket, :error, "Failed to import configurations.")}
       end
     end
   end

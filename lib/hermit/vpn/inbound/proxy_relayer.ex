@@ -52,7 +52,6 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
         # Determine host ports to listen on
         parsed_port =
           case proxy_port do
-            nil -> 0
             "" -> 0
             p when is_binary(p) -> String.to_integer(p)
             p when is_integer(p) -> p

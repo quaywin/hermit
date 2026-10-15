@@ -120,7 +120,8 @@ defmodule Hermit.Vpn.PortAllocator do
         Enum.reduce(ports, state.monitors, fn port, acc ->
           case Map.get(state.allocated, port) do
             {_pid, ref} ->
-              remaining = (Map.get(acc, ref, []) -- [port])
+              remaining = Map.get(acc, ref, []) -- [port]
+
               if remaining == [] do
                 Process.demonitor(ref, [:flush])
                 Map.delete(acc, ref)

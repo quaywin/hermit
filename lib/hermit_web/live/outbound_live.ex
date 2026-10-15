@@ -2,7 +2,6 @@ defmodule HermitWeb.OutboundLive do
   use HermitWeb, :live_view
   import Ecto.Query
   alias Hermit.Vpn.OutboundProfile
-  require Logger
 
   @impl true
   def mount(_params, _session, socket) do

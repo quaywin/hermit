@@ -15,7 +15,16 @@ defmodule Hermit.Vpn.Namespace do
     if mock?() do
       {:ok, subnet_info} = Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id)
       Logger.info("Mock: Created namespace #{ns}")
-      {:ok, %{ns: ns, ns_ip: subnet_info.ns_ip, subnet: subnet_info.subnet, host_if: "loc_mock", host_ip: subnet_info.host_ip, gateway_ip: subnet_info.gateway_ip}}
+
+      {:ok,
+       %{
+         ns: ns,
+         ns_ip: subnet_info.ns_ip,
+         subnet: subnet_info.subnet,
+         host_if: "loc_mock",
+         host_ip: subnet_info.host_ip,
+         gateway_ip: subnet_info.gateway_ip
+       }}
     else
       {:ok, subnet_info} = Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id)
       ns_ip = subnet_info.ns_ip

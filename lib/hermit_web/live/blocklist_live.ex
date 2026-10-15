@@ -3,7 +3,6 @@ defmodule HermitWeb.BlocklistLive do
   import Ecto.Query
   alias Hermit.Dns.Blocklist
   alias Hermit.Dns.BlocklistLoader
-  require Logger
 
   @impl true
   def mount(_params, _session, socket) do

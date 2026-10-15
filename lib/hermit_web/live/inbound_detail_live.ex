@@ -3,7 +3,6 @@ defmodule HermitWeb.InboundDetailLive do
   import Ecto.Query
   alias Hermit.Vpn.InboundProfile
   alias Hermit.Vpn.DnsWorker
-  require Logger
 
   @impl true
   def mount(%{"id" => id_str}, _session, socket) do
@@ -117,7 +116,7 @@ defmodule HermitWeb.InboundDetailLive do
         config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint.id)
         {_, ts_ip, _} = DnsWorker.get_status(endpoint.id)
 
-        if config && config.tailscale_override_dns do
+        if config.tailscale_override_dns do
           Task.start(fn -> DnsWorker.clear_tailscale_dns_config(profile, config, ts_ip) end)
         end
 

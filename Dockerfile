@@ -1,8 +1,8 @@
 # Find eligible builder and runner images on Docker Hub. We use Debian Slim
 # as officially recommended by Fly.io and Phoenix core team for glibc stability.
-ARG ELIXIR_VERSION=1.18.4
-ARG OTP_VERSION=27.3.4.16
-ARG DEBIAN_VERSION=trixie-20260803-slim
+ARG ELIXIR_VERSION=1.20.4
+ARG OTP_VERSION=28.5.0.8
+ARG DEBIAN_VERSION=trixie-20261005-slim
 
 ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"

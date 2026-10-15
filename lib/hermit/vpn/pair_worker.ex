@@ -284,7 +284,9 @@ defmodule Hermit.Vpn.PairWorker do
           profile_cfg = (pair.inbound_profile && pair.inbound_profile.config) || %{}
           merged = Map.merge(pair.inbound_config, profile_cfg)
           sanitized = sanitize_inbound_config(id, merged)
-          {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) || "tailscale", sanitized}
+
+          {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) || "tailscale",
+           sanitized}
 
         pair && pair.inbound_profile ->
           sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
@@ -299,7 +301,9 @@ defmodule Hermit.Vpn.PairWorker do
         pair && pair.outbound_config && map_size(pair.outbound_config) > 0 ->
           profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
           merged = Map.merge(pair.outbound_config, profile_cfg)
-          {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) || "wireguard", merged}
+
+          {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) ||
+             "wireguard", merged}
 
         pair && pair.outbound_profile ->
           {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
@@ -401,8 +405,7 @@ defmodule Hermit.Vpn.PairWorker do
              args[:outbound_type] || "wireguard",
              args[:outbound_config] ||
                %{"wg_config" => args[:wg_config] || args[:wg_config_content]},
-             args[:inbound_profile_id],
-             args[:outbound_profile_id]}
+             args[:inbound_profile_id], args[:outbound_profile_id]}
 
           pair ->
             pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
@@ -413,7 +416,9 @@ defmodule Hermit.Vpn.PairWorker do
                   profile_cfg = (pair.inbound_profile && pair.inbound_profile.config) || %{}
                   merged = Map.merge(pair.inbound_config, profile_cfg)
                   sanitized = sanitize_inbound_config(id, merged)
-                  {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) || "tailscale", sanitized}
+
+                  {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) ||
+                     "tailscale", sanitized}
 
                 pair.inbound_profile ->
                   sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
@@ -429,7 +434,9 @@ defmodule Hermit.Vpn.PairWorker do
                 pair.outbound_config && map_size(pair.outbound_config) > 0 ->
                   profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
                   merged = Map.merge(pair.outbound_config, profile_cfg)
-                  {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) || "wireguard", merged}
+
+                  {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) ||
+                     "wireguard", merged}
 
                 pair.outbound_profile ->
                   cfg = pair.outbound_profile.config || %{}
@@ -462,8 +469,7 @@ defmodule Hermit.Vpn.PairWorker do
            args[:outbound_type] || "wireguard",
            args[:outbound_config] ||
              %{"wg_config" => args[:wg_config] || args[:wg_config_content]},
-           args[:inbound_profile_id],
-           args[:outbound_profile_id]}
+           args[:inbound_profile_id], args[:outbound_profile_id]}
       end
 
     inbound_module =
@@ -990,7 +996,14 @@ defmodule Hermit.Vpn.PairWorker do
         state = maybe_shutdown_bootstrap_task(state)
         if state.ts_port, do: stop_inbound_process(state.ts_port)
         state.inbound_module.cleanup(state.id, state.storage_dir)
-        updated_state = %{updated_state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
+
+        updated_state = %{
+          updated_state
+          | ts_status: :starting,
+            ts_error_reason: nil,
+            ts_port: nil
+        }
+
         updated_state = broadcast_update(updated_state)
         {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
 
@@ -1854,8 +1867,6 @@ defmodule Hermit.Vpn.PairWorker do
   rescue
     _ -> :ok
   end
-
-  defp stop_inbound_process(nil), do: :ok
 
   defp stop_inbound_process(port_or_pid) do
     Process.unlink(port_or_pid)

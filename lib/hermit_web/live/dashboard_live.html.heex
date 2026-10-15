@@ -163,8 +163,14 @@
                       <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
                     </span>
                     <%= if pair.ts_error_reason do %>
-                      <div class="flex items-center gap-1 text-[11px] text-red-500 font-medium" title={pair.ts_error_reason}>
-                        <.icon name="hero-exclamation-triangle" class="size-3.5 shrink-0 text-red-500" />
+                      <div
+                        class="flex items-center gap-1 text-[11px] text-red-500 font-medium"
+                        title={pair.ts_error_reason}
+                      >
+                        <.icon
+                          name="hero-exclamation-triangle"
+                          class="size-3.5 shrink-0 text-red-500"
+                        />
                         <span class="truncate max-w-[130px]">
                           {summarize_error(pair.ts_error_reason)}
                         </span>
@@ -198,8 +204,14 @@
                       <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error
                     </span>
                     <%= if pair.wg_error_reason do %>
-                      <div class="flex items-center gap-1 text-[11px] text-red-500 font-medium" title={pair.wg_error_reason}>
-                        <.icon name="hero-exclamation-triangle" class="size-3.5 shrink-0 text-red-500" />
+                      <div
+                        class="flex items-center gap-1 text-[11px] text-red-500 font-medium"
+                        title={pair.wg_error_reason}
+                      >
+                        <.icon
+                          name="hero-exclamation-triangle"
+                          class="size-3.5 shrink-0 text-red-500"
+                        />
                         <span class="truncate max-w-[130px]">
                           {summarize_error(pair.wg_error_reason)}
                         </span>
@@ -439,7 +451,9 @@
               <span>Setup Required Before Deploying:</span>
             </div>
             <p class="text-base-content/80 leading-relaxed text-[11px]">
-              A tunnel requires at least one <strong>Inbound Profile</strong> (client ingress) and one <strong>Outbound Profile</strong> (egress gateway):
+              A tunnel requires at least one <strong>Inbound Profile</strong>
+              (client ingress) and one <strong>Outbound Profile</strong>
+              (egress gateway):
             </p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
               <%= if Enum.empty?(@inbound_profiles) do %>

@@ -2,7 +2,6 @@ defmodule HermitWeb.DnsProfileLive do
   use HermitWeb, :live_view
   import Ecto.Query
   alias Hermit.Vpn.DnsConfig
-  require Logger
 
   @impl true
   def mount(_params, _session, socket) do
@@ -452,9 +451,6 @@ defmodule HermitWeb.DnsProfileLive do
              |> assign(custom_rule_action: "block")
              |> assign(custom_rule_value: "")
              |> assign(custom_rule_proxy_pair_id: "")}
-
-          other ->
-            other
         end
     end
   end
@@ -626,7 +622,9 @@ defmodule HermitWeb.DnsProfileLive do
           to_string(raw_id)
 
         true ->
-          ts = Map.get(log, "timestamp") || Map.get(log, :timestamp) || System.system_time(:second)
+          ts =
+            Map.get(log, "timestamp") || Map.get(log, :timestamp) || System.system_time(:second)
+
           ts_val = if is_integer(ts), do: ts, else: System.system_time(:second)
           "#{ts_val}-#{System.unique_integer([:positive, :monotonic])}"
       end
@@ -708,8 +706,7 @@ defmodule HermitWeb.DnsProfileLive do
       end
 
     {total_queries, blocked_queries, ipv6_blocked_count, adguard_blocked, goodbyeads_blocked,
-     adult_blocked,
-     custom_blocked} =
+     adult_blocked, custom_blocked} =
       Enum.reduce(records, {0, 0, 0, 0, 0, 0, 0}, fn {_hour, t, b, i6, adg, gba, adt, cst},
                                                      {acc_t, acc_b, acc_i6, acc_adg, acc_gba,
                                                       acc_adt, acc_cst} ->

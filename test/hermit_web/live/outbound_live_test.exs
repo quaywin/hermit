@@ -100,10 +100,15 @@ defmodule HermitWeb.OutboundLiveTest do
 
     # Verify linked pair was updated in DB
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_linked_outbound_pair")
-    assert updated_pair.outbound_config["wg_config"] == "[Interface]\nPrivateKey = outbound_test_key_updated\n"
+
+    assert updated_pair.outbound_config["wg_config"] ==
+             "[Interface]\nPrivateKey = outbound_test_key_updated\n"
+
     assert updated_pair.outbound_config["use_tailscale_dns"] == true
 
-    Hermit.Repo.delete_all(from(p in Hermit.Vpn.VpnPair, where: p.pair_id == "test_linked_outbound_pair"))
+    Hermit.Repo.delete_all(
+      from(p in Hermit.Vpn.VpnPair, where: p.pair_id == "test_linked_outbound_pair")
+    )
 
     # Delete the profile
     html =

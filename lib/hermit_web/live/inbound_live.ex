@@ -94,7 +94,7 @@ defmodule HermitWeb.InboundLive do
         config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint.id)
         {_, ts_ip, _} = DnsWorker.get_status(endpoint.id)
 
-        if config && config.tailscale_override_dns do
+        if config.tailscale_override_dns do
           Task.start(fn -> DnsWorker.clear_tailscale_dns_config(profile, config, ts_ip) end)
         end
 
@@ -159,7 +159,8 @@ defmodule HermitWeb.InboundLive do
     try do
       Hermit.Vpn.PairWorker.list_pairs()
       |> Enum.filter(fn p ->
-        p.ts_status == :error and not is_nil(p.ts_error_reason) and not is_nil(p.inbound_profile_id)
+        p.ts_status == :error and not is_nil(p.ts_error_reason) and
+          not is_nil(p.inbound_profile_id)
       end)
       |> Enum.map(fn p -> {p.inbound_profile_id, p.ts_error_reason} end)
       |> Enum.into(%{})

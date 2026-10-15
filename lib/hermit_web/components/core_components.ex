@@ -529,7 +529,11 @@ defmodule HermitWeb.CoreComponents do
       data-clipboard-text={@text}
       data-copied-text={@copied_text}
       title={@title}
-      class={["btn btn-ghost border border-base-300 hover:border-emerald-500/50 hover:bg-emerald-500/5 gap-1.5 transition-all text-base-content/70 hover:text-emerald-500 cursor-pointer", @size, @class]}
+      class={[
+        "btn btn-ghost border border-base-300 hover:border-emerald-500/50 hover:bg-emerald-500/5 gap-1.5 transition-all text-base-content/70 hover:text-emerald-500 cursor-pointer",
+        @size,
+        @class
+      ]}
       {@rest}
     >
       <.icon name="hero-clipboard-document" class="size-3.5 shrink-0" />

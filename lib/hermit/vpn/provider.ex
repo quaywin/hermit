@@ -471,9 +471,6 @@ defmodule Hermit.Vpn.Provider do
             {val, _} when val > 0.0 -> round(val * 1000)
             _ -> nil
           end
-
-        _ ->
-          nil
       end
     rescue
       _ -> nil

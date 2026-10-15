@@ -243,7 +243,7 @@ defmodule HermitWeb.DnsEndpointLive do
     config = DnsConfig.get_for_endpoint(endpoint_id)
     {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
 
-    if config && config.tailscale_override_dns do
+    if config.tailscale_override_dns do
       Task.start(fn ->
         DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
       end)
@@ -304,16 +304,14 @@ defmodule HermitWeb.DnsEndpointLive do
           config = DnsConfig.get_for_endpoint(endpoint_id)
           {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
 
-          if config && config.tailscale_override_dns do
+          if config.tailscale_override_dns do
             Task.start(fn ->
               DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
             end)
           end
 
           # Cập nhật DB config tắt luôn override
-          if config do
-            DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
-          end
+          DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
 
           Task.start(fn ->
             Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
@@ -466,7 +464,7 @@ defmodule HermitWeb.DnsEndpointLive do
         config = DnsConfig.get_for_endpoint(endpoint_id)
         endpoint = Hermit.Repo.preload(endpoint, :inbound_profile)
 
-        if config && config.tailscale_override_dns do
+        if config.tailscale_override_dns do
           Task.start(fn ->
             DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
           end)

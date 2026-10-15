@@ -1874,8 +1874,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     end
   end
 
-  defp clean_routes(nil), do: ""
-
   defp clean_routes(routes) when is_binary(routes) do
     routes
     |> String.split(",")

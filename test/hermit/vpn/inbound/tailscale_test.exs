@@ -283,7 +283,12 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
         "nodeAttrs" => [],
         "autoApprovers" => %{"routes" => %{}},
         "ssh" => [
-          %{"action" => "check", "src" => ["autogroup:admin"], "dst" => [tag], "users" => ["root"]}
+          %{
+            "action" => "check",
+            "src" => ["autogroup:admin"],
+            "dst" => [tag],
+            "users" => ["root"]
+          }
         ]
       }
 

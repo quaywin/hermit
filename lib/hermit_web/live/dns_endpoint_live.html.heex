@@ -63,9 +63,12 @@
                   <div class="flex items-center gap-2">
                     <span class="text-base">
                       <%= cond do %>
-                        <% endpoint.inbound_profile_id -> %>🌐
-                        <% endpoint.ddns_hostname && endpoint.ddns_hostname != "" -> %>⚡
-                        <% true -> %>🛡️
+                        <% endpoint.inbound_profile_id -> %>
+                          🌐
+                        <% endpoint.ddns_hostname && endpoint.ddns_hostname != "" -> %>
+                          ⚡
+                        <% true -> %>
+                          🛡️
                       <% end %>
                     </span>
                     <span class="font-bold text-base-content">{endpoint.name}</span>
@@ -83,13 +86,18 @@
                         Tailscale Connection
                       </span>
                       <span class="block text-[10px] text-base-content/50 font-mono mt-0.5">
-                        {if endpoint.inbound_profile, do: endpoint.inbound_profile.name, else: "Profile ##{endpoint.inbound_profile_id}"}
+                        {if endpoint.inbound_profile,
+                          do: endpoint.inbound_profile.name,
+                          else: "Profile ##{endpoint.inbound_profile_id}"}
                       </span>
                     <% endpoint.ddns_hostname && endpoint.ddns_hostname != "" -> %>
                       <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
                         ⚡ Port 53 DDNS
                       </span>
-                      <span class="block text-[10px] text-base-content/50 font-mono mt-0.5 truncate max-w-[140px]" title={endpoint.ddns_hostname}>
+                      <span
+                        class="block text-[10px] text-base-content/50 font-mono mt-0.5 truncate max-w-[140px]"
+                        title={endpoint.ddns_hostname}
+                      >
                         {endpoint.ddns_hostname}
                       </span>
                     <% true -> %>
@@ -112,7 +120,10 @@
                       class="select select-bordered select-xs bg-base-100 border-base-300 text-xs font-semibold text-base-content rounded-[4px] focus:outline-none focus:border-primary"
                     >
                       <%= for profile <- @dns_profiles do %>
-                        <option value={profile.id} selected={endpoint.dns_profile_id == profile.id}>
+                        <option
+                          value={profile.id}
+                          selected={endpoint.dns_profile_id == profile.id}
+                        >
                           🛡️ {profile.name}
                         </option>
                       <% end %>
@@ -137,9 +148,11 @@
                               starting
                             </span>
                           <% :error -> %>
-                            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help" title={err}>
-                              <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                              error
+                            <span
+                              class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
+                              title={err}
+                            >
+                              <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> error
                             </span>
                           <% :stopped -> %>
                             <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
@@ -165,8 +178,7 @@
                       </span>
                     <% else %>
                       <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                        <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span>
-                        Inactive
+                        <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Inactive
                       </span>
                     <% end %>
                   <% end %>
@@ -193,10 +205,17 @@
                     </a>
 
                     <div class="dropdown dropdown-top dropdown-end">
-                      <label tabindex="0" class="btn btn-ghost btn-xs text-base-content/60 hover:text-primary px-1 cursor-pointer" title="Scan QR Code">
+                      <label
+                        tabindex="0"
+                        class="btn btn-ghost btn-xs text-base-content/60 hover:text-primary px-1 cursor-pointer"
+                        title="Scan QR Code"
+                      >
                         <.icon name="hero-qr-code" class="size-4" />
                       </label>
-                      <div tabindex="0" class="dropdown-content z-50 p-3 bg-base-100 border border-base-300 rounded-[12px] shadow-xl mb-2 text-center w-40">
+                      <div
+                        tabindex="0"
+                        class="dropdown-content z-50 p-3 bg-base-100 border border-base-300 rounded-[12px] shadow-xl mb-2 text-center w-40"
+                      >
                         <div class="bg-white p-2 rounded-[6px] border border-base-300 shadow-inner inline-block">
                           <canvas
                             id={"qr-canvas-#{endpoint.id}"}
@@ -204,8 +223,7 @@
                             data-qr-content={doh_url}
                             data-qr-size="110"
                             class="size-[110px] block"
-                          >
-                          </canvas>
+                          ></canvas>
                         </div>
                         <span class="text-[9px] uppercase tracking-wider text-base-content/50 font-semibold block mt-1">Scan for DoH</span>
                       </div>
@@ -225,10 +243,15 @@
                         class={[
                           "btn btn-xs rounded-[4px] cursor-pointer font-medium text-[11px] px-2",
                           config && config.tailscale_override_dns && "btn-success text-white",
-                          !(config && config.tailscale_override_dns) && "btn-outline-custom text-base-content/70",
+                          !(config && config.tailscale_override_dns) &&
+                            "btn-outline-custom text-base-content/70",
                           status != :running && "opacity-40 cursor-not-allowed"
                         ]}
-                        title={if config && config.tailscale_override_dns, do: "Tailscale Global DNS: ON (Click to disable)", else: "Tailscale Global DNS: OFF (Click to enable)"}
+                        title={
+                          if config && config.tailscale_override_dns,
+                            do: "Tailscale Global DNS: ON (Click to disable)",
+                            else: "Tailscale Global DNS: OFF (Click to enable)"
+                        }
                       >
                         Global DNS
                       </button>
@@ -242,9 +265,12 @@
                       class={[
                         "btn btn-xs rounded-[4px] cursor-pointer font-medium text-xs px-2.5",
                         endpoint.enabled && "btn-success btn-outline",
-                        !endpoint.enabled && "btn-ghost border border-base-300 text-base-content/60"
+                        !endpoint.enabled &&
+                          "btn-ghost border border-base-300 text-base-content/60"
                       ]}
-                      title={if endpoint.enabled, do: "Click to Deactivate", else: "Click to Activate"}
+                      title={
+                        if endpoint.enabled, do: "Click to Deactivate", else: "Click to Activate"
+                      }
                     >
                       {if endpoint.enabled, do: "Active", else: "Disabled"}
                     </button>
@@ -336,7 +362,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @new_connection_type == "doh" && "btn-primary text-white",
-                  @new_connection_type != "doh" && "btn-ghost border border-base-300 text-base-content/70"
+                  @new_connection_type != "doh" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🛡️ DoH Only
@@ -348,7 +375,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @new_connection_type == "tailscale" && "btn-primary text-white",
-                  @new_connection_type != "tailscale" && "btn-ghost border border-base-300 text-base-content/70"
+                  @new_connection_type != "tailscale" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🌐 Tailscale
@@ -360,7 +388,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @new_connection_type == "ddns" && "btn-primary text-white",
-                  @new_connection_type != "ddns" && "btn-ghost border border-base-300 text-base-content/70"
+                  @new_connection_type != "ddns" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 ⚡ Port 53 DDNS
@@ -488,7 +517,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @edit_connection_type == "doh" && "btn-primary text-white",
-                  @edit_connection_type != "doh" && "btn-ghost border border-base-300 text-base-content/70"
+                  @edit_connection_type != "doh" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🛡️ DoH Only
@@ -500,7 +530,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @edit_connection_type == "tailscale" && "btn-primary text-white",
-                  @edit_connection_type != "tailscale" && "btn-ghost border border-base-300 text-base-content/70"
+                  @edit_connection_type != "tailscale" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 🌐 Tailscale
@@ -512,7 +543,8 @@
                 class={[
                   "btn btn-xs rounded-[4px] font-semibold text-[11px]",
                   @edit_connection_type == "ddns" && "btn-primary text-white",
-                  @edit_connection_type != "ddns" && "btn-ghost border border-base-300 text-base-content/70"
+                  @edit_connection_type != "ddns" &&
+                    "btn-ghost border border-base-300 text-base-content/70"
                 ]}
               >
                 ⚡ Port 53 DDNS

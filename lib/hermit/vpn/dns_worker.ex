@@ -67,7 +67,7 @@ defmodule Hermit.Vpn.DnsWorker do
       try do
         config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
 
-        if config && config.id do
+        if config.id do
           Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
         end
       rescue
@@ -187,7 +187,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
       config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
 
-      if config && profile do
+      if profile do
         ts_ip = state.ts_ip
         Task.start(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
       end

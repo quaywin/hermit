@@ -1,7 +1,6 @@
 defmodule HermitWeb.SystemLive do
   use HermitWeb, :live_view
   alias Hermit.Updater
-  require Logger
 
   @impl true
   def mount(_params, _session, socket) do

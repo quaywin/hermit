@@ -13,7 +13,7 @@ Enable a ControlD-like DNS control and filtering engine within Hermit. Every act
 ---
 
 ## Tech Stack
-- **Elixir & OTP** (v1.18+): Backend core, PairWorker lifecycle, UDP query log receiver.
+- **Elixir & OTP** (Elixir 1.20+, OTP 28): Backend core, PairWorker lifecycle, UDP query log receiver.
 - **Phoenix LiveView** (v1.2+): Live dashboard, stream-based scrolling logs, reactive form management.
 - **SQLite (Ecto)**: Persists configuration (`dns_config`) on VPN Pairs.
 - **Python 3**: A lightweight, dependency-free DNS UDP proxy daemon running inside network namespaces.

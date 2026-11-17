@@ -22,4 +22,6 @@ services:
       - PHX_SERVER=true
       - PORT=3000
       - STORAGE_BASE_PATH=/app/storage
+      - GOMEMLIMIT=32MiB
+      - GOGC=50
     restart: "on-failure:5"

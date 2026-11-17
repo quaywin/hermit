@@ -4,7 +4,7 @@ defmodule Hermit.Dns.Cache do
   """
 
   @dns_cache_table :dns_cache
-  @max_entries 50_000
+  @max_entries 25_000
 
   @spec lookup(integer(), String.t(), atom(), boolean()) ::
           {:ok, binary(), String.t(), String.t()}

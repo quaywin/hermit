@@ -74,13 +74,6 @@ defmodule HermitWeb.Layouts do
               Outbound Profiles
             </.sidebar_link>
             <.sidebar_link
-              navigate={~p"/providers"}
-              active={@active == :providers}
-              icon="hero-cloud-arrow-down"
-            >
-              VPN Providers
-            </.sidebar_link>
-            <.sidebar_link
               navigate={~p"/dns"}
               active={@active == :dns_profiles}
               icon="hero-globe-alt"
@@ -179,13 +172,6 @@ defmodule HermitWeb.Layouts do
                 <.icon name="hero-arrow-up-right" class="size-5 shrink-0" />
               </.link>
               <.link
-                navigate={~p"/providers"}
-                class={if @active == :providers, do: "text-emerald-500", else: "text-base-content/60"}
-                title="VPN Providers"
-              >
-                <.icon name="hero-cloud-arrow-down" class="size-5 shrink-0" />
-              </.link>
-              <.link
                 navigate={~p"/dns"}
                 class={
                   if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"
@@ -273,7 +259,6 @@ defmodule HermitWeb.Layouts do
           HermitWeb.InboundLive -> :inbounds
           HermitWeb.InboundDetailLive -> :inbounds
           HermitWeb.OutboundLive -> :outbounds
-          HermitWeb.ProviderImportLive -> :providers
           HermitWeb.DnsProfileLive -> :dns_profiles
           HermitWeb.BlocklistLive -> :dns_blocklists
           HermitWeb.SystemLive -> :settings

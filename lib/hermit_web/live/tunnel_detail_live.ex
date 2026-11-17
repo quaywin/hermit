@@ -146,138 +146,6 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   @impl true
-  def handle_event("toggle_app_connector", _params, socket) do
-    id = socket.assigns.id
-    pair = socket.assigns.pair
-    inbound_config = pair.inbound_config || %{}
-
-    current_val =
-      case Map.get(inbound_config, "advertise_connector") do
-        true -> true
-        "true" -> true
-        _ -> false
-      end
-
-    new_val = not current_val
-    new_config = Map.put(inbound_config, "advertise_connector", new_val)
-
-    new_config =
-      if new_val &&
-           (is_nil(Map.get(new_config, "advertise_connector_tag")) ||
-              String.trim(Map.get(new_config, "advertise_connector_tag")) == "") do
-        default_tag = "tag:connector-#{String.replace(id, "_", "-")}"
-        Map.put(new_config, "advertise_connector_tag", default_tag)
-      else
-        new_config
-      end
-
-    case PairWorker.update_inbound_config(id, new_config) do
-      {:ok, updated_pair} ->
-        {:noreply,
-         socket
-         |> assign_pair(updated_pair)
-         |> put_flash(
-           :info,
-           "App connector #{if new_val, do: "enabled", else: "disabled"}. Applying changes dynamically..."
-         )}
-
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Failed to toggle app connector: #{inspect(reason)}")}
-    end
-  end
-
-  @impl true
-  def handle_event("change_connector_settings", params, socket) do
-    access_mode = Map.get(params, "connector_access_mode") || "all"
-    {:noreply, assign(socket, connector_access_mode: access_mode)}
-  end
-
-  @impl true
-  def handle_event(
-        "save_connector_settings",
-        params,
-        socket
-      ) do
-    tag = Map.get(params, "connector_tag", "")
-    domains_str = Map.get(params, "connector_domains", "")
-    access_mode = Map.get(params, "connector_access_mode", "all")
-    access_sources = Map.get(params, "connector_access_sources", "")
-
-    id = socket.assigns.id
-    pair = socket.assigns.pair
-    inbound_config = pair.inbound_config || %{}
-
-    # Check for domain duplication across other app connectors
-    vpn_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, id)
-    profile = Hermit.Repo.preload(vpn_pair, [:inbound_profile]).inbound_profile
-    current_tag = Hermit.Vpn.Inbound.Tailscale.get_connector_tag(id, inbound_config)
-
-    domains_list =
-      String.split(domains_str, [",", "\n"])
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.map(&String.downcase/1)
-
-    validation_result =
-      if profile && domains_list != [] do
-        case Hermit.Vpn.Inbound.Tailscale.get_app_connectors(profile) do
-          {:ok, list} ->
-            Enum.find_value(list, fn conn ->
-              conn_tag = Enum.at(Map.get(conn, "connectors", []), 0)
-
-              if conn_tag && conn_tag != current_tag do
-                existing_domains = Map.get(conn, "domains", []) |> Enum.map(&String.downcase/1)
-                dup_domain = Enum.find(domains_list, fn d -> d in existing_domains end)
-
-                if dup_domain do
-                  {dup_domain, Map.get(conn, "name", conn_tag)}
-                else
-                  nil
-                end
-              else
-                nil
-              end
-            end)
-
-          _ ->
-            nil
-        end
-      else
-        nil
-      end
-
-    case validation_result do
-      {duplicate_domain, other_conn_name} ->
-        {:noreply,
-         socket
-         |> put_flash(
-           :error,
-           "Domain '#{duplicate_domain}' is already configured in another App Connector '#{other_conn_name}'."
-         )}
-
-      nil ->
-        new_config =
-          inbound_config
-          |> Map.put("advertise_connector_tag", String.trim(tag))
-          |> Map.put("advertise_connector_domains", String.trim(domains_str))
-          |> Map.put("advertise_connector_access_mode", String.trim(access_mode))
-          |> Map.put("advertise_connector_access_sources", String.trim(access_sources))
-
-        case PairWorker.update_inbound_config(id, new_config) do
-          {:ok, updated_pair} ->
-            {:noreply,
-             socket
-             |> assign_pair(updated_pair)
-             |> put_flash(:info, "App Connector settings updated. Applying to Tailscale ACL...")}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Failed to update settings: #{inspect(reason)}")}
-        end
-    end
-  end
-
-  @impl true
   def handle_event("toggle_use_tailscale_dns", _params, socket) do
     new_use_default = not socket.assigns.use_tailscale_dns
 
@@ -503,13 +371,11 @@ defmodule HermitWeb.TunnelDetailLive do
   def handle_info({:vpn_pair_updated, pair}, socket) do
     if pair.id == socket.assigns.id do
       current_use_dns = socket.assigns.use_tailscale_dns
-      current_access_mode = socket.assigns.connector_access_mode
 
       {:noreply,
        socket
        |> assign_pair(pair)
        |> assign(use_tailscale_dns: current_use_dns)
-       |> assign(connector_access_mode: current_access_mode)
        |> assign(uptime: format_uptime(pair.started_at))}
     else
       {:noreply, socket}
@@ -589,8 +455,6 @@ defmodule HermitWeb.TunnelDetailLive do
           end
       end
 
-    connector_access_mode = Map.get(inbound_config, "advertise_connector_access_mode") || "all"
-
     wg_content =
       Map.get(pair, :wg_config_content) || Map.get(pair, :wg_config) ||
         (is_map(pair.outbound_config) &&
@@ -599,7 +463,6 @@ defmodule HermitWeb.TunnelDetailLive do
     socket
     |> assign(pair: pair)
     |> assign(use_tailscale_dns: use_tailscale_dns)
-    |> assign(connector_access_mode: connector_access_mode)
     |> assign(system_dns: get_system_dns())
     |> assign(wg_info: parse_wg_config(wg_content))
   end

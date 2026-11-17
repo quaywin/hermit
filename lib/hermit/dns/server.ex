@@ -71,7 +71,7 @@ defmodule Hermit.Dns.Server do
     # We open a pool of 4 sockets to prevent Transaction ID collisions under heavy load.
     upstream_sockets =
       Enum.map(1..4, fn _ ->
-        case :gen_udp.open(0, [:binary, active: true, recbuf: 1024 * 1024, read_packets: 1000]) do
+        case :gen_udp.open(0, [:binary, active: true, recbuf: 65_536, read_packets: 1000]) do
           {:ok, sock} -> sock
           {:error, _} -> nil
         end
@@ -313,13 +313,20 @@ defmodule Hermit.Dns.Server do
     status_str = to_string(status) |> String.downcase()
 
     if status_str == "running" do
-      case read_proxy_ports_from_disk(pair_id) do
-        {:ok, http_port, socks5_port} ->
-          ensure_proxy_cache_table_exists()
-          :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, socks5_port}})
+      ensure_proxy_cache_table_exists()
 
-        _ ->
+      case :ets.lookup(:dns_proxy_cache, {:ports, pair_id}) do
+        [{_, _}] ->
           :ok
+
+        [] ->
+          case read_proxy_ports_from_disk(pair_id) do
+            {:ok, http_port, socks5_port} ->
+              :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, socks5_port}})
+
+            _ ->
+              :ok
+          end
       end
     else
       if :ets.info(:dns_proxy_cache) != :undefined do

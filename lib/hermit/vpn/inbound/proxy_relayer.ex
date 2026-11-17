@@ -72,9 +72,9 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
               active: false,
               reuseaddr: true,
               nodelay: true,
-              recbuf: 262_144,
-              sndbuf: 262_144,
-              buffer: 262_144,
+              recbuf: 65_536,
+              sndbuf: 65_536,
+              buffer: 65_536,
               backlog: 1024
             ]
 
@@ -163,7 +163,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
       {:ok, client_socket} ->
         # Spawn client handler to relay traffic
         spawn(fn ->
-          Process.flag(:max_heap_size, %{size: 13_107_200, kill: true, error_logger: true})
+          Process.flag(:max_heap_size, %{size: 2_621_440, kill: true, error_logger: true})
 
           # Apply standard socket options to client socket
           :inet.setopts(client_socket, [
@@ -171,9 +171,9 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
             packet: :raw,
             active: false,
             nodelay: true,
-            recbuf: 262_144,
-            sndbuf: 262_144,
-            buffer: 262_144,
+            recbuf: 65_536,
+            sndbuf: 65_536,
+            buffer: 65_536,
             send_timeout: 5000,
             send_timeout_close: true
           ])
@@ -275,9 +275,9 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
              packet: :raw,
              active: false,
              nodelay: true,
-             recbuf: 262_144,
-             sndbuf: 262_144,
-             buffer: 262_144,
+             recbuf: 65_536,
+             sndbuf: 65_536,
+             buffer: 65_536,
              send_timeout: 5000,
              send_timeout_close: true
            ]) do
@@ -315,9 +315,9 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
              packet: :raw,
              active: false,
              nodelay: true,
-             recbuf: 262_144,
-             sndbuf: 262_144,
-             buffer: 262_144,
+             recbuf: 65_536,
+             sndbuf: 65_536,
+             buffer: 65_536,
              send_timeout: 5000,
              send_timeout_close: true
            ]) do

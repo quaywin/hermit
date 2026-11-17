@@ -466,7 +466,7 @@ defmodule Hermit.Vpn.PairWorkerTest do
     new_inbound_config = %{
       "ts_auth_key" => "tskey-new",
       "advertise_exit_node" => false,
-      "advertise_connector" => true,
+      "advertise_tags" => "tag:custom",
       "advertise_routes" => "192.168.1.0/24"
     }
 
@@ -476,14 +476,14 @@ defmodule Hermit.Vpn.PairWorkerTest do
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_pair")
     assert updated_pair.inbound_config["ts_auth_key"] == "tskey-new"
     assert updated_pair.inbound_config["advertise_exit_node"] == false
-    assert updated_pair.inbound_config["advertise_connector"] == true
+    assert updated_pair.inbound_config["advertise_tags"] == "tag:custom"
     assert updated_pair.inbound_config["advertise_routes"] == "192.168.1.0/24"
 
     # Check memory state of running worker
     state = GenServer.call(pid, :get_state)
     assert state.inbound_config["ts_auth_key"] == "tskey-new"
     assert state.inbound_config["advertise_exit_node"] == false
-    assert state.inbound_config["advertise_connector"] == true
+    assert state.inbound_config["advertise_tags"] == "tag:custom"
     assert state.inbound_config["advertise_routes"] == "192.168.1.0/24"
 
     GenServer.stop(pid)
@@ -851,72 +851,6 @@ defmodule Hermit.Vpn.PairWorkerTest do
     assert is_pid(state.ts_port)
 
     assert GenServer.stop(pid) == :ok
-  end
-
-  test "automatically deduplicates connector domains across pairs sharing the same profile" do
-    {:ok, inbound_profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "dedup_profile",
-        type: "tailscale",
-        config: %{}
-      })
-
-    {:ok, outbound_profile} =
-      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
-        name: "dedup_outbound",
-        type: "wireguard",
-        config: %{"wg_config" => "[Interface]\nPrivateKey = wgpkey\n"}
-      })
-
-    pair1 = %Hermit.Vpn.VpnPair{
-      pair_id: "pair_one",
-      inbound_profile_id: inbound_profile.id,
-      outbound_profile_id: outbound_profile.id,
-      status: "running",
-      inbound_config: %{
-        "advertise_connector" => true,
-        "advertise_connector_domains" => "duplicate.com\nkeep-one.com"
-      }
-    }
-
-    Hermit.Repo.insert!(pair1, on_conflict: :replace_all, conflict_target: :pair_id)
-
-    pair2 = %Hermit.Vpn.VpnPair{
-      pair_id: "pair_two",
-      inbound_profile_id: inbound_profile.id,
-      outbound_profile_id: outbound_profile.id,
-      status: "running",
-      inbound_config: %{
-        "advertise_connector" => true,
-        "advertise_connector_domains" => "original.com"
-      }
-    }
-
-    Hermit.Repo.insert!(pair2, on_conflict: :replace_all, conflict_target: :pair_id)
-
-    {:ok, pid1} =
-      PairWorker.start_link(%{
-        id: "pair_one",
-        wg_config: "[Interface]\nPrivateKey = wgpkey\n",
-        ts_auth_key: "tskey-1"
-      })
-
-    Process.sleep(200)
-
-    new_inbound_config = %{
-      "advertise_connector" => true,
-      "advertise_connector_domains" => "duplicate.com\noriginal.com\nnew-domain.com"
-    }
-
-    assert {:ok, _} = PairWorker.update_inbound_config("pair_two", new_inbound_config)
-
-    updated_pair1 = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "pair_one")
-    assert updated_pair1.inbound_config["advertise_connector_domains"] == "keep-one.com"
-
-    state1 = GenServer.call(pid1, :get_state)
-    assert state1.inbound_config["advertise_connector_domains"] == "keep-one.com"
-
-    GenServer.stop(pid1)
   end
 
   test "measures latency periodically during metrics poll" do

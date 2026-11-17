@@ -140,28 +140,6 @@
           <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
             <% "wireguard" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
-                <%= if @provider_configs != [] do %>
-                  <div class="space-y-1.5 bg-emerald-500/5 border border-emerald-500/20 p-3 rounded-[6px]">
-                    <label class="block text-xs font-semibold uppercase tracking-wider text-emerald-500">
-                      ✨ Quick-fill from Saved VPN Provider Configs
-                    </label>
-                    <select
-                      phx-change="select_provider_config"
-                      name="provider_config_id"
-                      class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-                    >
-                      <option value="">-- Select a saved config to auto-fill --</option>
-                      <option
-                        :for={config <- @provider_configs}
-                        value={config.id}
-                        selected={to_string(config.id) == @selected_provider_config_id}
-                      >
-                        {config.name} ({String.upcase(config.provider)})
-                      </option>
-                    </select>
-                  </div>
-                <% end %>
-
                 <div class="space-y-2">
                   <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
                   <textarea
@@ -318,28 +296,6 @@
           <%= case Phoenix.HTML.Form.input_value(f, :type) do %>
             <% "wireguard" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
-                <%= if @provider_configs != [] do %>
-                  <div class="space-y-1.5 bg-emerald-500/5 border border-emerald-500/20 p-3 rounded-[6px]">
-                    <label class="block text-xs font-semibold uppercase tracking-wider text-emerald-500">
-                      ✨ Quick-fill from Saved VPN Provider Configs
-                    </label>
-                    <select
-                      phx-change="select_provider_config"
-                      name="provider_config_id"
-                      class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-                    >
-                      <option value="">-- Select a saved config to auto-fill --</option>
-                      <option
-                        :for={config <- @provider_configs}
-                        value={config.id}
-                        selected={to_string(config.id) == @selected_provider_config_id}
-                      >
-                        {config.name} ({String.upcase(config.provider)})
-                      </option>
-                    </select>
-                  </div>
-                <% end %>
-
                 <div class="space-y-2">
                   <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">WireGuard Payload</label>
                   <textarea

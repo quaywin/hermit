@@ -70,21 +70,26 @@ defmodule Hermit.Dns.Filter do
 
   @spec match_any_ets_blocklist_cached?(String.t(), [integer()]) :: integer() | nil
   def match_any_ets_blocklist_cached?(domain, blocklist_ids) do
-    ensure_filter_cache_table_exists()
     cache_key = {domain, blocklist_ids}
 
-    case :ets.lookup(:dns_filter_cache, cache_key) do
-      [{_, matched_id, _}] ->
-        matched_id
+    try do
+      case :ets.lookup(:dns_filter_cache, cache_key) do
+        [{_, matched_id, _}] ->
+          matched_id
 
-      [{_, matched_id}] ->
-        matched_id
+        [{_, matched_id}] ->
+          matched_id
 
-      [] ->
-        matched_id = match_any_ets_blocklist?(domain, blocklist_ids)
-        now = System.monotonic_time(:second)
-        :ets.insert(:dns_filter_cache, {cache_key, matched_id, now})
-        matched_id
+        [] ->
+          matched_id = match_any_ets_blocklist?(domain, blocklist_ids)
+          now = System.monotonic_time(:second)
+          :ets.insert(:dns_filter_cache, {cache_key, matched_id, now})
+          matched_id
+      end
+    rescue
+      ArgumentError ->
+        ensure_filter_cache_table_exists()
+        match_any_ets_blocklist?(domain, blocklist_ids)
     end
   end
 

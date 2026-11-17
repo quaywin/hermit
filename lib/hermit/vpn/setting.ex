@@ -36,10 +36,6 @@ defmodule Hermit.Vpn.Setting do
     value = get_field(changeset, :value)
 
     cond do
-      key == "tailscale_auth_key" and value != "" and value != nil and
-          not String.starts_with?(value, "tskey-") ->
-        add_error(changeset, :value, "must start with 'tskey-'")
-
       key == "tailscale_api_key" and value != "" and value != nil and
           not String.starts_with?(value, "tskey-api-") ->
         add_error(changeset, :value, "must start with 'tskey-api-'")

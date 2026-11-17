@@ -162,8 +162,6 @@ defmodule Hermit.Vpn.PairWorker do
              |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: new_config})
              |> Hermit.Repo.update() do
           {:ok, updated_pair} ->
-            deduplicate_domains(id, updated_pair.inbound_config, pair.inbound_profile_id)
-
             case GenServer.whereis(via_tuple(id)) do
               nil ->
                 case ensure_worker_running(id) do
@@ -1744,7 +1742,8 @@ defmodule Hermit.Vpn.PairWorker do
       Process.cancel_timer(state.metrics_timer)
     end
 
-    timer = Process.send_after(self(), :poll_metrics, 3000)
+    interval = if has_active_ui?(), do: 3000, else: 10_000
+    timer = Process.send_after(self(), :poll_metrics, interval)
     %{state | metrics_timer: timer}
   end
 
@@ -1926,39 +1925,7 @@ defmodule Hermit.Vpn.PairWorker do
     end
   end
 
-  defp sanitize_inbound_config(pair_id, config) when is_map(config) do
-    string_config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
-    tag = Map.get(string_config, "advertise_connector_tag")
-    normalized_id = String.replace(pair_id, "_", "-")
-    default_tag = "tag:connector-#{normalized_id}"
-
-    resolved_tag =
-      if is_binary(tag) and String.trim(tag) != "" do
-        tag = String.trim(tag)
-
-        case Regex.run(~r/^tag:connector-(.+)$/, tag) do
-          [_, other_id] when other_id != normalized_id ->
-            default_tag
-
-          _ ->
-            tag
-        end
-      else
-        default_tag
-      end
-
-    put_config_value(config, "advertise_connector_tag", resolved_tag)
-  end
-
   defp sanitize_inbound_config(_pair_id, config), do: config
-
-  defp put_config_value(config, key, value) do
-    cond do
-      Map.has_key?(config, key) -> Map.put(config, key, value)
-      Map.has_key?(config, String.to_atom(key)) -> Map.put(config, String.to_atom(key), value)
-      true -> Map.put(config, key, value)
-    end
-  end
 
   defp save_inbound_config_db(pair, config) do
     pair
@@ -1974,89 +1941,6 @@ defmodule Hermit.Vpn.PairWorker do
     |> Hermit.Repo.update()
   rescue
     _ -> :ok
-  end
-
-  defp deduplicate_domains(id, new_config, profile_id) do
-    advertise_connector =
-      case Map.get(new_config, "advertise_connector") || Map.get(new_config, :advertise_connector) do
-        true -> true
-        "true" -> true
-        _ -> false
-      end
-
-    new_domains = if advertise_connector, do: clean_connector_domains(new_config), else: []
-
-    if advertise_connector and new_domains != [] do
-      new_domains_down = Enum.map(new_domains, &String.downcase/1)
-
-      import Ecto.Query
-
-      other_pairs =
-        Hermit.Repo.all(
-          from(p in Hermit.Vpn.VpnPair,
-            where: p.pair_id != ^id and p.inbound_profile_id == ^profile_id
-          )
-        )
-
-      Enum.each(other_pairs, fn other_pair ->
-        other_config = other_pair.inbound_config || %{}
-
-        other_domains_str =
-          Map.get(other_config, "advertise_connector_domains") ||
-            Map.get(other_config, :advertise_connector_domains) || ""
-
-        other_advertise =
-          case Map.get(other_config, "advertise_connector") ||
-                 Map.get(other_config, :advertise_connector) do
-            true -> true
-            "true" -> true
-            _ -> false
-          end
-
-        if other_advertise and other_domains_str != "" do
-          other_domains_list =
-            other_domains_str
-            |> String.split([",", "\n"])
-            |> Enum.map(&String.trim/1)
-            |> Enum.reject(&(&1 == ""))
-
-          updated_domains_list =
-            Enum.reject(other_domains_list, fn d -> String.downcase(d) in new_domains_down end)
-
-          if length(other_domains_list) != length(updated_domains_list) do
-            updated_domains_str = Enum.join(updated_domains_list, "\n")
-
-            updated_other_config =
-              other_config
-              |> Map.put("advertise_connector_domains", updated_domains_str)
-
-            other_pair
-            |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: updated_other_config})
-            |> Hermit.Repo.update!()
-
-            case GenServer.whereis(via_tuple(other_pair.pair_id)) do
-              nil -> :ok
-              pid -> GenServer.call(pid, {:set_inbound_config, updated_other_config})
-            end
-          end
-        end
-      end)
-    end
-  end
-
-  defp clean_connector_domains(config) do
-    domains_str =
-      Map.get(config, "advertise_connector_domains") ||
-        Map.get(config, :advertise_connector_domains) || ""
-
-    if is_binary(domains_str) do
-      domains_str
-      |> String.split([",", "\n"])
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-    else
-      []
-    end
   end
 
   defp maybe_shutdown_bootstrap_task(state) do

@@ -5,9 +5,6 @@ defmodule Hermit.Vpn.DnsConfig do
   schema "dns_configs" do
     field(:name, :string, default: "Default DNS Profile")
     field(:enabled, :boolean, default: false)
-    field(:block_ads, :boolean, default: false)
-    field(:block_goodbyeads, :boolean, default: false)
-    field(:block_adult, :boolean, default: false)
     field(:block_ipv6, :boolean, default: false)
     field(:upstream_dns, :string, default: "1.1.1.1, 8.8.8.8")
     field(:custom_rules, {:array, :map}, default: [])
@@ -35,9 +32,6 @@ defmodule Hermit.Vpn.DnsConfig do
     |> cast(attrs, [
       :name,
       :enabled,
-      :block_ads,
-      :block_goodbyeads,
-      :block_adult,
       :block_ipv6,
       :upstream_dns,
       :custom_rules,

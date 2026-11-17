@@ -16,7 +16,7 @@ FROM ${BUILDER_IMAGE} AS dev
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
-     iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping git build-essential \
+     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping git build-essential \
   && ARCH=$(dpkg --print-architecture) \
   && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
   && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
@@ -93,7 +93,7 @@ ARG TARGETARCH
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
-     iproute2 iptables nftables wireguard-tools wireguard-go curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping \
+     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping \
   && ARCH=$(dpkg --print-architecture) \
   && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
   && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
@@ -110,8 +110,10 @@ WORKDIR "/app"
 
 # set runner ENV
 ENV MIX_ENV="prod"
-ENV ERL_FLAGS="+sub true +scl false +sbwt short +sbwtdcpu short"
+ENV ERL_FLAGS="+sub true +scl false +sbwt short +sbwtdcpu short +MMmcs 30 +Muycs 30"
 ENV ERL_CRASH_DUMP_SECONDS=0
+ENV GOMEMLIMIT="32MiB"
+ENV GOGC="50"
 
 # Copy the final release
 COPY --from=builder /app/hermit_release ./

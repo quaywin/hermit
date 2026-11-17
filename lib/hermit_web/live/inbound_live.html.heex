@@ -176,17 +176,17 @@
                     type="password"
                     name="inbound_profile[config][ts_auth_key]"
                     value={Phoenix.HTML.Form.input_value(f, :config)["ts_auth_key"]}
-                    placeholder="tskey-auth-..."
+                    placeholder="tskey-auth-... or tskey-client-..."
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>
                 <div class="space-y-1.5">
-                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale API Key (Optional)</label>
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Tags (Optional, default: tag:hermit)</label>
                   <input
-                    type="password"
-                    name="inbound_profile[config][ts_api_key]"
-                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_api_key"]}
-                    placeholder="tskey-api-..."
+                    type="text"
+                    name="inbound_profile[config][advertise_tags]"
+                    value={Phoenix.HTML.Form.input_value(f, :config)["advertise_tags"]}
+                    placeholder="e.g., tag:hermit"
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>

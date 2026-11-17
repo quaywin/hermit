@@ -27,7 +27,7 @@ defmodule Hermit.Dns.Port53Server do
     # Bind persistent fallback client sockets to avoid socket thrashing on fallback queries
     fallback_sockets =
       Enum.map(1..2, fn _ ->
-        case :gen_udp.open(0, [:binary, active: true, recbuf: 1024 * 1024]) do
+        case :gen_udp.open(0, [:binary, active: true, recbuf: 65_536]) do
           {:ok, sock} -> sock
           {:error, _} -> nil
         end

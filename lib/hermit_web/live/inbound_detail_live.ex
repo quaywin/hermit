@@ -144,61 +144,6 @@ defmodule HermitWeb.InboundDetailLive do
   end
 
   @impl true
-  def handle_event("delete_domain", %{"pair-id" => pair_id_or_tag, "domain" => domain}, socket) do
-    case Hermit.Repo.get(Hermit.Vpn.VpnPair, pair_id_or_tag) do
-      nil ->
-        if String.starts_with?(pair_id_or_tag, "tag:") do
-          profile = socket.assigns.profile
-
-          case Hermit.Vpn.Inbound.Tailscale.get_app_connectors(profile) do
-            {:ok, list} ->
-              connector =
-                Enum.find(list, fn conn -> pair_id_or_tag in Map.get(conn, "connectors", []) end)
-
-              if connector do
-                existing_domains = Map.get(connector, "domains", [])
-                updated_domains = Enum.reject(existing_domains, &(&1 == domain))
-
-                case Hermit.Vpn.Inbound.Tailscale.update_profile_connector_acl(
-                       profile,
-                       pair_id_or_tag,
-                       updated_domains
-                     ) do
-                  {:ok, _} ->
-                    socket = reload_routing_tab(socket)
-
-                    {:noreply,
-                     put_flash(
-                       socket,
-                       :info,
-                       "Domain #{domain} removed from external node #{pair_id_or_tag}. ACL updated."
-                     )}
-
-                  {:error, reason} ->
-                    {:noreply,
-                     put_flash(
-                       socket,
-                       :error,
-                       "Failed to update Tailscale ACL: #{inspect(reason)}"
-                     )}
-                end
-              else
-                {:noreply, socket}
-              end
-
-            _ ->
-              {:noreply, socket}
-          end
-        else
-          {:noreply, socket}
-        end
-
-      _pair ->
-        {:noreply, socket}
-    end
-  end
-
-  @impl true
   def handle_event("refresh_routing", _params, socket) do
     {:noreply,
      socket
@@ -239,52 +184,12 @@ defmodule HermitWeb.InboundDetailLive do
         )
       )
 
-    hermit_tags =
-      Enum.reduce(pairs_db, MapSet.new(), fn p, acc ->
-        tag =
-          p.inbound_config["advertise_connector_tag"] ||
-            "tag:connector-" <> String.replace(p.pair_id, "_", "-")
-
-        MapSet.put(acc, tag)
-      end)
-
-    external_connectors =
-      case Hermit.Vpn.Inbound.Tailscale.get_app_connectors(profile) do
-        {:ok, list} ->
-          list
-          |> Enum.filter(fn conn ->
-            tag = Enum.at(conn["connectors"] || [], 0)
-            tag && not MapSet.member?(hermit_tags, tag)
-          end)
-          |> Enum.map(fn conn ->
-            tag = Enum.at(conn["connectors"], 0)
-
-            %{
-              id: tag,
-              name: conn["name"] || tag,
-              is_external: true,
-              inbound_config: %{
-                "advertise_connector" => true,
-                "advertise_connector_tag" => tag,
-                "advertise_connector_domains" => Enum.join(conn["domains"] || [], "\n"),
-                "advertise_routes" => ""
-              },
-              wg_status: :external,
-              ts_status: :external
-            }
-          end)
-
-        _ ->
-          []
-      end
-
     hermit_pairs =
       Enum.map(pairs_db, fn pair ->
         case Hermit.Vpn.PairWorker.get_state(pair.pair_id) do
           {:error, _} ->
             %{
               id: pair.pair_id,
-              is_external: false,
               wg_status: String.to_atom(pair.wg_status || "stopped"),
               ts_status: String.to_atom(pair.ts_status || "stopped"),
               inbound_config: pair.inbound_config || %{}
@@ -293,7 +198,6 @@ defmodule HermitWeb.InboundDetailLive do
           worker_state ->
             %{
               id: worker_state.id,
-              is_external: false,
               wg_status: worker_state.wg_status,
               ts_status: worker_state.ts_status,
               inbound_config: worker_state.inbound_config || %{}
@@ -301,18 +205,7 @@ defmodule HermitWeb.InboundDetailLive do
         end
       end)
 
-    assign(socket, vpn_pairs: hermit_pairs ++ external_connectors)
-  end
-
-  defp parse_domains(domains_str) do
-    if is_binary(domains_str) do
-      domains_str
-      |> String.split([",", "\n"])
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-    else
-      []
-    end
+    assign(socket, vpn_pairs: hermit_pairs)
   end
 
   defp reboot_linked_dns_endpoints(inbound_profile_id) do
@@ -352,7 +245,8 @@ defmodule HermitWeb.InboundDetailLive do
       "ts_port_range",
       "ts_port",
       "port",
-      "login_server"
+      "login_server",
+      "advertise_tags"
     ]
 
     Enum.each(pairs, fn pair ->

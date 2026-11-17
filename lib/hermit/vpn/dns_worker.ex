@@ -655,7 +655,7 @@ defmodule Hermit.Vpn.DnsWorker do
             Hermit.Vpn.Inbound.Tailscale.claim_port("dns_#{endpoint_id}", ts_port)
 
             shell_cmd =
-              "ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
+              "GOMEMLIMIT=32MiB GOGC=50 ip netns exec #{ns} tailscaled --socket=#{socket_path} --state=#{state_path} --port=#{ts_port} --no-logs-no-support > #{log_path} 2>&1 & echo $! > #{pid_path} && wait"
 
             try do
               p = Port.open({:spawn_executable, "/bin/sh"}, [:binary, args: ["-c", shell_cmd]])
@@ -700,6 +700,18 @@ defmodule Hermit.Vpn.DnsWorker do
           ts_up_args =
             if login_server && login_server != "" do
               ts_up_args ++ ["--login-server=#{login_server}"]
+            else
+              ts_up_args
+            end
+
+          dns_tag =
+            Hermit.Vpn.Inbound.Tailscale.resolve_tags("dns_#{endpoint_id}", profile_config, %{
+              ts_auth_key: auth_key
+            })
+
+          ts_up_args =
+            if dns_tag != nil do
+              ts_up_args ++ ["--advertise-tags=#{dns_tag}"]
             else
               ts_up_args
             end

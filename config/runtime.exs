@@ -36,7 +36,9 @@ if config_env() in [:dev, :prod] do
   config :hermit, Hermit.Repo,
     database: database_path,
     journal_mode: :wal,
-    busy_timeout: 5000
+    busy_timeout: 5000,
+    cache_size: -2000,
+    temp_store: :memory
 
   if config_env() == :prod do
     config :hermit, Hermit.Repo, pool_size: String.to_integer(System.get_env("POOL_SIZE", "5"))

@@ -244,7 +244,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
              "Failed to start Tunnel: Outbound profile is already in use by active tunnel &#39;active_t&#39;."
   end
 
-  test "toggles exit node and app connector dynamically", %{conn: conn} do
+  test "toggles exit node and settings dynamically", %{conn: conn} do
     original_docker_config = Application.get_env(:hermit, :docker)
 
     Application.put_env(
@@ -266,8 +266,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
         type: "tailscale",
         config: %{
           "ts_auth_key" => args.ts_auth_key,
-          "advertise_exit_node" => true,
-          "advertise_connector" => false
+          "advertise_exit_node" => true
         }
       })
 
@@ -328,8 +327,6 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     html = render(view)
     assert html =~ "Exit Node routing:"
     assert html =~ "Enabled"
-    assert html =~ "App Connector:"
-    assert html =~ "Disabled"
 
     # Click Toggle Exit Node button
     # Wait, the toggle button has phx-click="toggle_exit_node"
@@ -340,31 +337,6 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     # Verify DB was updated
     updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "toggle_test")
     assert updated_pair.inbound_config["advertise_exit_node"] == false
-
-    # Click Toggle App Connector button
-    html = view |> element("button[phx-click=toggle_app_connector]") |> render_click()
-    assert html =~ "App connector enabled"
-    assert html =~ "Enabled"
-
-    # Verify DB was updated
-    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "toggle_test")
-    assert updated_pair.inbound_config["advertise_connector"] == true
-
-    # Submit save_connector_settings form
-    html =
-      view
-      |> form("form[phx-submit=save_connector_settings]", %{
-        "connector_tag" => "tag:new-tag",
-        "connector_domains" => "google.com, github.com"
-      })
-      |> render_submit()
-
-    assert html =~ "App Connector settings updated"
-
-    # Verify DB was updated with tag and domains
-    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "toggle_test")
-    assert updated_pair.inbound_config["advertise_connector_tag"] == "tag:new-tag"
-    assert updated_pair.inbound_config["advertise_connector_domains"] == "google.com, github.com"
 
     # Toggle off default Tailscale DNS to use custom DNS resolvers
     view |> element("button[phx-click=toggle_use_tailscale_dns]") |> render_click()

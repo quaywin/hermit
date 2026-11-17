@@ -91,8 +91,8 @@ defmodule Hermit.Dns.BlocklistLoader do
         {{:_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}
       ])
 
-      # Safety cap: if still > 50_000, prune entries older than 10 minutes
-      if :ets.info(:dns_filter_cache, :size) > 50_000 do
+      # Safety cap: if still > 25_000, prune entries older than 10 minutes
+      if :ets.info(:dns_filter_cache, :size) > 25_000 do
         panic_cutoff = now - 600
 
         :ets.select_delete(:dns_filter_cache, [
@@ -180,55 +180,63 @@ defmodule Hermit.Dns.BlocklistLoader do
     :ets.delete(:dns_bloom_filter, blocklist.id)
 
     case get_lines(blocklist.url) do
-      {:ok, line_stream_or_enum} ->
-        # 1. Parse and extract all valid domains from stream into a flat list
-        domains =
-          line_stream_or_enum
-          |> Stream.map(&String.trim/1)
-          |> Stream.map(fn line ->
-            case blocklist.format do
-              "adguard" -> parse_adguard_line(line)
-              "hosts" -> parse_hosts_line(line)
-              "domains" -> parse_domains_line(line)
-              _ -> nil
-            end
+      {:ok, line_stream_or_enum, temp_path} ->
+        try do
+          # 1. Parse and extract all valid unique domains from stream into a flat list
+          domains =
+            line_stream_or_enum
+            |> Stream.map(&String.trim/1)
+            |> Stream.map(fn line ->
+              case blocklist.format do
+                "adguard" -> parse_adguard_line(line)
+                "hosts" -> parse_hosts_line(line)
+                "domains" -> parse_domains_line(line)
+                _ -> nil
+              end
+            end)
+            |> Stream.reject(&is_nil/1)
+            |> Stream.uniq()
+            |> Enum.to_list()
+
+          count = length(domains)
+
+          # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
+          domains
+          |> Enum.chunk_every(5000)
+          |> Enum.each(fn chunk ->
+            entries = Enum.map(chunk, &{&1, blocklist.id})
+            :ets.insert(:dns_blocklist_entries, entries)
           end)
-          |> Stream.reject(&is_nil/1)
-          |> Enum.to_list()
 
-        count = length(domains)
+          # 3. Generate Bloom Filter and store it as a single binary key in ETS
+          if count > 0 do
+            bit_size = Hermit.Dns.BloomFilter.calculate_size(count)
+            empty_bloom = Hermit.Dns.BloomFilter.new(bit_size)
+            bloom_binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
+            :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
+          end
 
-        # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
-        domains
-        |> Enum.chunk_every(5000)
-        |> Enum.each(fn chunk ->
-          entries = Enum.map(chunk, &{&1, blocklist.id})
-          :ets.insert(:dns_blocklist_entries, entries)
-        end)
+          duration =
+            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
 
-        # 3. Generate Bloom Filter and store it as a single binary key in ETS
-        if count > 0 do
-          bit_size = Hermit.Dns.BloomFilter.calculate_size(count)
-          empty_bloom = Hermit.Dns.BloomFilter.new(bit_size)
-          bloom_binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
-          :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
+          Logger.info(
+            "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
+          )
+
+          # Update rules count and timestamp in DB without triggering callbacks
+          update_rules_count(blocklist.id, count)
+
+          # Store metadata in ETS
+          :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
+        after
+          # Cleanup temporary file if downloaded
+          if temp_path && File.exists?(temp_path) do
+            File.rm(temp_path)
+          end
+
+          # Reclaim temporary heap memory after building bloom filter
+          :erlang.garbage_collect()
         end
-
-        duration =
-          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
-        Logger.info(
-          "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
-        )
-
-        # Update rules count and timestamp in DB without triggering callbacks
-        update_rules_count(blocklist.id, count)
-
-        # Store metadata in ETS
-        :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
-
-        # Reclaim temporary heap memory after building bloom filter
-        :erlang.garbage_collect()
 
       {:error, reason} ->
         Logger.error("Failed to load Blocklist '#{blocklist.name}': #{inspect(reason)}")
@@ -308,20 +316,22 @@ defmodule Hermit.Dns.BlocklistLoader do
       Logger.error("Failed to clear DNS cache for blocklist #{blocklist_id}: #{inspect(e)}")
   end
 
-  defp fetch_content(url) do
+  defp stream_download(url, temp_path) do
     headers = [
       {"user-agent",
        "Mozilla/5.0 (compatible; HermitDNS/0.1.0; +https://github.com/kipcole9/dns)"}
     ]
 
-    case Req.get(url, headers: headers, retry: false) do
-      {:ok, %{status: 200, body: body}} ->
-        {:ok, body}
+    case Req.get(url, headers: headers, retry: false, into: File.stream!(temp_path)) do
+      {:ok, %{status: 200}} ->
+        {:ok, temp_path}
 
       {:ok, %{status: status}} ->
+        File.rm(temp_path)
         {:error, "HTTP status #{status}"}
 
       {:error, reason} ->
+        File.rm(temp_path)
         {:error, reason}
     end
   end
@@ -329,8 +339,14 @@ defmodule Hermit.Dns.BlocklistLoader do
   defp get_lines(url) do
     cond do
       String.starts_with?(url, ["http://", "https://"]) ->
-        case fetch_content(url) do
-          {:ok, body} -> {:ok, String.split(body, ["\r\n", "\n"])}
+        temp_file =
+          Path.join(
+            System.tmp_dir!(),
+            "hermit_blocklist_#{System.unique_integer([:positive])}.txt"
+          )
+
+        case stream_download(url, temp_file) do
+          {:ok, path} -> {:ok, File.stream!(path, [:read_ahead]), path}
           {:error, reason} -> {:error, reason}
         end
 
@@ -338,7 +354,7 @@ defmodule Hermit.Dns.BlocklistLoader do
         resolved = resolve_path(url)
 
         if File.exists?(resolved) do
-          {:ok, File.stream!(resolved, [:read_ahead])}
+          {:ok, File.stream!(resolved, [:read_ahead]), nil}
         else
           {:error, "File not found at #{resolved}"}
         end

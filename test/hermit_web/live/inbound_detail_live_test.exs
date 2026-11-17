@@ -118,7 +118,7 @@ defmodule HermitWeb.InboundDetailLiveTest do
     assert Hermit.Repo.get(Hermit.Vpn.InboundProfile, inbound_profile.id) == nil
   end
 
-  test "renders external connectors in routing overview and supports direct domain deletion", %{
+  test "renders active tunnels in routing overview and supports refresh", %{
     conn: conn
   } do
     {:ok, inbound_profile} =
@@ -128,44 +128,33 @@ defmodule HermitWeb.InboundDetailLiveTest do
         config: %{"ts_auth_key" => "tskey-ext-123"}
       })
 
-    mock_connectors = [
-      %{
-        "name" => "hermit-connector-external-node",
-        "connectors" => ["tag:connector-external-node"],
-        "domains" => ["external.com", "other-external.com"]
-      }
-    ]
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound",
+        type: "wireguard",
+        config: %{}
+      })
 
-    docker_env = Application.get_env(:hermit, :docker, [])
-
-    Application.put_env(
-      :hermit,
-      :docker,
-      Keyword.put(docker_env, :mock_app_connectors, mock_connectors)
-    )
-
-    on_exit(fn ->
-      Application.put_env(:hermit, :docker, docker_env)
-    end)
+    _pair =
+      Hermit.Repo.insert!(%Hermit.Vpn.VpnPair{
+        pair_id: "routing_pair",
+        inbound_profile_id: inbound_profile.id,
+        outbound_profile_id: outbound_profile.id,
+        status: "running",
+        wg_status: "running",
+        ts_status: "running",
+        inbound_config: %{
+          "advertise_exit_node" => true,
+          "advertise_tags" => "tag:hermit"
+        }
+      })
 
     {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=routing")
 
     assert html =~ "Tailscale Routing Overview"
-    assert html =~ "tag:connector-external-node"
-    assert html =~ "Tailscale External"
-    assert html =~ "external.com"
-    assert html =~ "other-external.com"
-
-    html =
-      view
-      |> element(
-        "button[phx-click=delete_domain][phx-value-pair-id=\"tag:connector-external-node\"][phx-value-domain=\"external.com\"]"
-      )
-      |> render_click()
-
-    assert html =~ "Domain external.com removed from external node tag:connector-external-node"
-    refute html =~ "phx-value-domain=\"external.com\""
-    assert html =~ "phx-value-domain=\"other-external.com\""
+    assert html =~ "routing_pair"
+    assert html =~ "tag:hermit"
+    assert html =~ "Active"
 
     # Test refresh button
     html =

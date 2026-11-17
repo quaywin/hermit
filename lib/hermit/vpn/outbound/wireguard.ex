@@ -55,45 +55,9 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         Logger.info("Creating local netns: #{wg_name}")
 
         # Parse Address, DNS, and MTU from the config file
-        addresses =
-          case Regex.run(~r/^\s*Address\s*=\s*([^\s#\n\r]+)/m, config_content) do
-            [_, addrs] ->
-              addrs
-              |> String.split(",")
-              |> Enum.map(&String.trim/1)
-
-            _ ->
-              []
-          end
-
-        use_tailscale_dns =
-          Map.get(config, "use_tailscale_dns") == true or
-            Map.get(config, "use_tailscale_dns") == "true" or
-            Map.get(config, :use_tailscale_dns) == true
-
-        dns_servers =
-          cond do
-            use_tailscale_dns ->
-              ["100.100.100.100"]
-
-            true ->
-              case Regex.run(~r/^\s*DNS\s*=\s*([^\s#\n\r]+)/m, config_content) do
-                [_, dns] ->
-                  dns
-                  |> String.split(",")
-                  |> Enum.map(&String.trim/1)
-                  |> Enum.reject(&(&1 == ""))
-
-                _ ->
-                  []
-              end
-          end
-
-        mtu =
-          case Regex.run(~r/^\s*MTU\s*=\s*(\d+)/m, config_content) do
-            [_, mtu_val] -> mtu_val
-            _ -> "1360"
-          end
+        addresses = parse_addresses(config_content)
+        dns_servers = parse_dns_servers(config_content, config)
+        mtu = parse_mtu(config_content)
 
         block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
 
@@ -196,18 +160,8 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                  ]),
                {:ok, _} <-
                  run_cmd("ip", ["netns", "exec", wg_name, "ip", "link", "set", "wg0", "up"]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "ip",
-                   "route",
-                   "add",
-                   "default",
-                   "dev",
-                   "wg0"
-                 ]),
+               {:routes, :ok} <-
+                 {:routes, setup_default_routes(wg_name, addresses, block_ipv6)},
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",
@@ -716,6 +670,105 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
     case :inet.parse_address(clean_host) do
       {:ok, _} -> true
       _ -> false
+    end
+  end
+
+  @doc """
+  Parses all IPv4 and IPv6 addresses defined in `Address` lines of a WireGuard config.
+  Handles multiple addresses separated by commas (with or without spaces) and multiple Address lines.
+  """
+  def parse_addresses(config_content) when is_binary(config_content) do
+    Regex.scan(~r/^\s*Address\s*=\s*([^#\n\r]+)/mi, config_content)
+    |> Enum.flat_map(fn [_, addrs] -> String.split(addrs, ",") end)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  @doc """
+  Parses DNS servers defined in `DNS` lines of a WireGuard config or falls back to Tailscale DNS.
+  """
+  def parse_dns_servers(config_content, config \\ %{}) when is_binary(config_content) do
+    use_tailscale_dns =
+      Map.get(config, "use_tailscale_dns") == true or
+        Map.get(config, "use_tailscale_dns") == "true" or
+        Map.get(config, :use_tailscale_dns) == true
+
+    cond do
+      use_tailscale_dns ->
+        ["100.100.100.100"]
+
+      true ->
+        Regex.scan(~r/^\s*DNS\s*=\s*([^#\n\r]+)/mi, config_content)
+        |> Enum.flat_map(fn [_, dns] -> String.split(dns, ",") end)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+    end
+  end
+
+  @doc """
+  Parses MTU value defined in a WireGuard config, defaulting to 1360.
+  """
+  def parse_mtu(config_content) when is_binary(config_content) do
+    case Regex.run(~r/^\s*MTU\s*=\s*(\d+)/mi, config_content) do
+      [_, mtu_val] -> mtu_val
+      _ -> "1360"
+    end
+  end
+
+  defp setup_default_routes(wg_name, addresses, block_ipv6) do
+    has_ipv4? = Enum.any?(addresses, &(not String.contains?(&1, ":"))) or addresses == []
+    has_ipv6? = Enum.any?(addresses, &String.contains?(&1, ":"))
+
+    with :ok <-
+           (if has_ipv4? do
+              case run_cmd("ip", [
+                     "netns",
+                     "exec",
+                     wg_name,
+                     "ip",
+                     "route",
+                     "add",
+                     "default",
+                     "dev",
+                     "wg0"
+                   ]) do
+                {:ok, _} ->
+                  :ok
+
+                {:error, {code, output}} ->
+                  if is_binary(output) and String.contains?(output, "File exists"),
+                    do: :ok,
+                    else: {:error, {code, output}}
+              end
+            else
+              :ok
+            end),
+         :ok <-
+           (if has_ipv6? and not block_ipv6 do
+              case run_cmd("ip", [
+                     "netns",
+                     "exec",
+                     wg_name,
+                     "ip",
+                     "-6",
+                     "route",
+                     "add",
+                     "default",
+                     "dev",
+                     "wg0"
+                   ]) do
+                {:ok, _} ->
+                  :ok
+
+                {:error, {code, output}} ->
+                  if is_binary(output) and String.contains?(output, "File exists"),
+                    do: :ok,
+                    else: {:error, {code, output}}
+              end
+            else
+              :ok
+            end) do
+      :ok
     end
   end
 

@@ -281,6 +281,47 @@ Because Hermit runs in an isolated network namespace, it does not modify the hos
    sudo sh -c 'ethtool -K $(ip -o route get 8.8.8.8 | cut -f 5 -d " ") rx-udp-gro-forwarding on rx-gro-list off'
    ```
 
+#### Tailscale ACL Configuration & `tag:hermit`
+
+Hermit supports both traditional **Auth Keys** (`tskey-auth-...`) and modern **OAuth Client Keys** (`tskey-client-...`) for registering Tailscale Inbound nodes and DNS Endpoints.
+
+**1. Required Tag Declaration (`tag:hermit`)**:
+When using **OAuth Client Keys**, Tailscale strictly requires devices to be assigned a tag. By default, Hermit automatically applies `--advertise-tags=tag:hermit` (or any custom tag you specify in the Inbound Profile).
+
+Before starting your Tailscale Inbound or DNS Node, declare `tag:hermit` in your [Tailscale Admin Console → Access Controls (ACL)](https://login.tailscale.com/admin/acls):
+
+```json
+{
+  "tagOwners": {
+    "tag:hermit": ["autogroup:admin"]
+  }
+}
+```
+
+> [!IMPORTANT]
+> If `tag:hermit` is not declared under `tagOwners` in your Tailscale ACL policy, Tailscale will reject authentication with the error: `node tags are not owned by creator`.
+
+**2. Auto-Approving Exit Node & Subnet Routes**:
+Hermit automatically advertises exit-node routes (`0.0.0.0/0`, `::/0`) for your VPN tunnels. You have two convenient ways to approve these routes:
+
+- **Option A: Tailscale ACL Auto-Approvers (Zero API setup - Recommended)**:
+  Add an `autoApprovers` rule for `tag:hermit` in your Tailscale ACL policy:
+  ```json
+  {
+    "autoApprovers": {
+      "exitNode": ["tag:hermit"],
+      "routes": {
+        "0.0.0.0/0": ["tag:hermit"],
+        "::/0": ["tag:hermit"]
+      }
+    }
+  }
+  ```
+  Routes will be approved immediately upon node registration without any manual approval.
+
+- **Option B: Tailscale API Auto-Approval**:
+  In your Tailscale Inbound Profile, provide your **Tailscale API Key** (`ts_api_key`) and **Tailnet** domain (`ts_tailnet`). Hermit will automatically approve exit node routes via the Tailscale REST API upon startup.
+
 ---
 
 ## Why Docker?

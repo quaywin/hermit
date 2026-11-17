@@ -335,85 +335,98 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         config = pair.inbound_config || %{}
         profile_config = (pair.inbound_profile && pair.inbound_profile.config) || %{}
         merged_config = Map.merge(profile_config, config)
+        expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
 
-        tailnet =
-          Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
-            Map.get(profile_config, "ts_tailnet") || Map.get(profile_config, :ts_tailnet) ||
-            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "") ||
-            "-"
+        delete_device_by_hostname(expected_hostname, merged_config)
+    end
+  end
 
-        tailnet = if tailnet == "", do: "-", else: tailnet
+  @doc """
+  Deletes a Tailscale device from the tailnet by hostname using API credentials from config or profile.
+  """
+  def delete_device_by_hostname(expected_hostname, config_or_profile) do
+    config =
+      case config_or_profile do
+        %Hermit.Vpn.InboundProfile{config: c} when is_map(c) -> c
+        c when is_map(c) -> c
+        _ -> %{}
+      end
 
-        case get_api_token(merged_config) do
-          {:ok, token} ->
-            expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
-            devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
-            headers = [{"authorization", "Bearer #{token}"}]
+    tailnet =
+      Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
+        Hermit.Vpn.Setting.get_value("tailscale_tailnet", "") ||
+        "-"
 
-            Logger.info("Attempting to delete Tailscale device #{expected_hostname} via API...")
+    tailnet = if tailnet == "", do: "-", else: tailnet
 
-            case Req.get(devices_url, headers: headers) do
-              {:ok, %{status: 200, body: %{"devices" => devices}}} ->
-                device =
-                  Enum.find(devices, fn dev ->
-                    dev["hostname"] == expected_hostname or
-                      String.starts_with?(dev["name"] || "", expected_hostname <> ".")
-                  end)
+    case get_api_token(config) do
+      {:ok, token} ->
+        devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
+        headers = [{"authorization", "Bearer #{token}"}]
 
-                if device do
-                  device_id = device["id"]
-                  delete_url = "https://api.tailscale.com/api/v2/device/#{device_id}"
+        Logger.info("Attempting to delete Tailscale device #{expected_hostname} via API...")
 
-                  case Req.delete(delete_url, headers: headers) do
-                    {:ok, %{status: 200}} ->
-                      Logger.info(
-                        "Successfully deleted Tailscale device #{expected_hostname} from tailnet."
-                      )
+        case Req.get(devices_url, headers: headers) do
+          {:ok, %{status: 200, body: %{"devices" => devices}}} ->
+            device =
+              Enum.find(devices, fn dev ->
+                dev["hostname"] == expected_hostname or
+                  String.starts_with?(dev["name"] || "", expected_hostname <> ".")
+              end)
 
-                      {:ok, :deleted}
+            if device do
+              device_id = device["id"]
+              delete_url = "https://api.tailscale.com/api/v2/device/#{device_id}"
 
-                    {:ok, %{status: status, body: body}} ->
-                      Logger.error(
-                        "Failed to delete Tailscale device (HTTP #{status}): #{inspect(body)}"
-                      )
-
-                      {:error, :api_delete_failed}
-
-                    {:error, reason} ->
-                      Logger.error("Failed to call Tailscale delete API: #{inspect(reason)}")
-                      {:error, reason}
-                  end
-                else
+              case Req.delete(delete_url, headers: headers) do
+                {:ok, %{status: 200}} ->
                   Logger.info(
-                    "Tailscale device #{expected_hostname} not found in tailnet, skipping API delete."
+                    "Successfully deleted Tailscale device #{expected_hostname} from tailnet."
                   )
 
-                  {:ok, :not_found}
-                end
+                  {:ok, :deleted}
 
-              {:ok, %{status: status, body: body}} ->
-                Logger.error(
-                  "Failed to fetch Tailscale devices for deletion (HTTP #{status}): #{inspect(body)}"
-                )
+                {:ok, %{status: status, body: body}} ->
+                  Logger.error(
+                    "Failed to delete Tailscale device (HTTP #{status}): #{inspect(body)}"
+                  )
 
-                {:error, :api_fetch_failed}
+                  {:error, :api_delete_failed}
 
-              {:error, reason} ->
-                Logger.error(
-                  "Failed to call Tailscale devices API for deletion: #{inspect(reason)}"
-                )
+                {:error, reason} ->
+                  Logger.error("Failed to call Tailscale delete API: #{inspect(reason)}")
+                  {:error, reason}
+              end
+            else
+              Logger.info(
+                "Tailscale device #{expected_hostname} not found in tailnet, skipping API delete."
+              )
 
-                {:error, reason}
+              {:ok, :not_found}
             end
 
-          {:error, _reason} ->
-            Logger.info("Tailscale API credentials not configured. Skipping API device deletion.")
-            {:ok, :skipped}
+          {:ok, %{status: status, body: body}} ->
+            Logger.error(
+              "Failed to fetch Tailscale devices for deletion (HTTP #{status}): #{inspect(body)}"
+            )
+
+            {:error, :api_fetch_failed}
+
+          {:error, reason} ->
+            Logger.error(
+              "Failed to call Tailscale devices API for deletion: #{inspect(reason)}"
+            )
+
+            {:error, reason}
         end
+
+      {:error, _reason} ->
+        Logger.info("Tailscale API credentials not configured. Skipping API device deletion.")
+        {:ok, :skipped}
     end
   rescue
     e ->
-      Logger.error("Error during try_delete_via_api: #{inspect(e)}")
+      Logger.error("Error during delete_device_by_hostname: #{inspect(e)}")
       {:error, {:exception, e}}
   end
 

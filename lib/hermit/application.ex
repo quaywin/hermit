@@ -175,8 +175,9 @@ defmodule Hermit.Application do
         System.cmd("sysctl", ["-w", "net.ipv4.conf.all.rp_filter=2"])
         System.cmd("sysctl", ["-w", "net.ipv4.conf.default.rp_filter=2"])
 
-        # Setup host network rules using nftables
+        # Setup host network rules using nftables and iptables
         setup_nftables_host()
+        setup_iptables_host()
       rescue
         e ->
           IO.inspect(e,
@@ -296,6 +297,39 @@ defmodule Hermit.Application do
     case System.cmd("nft", args) do
       {output, 0} -> {:ok, output}
       {output, code} -> {:error, {code, output}}
+    end
+  end
+
+  def setup_iptables_host do
+    if System.find_executable("iptables") do
+      try do
+        interfaces = ["dns_h+", "loc+", "vh+", "wg+"]
+
+        Enum.each(interfaces, fn iface ->
+          ensure_iptables_rule(["INPUT", "-i", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule(["FORWARD", "-i", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule(["FORWARD", "-o", iface, "-j", "ACCEPT"])
+        end)
+
+        :ok
+      rescue
+        e ->
+          IO.inspect(e, label: "Warning: Failed to setup iptables host rules")
+          {:error, e}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp ensure_iptables_rule([chain | rest]) do
+    case System.cmd("iptables", ["-C", chain | rest], stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      _ ->
+        System.cmd("iptables", ["-I", chain, "1" | rest], stderr_to_stdout: true)
+        :ok
     end
   end
 

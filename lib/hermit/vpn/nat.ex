@@ -131,6 +131,9 @@ defmodule Hermit.Vpn.Nat do
         ])
       end
 
+      # 6. Ensure host iptables allows Hermit virtual interfaces
+      Hermit.Application.setup_iptables_host()
+
       :ok
     rescue
       e ->

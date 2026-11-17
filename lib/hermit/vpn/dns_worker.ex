@@ -917,6 +917,13 @@ defmodule Hermit.Vpn.DnsWorker do
               Logger.info("Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale.")
               {:ok, :updated}
 
+            {:ok, %{status: 403, body: body}} ->
+              Logger.error(
+                "Failed to update Tailscale nameservers (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+              )
+
+              {:error, {:http_error, 403, body}}
+
             {:ok, %{status: status, body: body}} ->
               Logger.error(
                 "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
@@ -1004,6 +1011,13 @@ defmodule Hermit.Vpn.DnsWorker do
 
                   Logger.info("Successfully deregistered DNS Node (#{target_ip}) from Tailscale.")
                   {:ok, :cleared}
+
+                {:ok, %{status: 403, body: body}} ->
+                  Logger.error(
+                    "Failed to update Tailscale nameservers (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+                  )
+
+                  {:error, {:http_error, 403, body}}
 
                 {:ok, %{status: status, body: body}} ->
                   Logger.error(

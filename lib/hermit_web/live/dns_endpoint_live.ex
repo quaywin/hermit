@@ -249,6 +249,15 @@ defmodule HermitWeb.DnsEndpointLive do
       end)
     end
 
+    if endpoint.inbound_profile do
+      Task.start(fn ->
+        Hermit.Vpn.Inbound.Tailscale.delete_device_by_hostname(
+          "hermit-dns-#{endpoint_id}",
+          endpoint.inbound_profile
+        )
+      end)
+    end
+
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
     Hermit.Repo.delete!(endpoint)
     DnsEndpoint.clear_cache()

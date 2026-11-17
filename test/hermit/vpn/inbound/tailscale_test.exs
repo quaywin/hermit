@@ -124,4 +124,28 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       assert Tailscale.resolve_tags("p1", %{}) == "tag:hermit"
     end
   end
+
+  describe "get_api_token/1" do
+    test "resolves direct API access token" do
+      assert {:ok, "tskey-api-my-token"} = Tailscale.get_api_token("tskey-api-my-token")
+    end
+
+    test "resolves OAuth key via exchange in mock mode" do
+      assert {:ok, _token} = Tailscale.get_api_token("tskey-client-k12345-secret")
+    end
+
+    test "resolves from map with ts_auth_key" do
+      assert {:ok, _token} = Tailscale.get_api_token(%{"ts_auth_key" => "tskey-client-k12345-secret"})
+    end
+
+    test "rejects empty or nil keys" do
+      assert {:error, :empty_key} = Tailscale.get_api_token("")
+      assert {:error, :empty_key} = Tailscale.get_api_token("   ")
+      assert {:error, :empty_key} = Tailscale.get_api_token(%{})
+    end
+
+    test "warns and returns error for tskey-auth-" do
+      assert {:error, :unsupported_auth_key} = Tailscale.get_api_token("tskey-auth-xyz")
+    end
+  end
 end

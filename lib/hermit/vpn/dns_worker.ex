@@ -275,15 +275,26 @@ defmodule Hermit.Vpn.DnsWorker do
     auth_key =
       Map.get(profile_config, "ts_auth_key") ||
         Map.get(profile_config, :ts_auth_key) ||
+        Map.get(profile_config, "ts_api_key") ||
+        Map.get(profile_config, :ts_api_key) ||
         System.get_env("TAILSCALE_AUTH_KEY") ||
         System.get_env("TS_AUTHKEY") ||
+        System.get_env("TAILSCALE_API_KEY") ||
+        System.get_env("TS_API_KEY") ||
+        Hermit.Vpn.Setting.get_value("tailscale_api_key", "") ||
         (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
         ""
-    api_key = Map.get(profile_config, "ts_api_key") || ""
-    tailnet = Map.get(profile_config, "ts_tailnet") || ""
+
+    tailnet =
+      Map.get(profile_config, "ts_tailnet") ||
+        Map.get(profile_config, :ts_tailnet) ||
+        Hermit.Vpn.Setting.get_value("tailscale_tailnet", "") ||
+        "-"
+
+    tailnet = if tailnet == "", do: "-", else: tailnet
     login_server = Map.get(profile_config, "login_server") || ""
 
-    {auth_key, api_key, tailnet, login_server}
+    {auth_key, tailnet, login_server}
   end
 
   defp start_dns_node_async(endpoint_id, profile) do
@@ -294,7 +305,7 @@ defmodule Hermit.Vpn.DnsWorker do
       File.mkdir_p!(storage_dir)
 
       profile_config = (profile && profile.config) || %{}
-      {auth_key, _api_key, _tailnet, login_server} = get_dns_credentials(profile)
+      {auth_key, _tailnet, login_server} = get_dns_credentials(profile)
 
       if auth_key == "" do
         {:error, "Tailscale auth key not configured"}
@@ -823,7 +834,8 @@ defmodule Hermit.Vpn.DnsWorker do
   # --- Tailscale DNS Config API Update (HA Multi-Nameservers) ---
 
   @doc """
-  Appends an IP address to the existing resolvers list.
+  Appends an IP address to the existing nameservers list.
+  Returns a unique list of IP strings.
   """
   def append_resolver(resolvers, dns_ip)
       when is_list(resolvers) and is_binary(dns_ip) and dns_ip != "" do
@@ -836,30 +848,26 @@ defmodule Hermit.Vpn.DnsWorker do
       end)
       |> Enum.reject(&is_nil/1)
 
-    new_ips = Enum.uniq(existing_ips ++ [dns_ip])
-    Enum.map(new_ips, fn addr -> %{"addr" => addr} end)
+    Enum.uniq(existing_ips ++ [dns_ip])
   end
 
   def append_resolver(resolvers, _), do: resolvers
 
   @doc """
-  Removes a specific IP address from the resolvers list while preserving all other nameservers.
+  Removes a specific IP address from the nameservers list while preserving all other nameservers.
+  Returns a list of IP strings.
   """
   def remove_resolver(resolvers, nil), do: resolvers
 
   def remove_resolver(resolvers, dns_ip) when is_list(resolvers) and is_binary(dns_ip) do
-    Enum.filter(resolvers, fn
-      %{"addr" => addr} -> addr != dns_ip
-      %{addr: addr} -> addr != dns_ip
-      addr when is_binary(addr) -> addr != dns_ip
-      _ -> true
-    end)
+    resolvers
     |> Enum.map(fn
-      %{"addr" => addr} -> %{"addr" => addr}
-      %{addr: addr} -> %{"addr" => addr}
-      addr when is_binary(addr) -> %{"addr" => addr}
+      %{"addr" => addr} -> addr
+      %{addr: addr} -> addr
+      addr when is_binary(addr) -> addr
       other -> other
     end)
+    |> Enum.reject(fn addr -> addr == dns_ip or is_nil(addr) end)
   end
 
   def remove_resolver(resolvers, _), do: resolvers
@@ -878,19 +886,20 @@ defmodule Hermit.Vpn.DnsWorker do
         {:ok, :updated}
 
       true ->
-        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(profile)
+        {auth_key, tailnet, _login} = get_dns_credentials(profile)
 
-        if api_key != "" and tailnet != "" and dns_ip != "" do
+        with {:ok, token} <- Hermit.Vpn.Inbound.Tailscale.get_api_token(auth_key),
+             true <- is_binary(dns_ip) and dns_ip != "" do
           Logger.info(
-            "Registering #{dns_ip} into Tailscale global nameservers (HA Multi-Node mode)..."
+            "Registering #{dns_ip} into Tailscale global nameservers (tailnet: #{tailnet})..."
           )
 
-          dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
+          dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
+          headers = [{"authorization", "Bearer #{token}"}]
 
           current_resolvers =
-            case Req.get(dns_url, auth: {:basic, "#{api_key}:"}) do
-              {:ok, %{status: 200, body: %{"resolvers" => resolvers}}}
-              when is_list(resolvers) ->
+            case Req.get(dns_url, headers: headers) do
+              {:ok, %{status: 200, body: %{"dns" => resolvers}}} when is_list(resolvers) ->
                 resolvers
 
               _ ->
@@ -898,10 +907,13 @@ defmodule Hermit.Vpn.DnsWorker do
             end
 
           new_resolvers = append_resolver(current_resolvers, dns_ip)
-          payload = %{"resolvers" => new_resolvers, "proxied" => true}
+          payload = %{"dns" => new_resolvers}
 
-          case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
+          case Req.post(dns_url, json: payload, headers: headers) do
             {:ok, %{status: 200}} ->
+              prefs_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
+              _ = Req.post(prefs_url, json: %{"overrideLocalDNS" => true}, headers: headers)
+
               Logger.info("Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale.")
               {:ok, :updated}
 
@@ -913,11 +925,17 @@ defmodule Hermit.Vpn.DnsWorker do
               {:error, {:http_error, status, body}}
 
             {:error, reason} ->
-              Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
+              Logger.error("Failed calling Tailscale DNS nameservers API: #{inspect(reason)}")
               {:error, reason}
           end
         else
-          {:ok, :noop}
+          {:error, reason} ->
+            Logger.warning("Cannot update Tailscale DNS config: #{inspect(reason)}")
+            {:error, reason}
+
+          false ->
+            Logger.warning("Cannot update Tailscale DNS config: DNS IP is empty or invalid")
+            {:error, :empty_dns_ip}
         end
     end
   end
@@ -945,67 +963,75 @@ defmodule Hermit.Vpn.DnsWorker do
         {:ok, :cleared}
 
       true ->
-        {_auth_key, api_key, tailnet, _login} = get_dns_credentials(profile)
+        {auth_key, tailnet, _login} = get_dns_credentials(profile)
 
-        if api_key != "" and tailnet != "" do
-          target_ip = dns_ip || resolve_endpoint_tailscale_ip(dns_config, api_key, tailnet)
+        case Hermit.Vpn.Inbound.Tailscale.get_api_token(auth_key) do
+          {:ok, token} ->
+            target_ip = dns_ip || resolve_endpoint_tailscale_ip(dns_config, token, tailnet)
 
-          if target_ip && target_ip != "" do
-            Logger.info(
-              "Deregistering #{target_ip} from Tailscale global nameservers (HA Multi-Node mode)..."
-            )
+            if target_ip && target_ip != "" do
+              Logger.info(
+                "Deregistering #{target_ip} from Tailscale global nameservers (tailnet: #{tailnet})..."
+              )
 
-            dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/config"
+              dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
+              headers = [{"authorization", "Bearer #{token}"}]
 
-            current_resolvers =
-              case Req.get(dns_url, auth: {:basic, "#{api_key}:"}) do
-                {:ok, %{status: 200, body: %{"resolvers" => resolvers}}}
-                when is_list(resolvers) ->
-                  resolvers
+              current_resolvers =
+                case Req.get(dns_url, headers: headers) do
+                  {:ok, %{status: 200, body: %{"dns" => resolvers}}} when is_list(resolvers) ->
+                    resolvers
 
-                _ ->
-                  []
+                  _ ->
+                    []
+                end
+
+              remaining_resolvers = remove_resolver(current_resolvers, target_ip)
+              payload = %{"dns" => remaining_resolvers}
+
+              case Req.post(dns_url, json: payload, headers: headers) do
+                {:ok, %{status: 200}} ->
+                  if Enum.empty?(remaining_resolvers) do
+                    prefs_url =
+                      "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
+
+                    _ =
+                      Req.post(prefs_url,
+                        json: %{"overrideLocalDNS" => false},
+                        headers: headers
+                      )
+                  end
+
+                  Logger.info("Successfully deregistered DNS Node (#{target_ip}) from Tailscale.")
+                  {:ok, :cleared}
+
+                {:ok, %{status: status, body: body}} ->
+                  Logger.error(
+                    "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
+                  )
+
+                  {:error, {:http_error, status, body}}
+
+                {:error, reason} ->
+                  Logger.error("Failed calling Tailscale DNS nameservers API: #{inspect(reason)}")
+                  {:error, reason}
               end
+            else
+              Logger.info(
+                "No active Tailscale IP resolved for endpoint, skipping DNS deregistration."
+              )
 
-            remaining_resolvers = remove_resolver(current_resolvers, target_ip)
-
-            payload =
-              if Enum.empty?(remaining_resolvers) do
-                %{"resolvers" => [], "proxied" => false}
-              else
-                %{"resolvers" => remaining_resolvers, "proxied" => true}
-              end
-
-            case Req.post(dns_url, json: payload, auth: {:basic, "#{api_key}:"}) do
-              {:ok, %{status: 200}} ->
-                Logger.info("Successfully deregistered DNS Node (#{target_ip}) from Tailscale.")
-                {:ok, :cleared}
-
-              {:ok, %{status: status, body: body}} ->
-                Logger.error(
-                  "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
-                )
-
-                {:error, {:http_error, status, body}}
-
-              {:error, reason} ->
-                Logger.error("Failed calling Tailscale DNS config API: #{inspect(reason)}")
-                {:error, reason}
+              {:ok, :noop}
             end
-          else
-            Logger.info(
-              "No active Tailscale IP resolved for endpoint, skipping DNS deregistration."
-            )
 
+          {:error, reason} ->
+            Logger.warning("Cannot clear Tailscale DNS config: #{inspect(reason)}")
             {:ok, :noop}
-          end
-        else
-          {:ok, :noop}
         end
     end
   end
 
-  defp resolve_endpoint_tailscale_ip(dns_config, api_key, tailnet) do
+  defp resolve_endpoint_tailscale_ip(dns_config, token, tailnet) do
     endpoint_id = dns_config && dns_config.dns_endpoint_id
 
     if endpoint_id do
@@ -1017,7 +1043,7 @@ defmodule Hermit.Vpn.DnsWorker do
           expected_hostname = "hermit-dns-#{endpoint_id}"
           devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
 
-          case Req.get(devices_url, auth: {:basic, "#{api_key}:"}) do
+          case Req.get(devices_url, headers: [{"authorization", "Bearer #{token}"}]) do
             {:ok, %{status: 200, body: %{"devices" => devices}}} when is_list(devices) ->
               device =
                 Enum.find(devices, fn dev ->

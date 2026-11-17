@@ -334,79 +334,81 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         pair = Hermit.Repo.preload(pair, [:inbound_profile])
         config = pair.inbound_config || %{}
         profile_config = (pair.inbound_profile && pair.inbound_profile.config) || %{}
-
-        api_key =
-          Map.get(config, "ts_api_key") || Map.get(config, :ts_api_key) ||
-            Map.get(profile_config, "ts_api_key") || Map.get(profile_config, :ts_api_key) ||
-            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+        merged_config = Map.merge(profile_config, config)
 
         tailnet =
           Map.get(config, "ts_tailnet") || Map.get(config, :ts_tailnet) ||
             Map.get(profile_config, "ts_tailnet") || Map.get(profile_config, :ts_tailnet) ||
-            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "") ||
+            "-"
 
-        if ((api_key && api_key != "") and tailnet) && tailnet != "" do
-          expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
-          devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
+        tailnet = if tailnet == "", do: "-", else: tailnet
 
-          Logger.info("Attempting to delete Tailscale device #{expected_hostname} via API...")
+        case get_api_token(merged_config) do
+          {:ok, token} ->
+            expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
+            devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
+            headers = [{"authorization", "Bearer #{token}"}]
 
-          case Req.get(devices_url, auth: {:basic, "#{api_key}:"}) do
-            {:ok, %{status: 200, body: %{"devices" => devices}}} ->
-              device =
-                Enum.find(devices, fn dev ->
-                  dev["hostname"] == expected_hostname or
-                    String.starts_with?(dev["name"] || "", expected_hostname <> ".")
-                end)
+            Logger.info("Attempting to delete Tailscale device #{expected_hostname} via API...")
 
-              if device do
-                device_id = device["id"]
-                delete_url = "https://api.tailscale.com/api/v2/device/#{device_id}"
+            case Req.get(devices_url, headers: headers) do
+              {:ok, %{status: 200, body: %{"devices" => devices}}} ->
+                device =
+                  Enum.find(devices, fn dev ->
+                    dev["hostname"] == expected_hostname or
+                      String.starts_with?(dev["name"] || "", expected_hostname <> ".")
+                  end)
 
-                case Req.delete(delete_url, auth: {:basic, "#{api_key}:"}) do
-                  {:ok, %{status: 200}} ->
-                    Logger.info(
-                      "Successfully deleted Tailscale device #{expected_hostname} from tailnet."
-                    )
+                if device do
+                  device_id = device["id"]
+                  delete_url = "https://api.tailscale.com/api/v2/device/#{device_id}"
 
-                    {:ok, :deleted}
+                  case Req.delete(delete_url, headers: headers) do
+                    {:ok, %{status: 200}} ->
+                      Logger.info(
+                        "Successfully deleted Tailscale device #{expected_hostname} from tailnet."
+                      )
 
-                  {:ok, %{status: status, body: body}} ->
-                    Logger.error(
-                      "Failed to delete Tailscale device (HTTP #{status}): #{inspect(body)}"
-                    )
+                      {:ok, :deleted}
 
-                    {:error, :api_delete_failed}
+                    {:ok, %{status: status, body: body}} ->
+                      Logger.error(
+                        "Failed to delete Tailscale device (HTTP #{status}): #{inspect(body)}"
+                      )
 
-                  {:error, reason} ->
-                    Logger.error("Failed to call Tailscale delete API: #{inspect(reason)}")
-                    {:error, reason}
+                      {:error, :api_delete_failed}
+
+                    {:error, reason} ->
+                      Logger.error("Failed to call Tailscale delete API: #{inspect(reason)}")
+                      {:error, reason}
+                  end
+                else
+                  Logger.info(
+                    "Tailscale device #{expected_hostname} not found in tailnet, skipping API delete."
+                  )
+
+                  {:ok, :not_found}
                 end
-              else
-                Logger.info(
-                  "Tailscale device #{expected_hostname} not found in tailnet, skipping API delete."
+
+              {:ok, %{status: status, body: body}} ->
+                Logger.error(
+                  "Failed to fetch Tailscale devices for deletion (HTTP #{status}): #{inspect(body)}"
                 )
 
-                {:ok, :not_found}
-              end
+                {:error, :api_fetch_failed}
 
-            {:ok, %{status: status, body: body}} ->
-              Logger.error(
-                "Failed to fetch Tailscale devices for deletion (HTTP #{status}): #{inspect(body)}"
-              )
+              {:error, reason} ->
+                Logger.error(
+                  "Failed to call Tailscale devices API for deletion: #{inspect(reason)}"
+                )
 
-              {:error, :api_fetch_failed}
+                {:error, reason}
+            end
 
-            {:error, reason} ->
-              Logger.error(
-                "Failed to call Tailscale devices API for deletion: #{inspect(reason)}"
-              )
-
-              {:error, reason}
-          end
-        else
-          Logger.info("Tailscale API credentials not configured. Skipping API device deletion.")
-          {:ok, :skipped}
+          {:error, _reason} ->
+            Logger.info("Tailscale API credentials not configured. Skipping API device deletion.")
+            {:ok, :skipped}
         end
     end
   rescue
@@ -582,59 +584,62 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           end
 
         config = get_inbound_config(pair)
-
-        api_key =
-          Map.get(config, "ts_api_key") ||
-            (pair && pair.inbound_profile && pair.inbound_profile.config["ts_api_key"]) ||
-            Hermit.Vpn.Setting.get_value("tailscale_api_key", "")
+        profile_config = (pair && pair.inbound_profile && pair.inbound_profile.config) || %{}
+        merged_config = Map.merge(profile_config, config)
 
         tailnet =
           Map.get(config, "ts_tailnet") ||
             (pair && pair.inbound_profile && pair.inbound_profile.config["ts_tailnet"]) ||
-            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "")
+            Hermit.Vpn.Setting.get_value("tailscale_tailnet", "") ||
+            "-"
 
-        if api_key == "" or tailnet == "" do
-          Logger.warning(
-            "Tailscale API credentials not configured. Skipping auto-approval of routes."
-          )
+        tailnet = if tailnet == "", do: "-", else: tailnet
 
-          {:error, :missing_credentials}
-        else
-          # Handle Routes approval (Exit node or Subnets)
-          advertise_exit_node =
-            case Map.get(config, "advertise_exit_node") do
-              false -> false
-              "false" -> false
-              nil -> true
-              _ -> true
+        case get_api_token(merged_config) do
+          {:ok, token} ->
+            # Handle Routes approval (Exit node or Subnets)
+            advertise_exit_node =
+              case Map.get(config, "advertise_exit_node") do
+                false -> false
+                "false" -> false
+                nil -> true
+                _ -> true
+              end
+
+            advertise_routes = Map.get(config, "advertise_routes") || ""
+
+            if advertise_exit_node or clean_routes(advertise_routes) != "" do
+              expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
+              Logger.info("Starting Tailscale routes approval for #{expected_hostname}")
+              do_approve_exit_node(token, tailnet, expected_hostname, 5)
+            else
+              Logger.info(
+                "Node #{pair_id} is not advertising any routes. Skipping routes approval."
+              )
+
+              {:ok, :skipped}
             end
 
-          advertise_routes = Map.get(config, "advertise_routes") || ""
-
-          if advertise_exit_node or clean_routes(advertise_routes) != "" do
-            expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
-            Logger.info("Starting Tailscale routes approval for #{expected_hostname}")
-            do_approve_exit_node(api_key, tailnet, expected_hostname, 5)
-          else
-            Logger.info(
-              "Node #{pair_id} is not advertising any routes. Skipping routes approval."
+          {:error, reason} ->
+            Logger.warning(
+              "Tailscale API token not available (#{inspect(reason)}). Skipping auto-approval of routes."
             )
 
-            {:ok, :skipped}
-          end
+            {:error, :missing_credentials}
         end
     end
   end
 
-  defp do_approve_exit_node(_api_key, _tailnet, expected_hostname, 0) do
+  defp do_approve_exit_node(_token, _tailnet, expected_hostname, 0) do
     Logger.error("Failed to find Tailscale device #{expected_hostname} after multiple retries.")
     {:error, :device_not_found}
   end
 
-  defp do_approve_exit_node(api_key, tailnet, expected_hostname, retries_left) do
+  defp do_approve_exit_node(token, tailnet, expected_hostname, retries_left) do
     devices_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/devices"
+    headers = [{"authorization", "Bearer #{token}"}]
 
-    case Req.get(devices_url, auth: {:basic, "#{api_key}:"}) do
+    case Req.get(devices_url, headers: headers) do
       {:ok, %{status: 200, body: %{"devices" => devices}}} ->
         device =
           Enum.find(devices, fn dev ->
@@ -646,7 +651,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           device_id = device["id"]
           routes_url = "https://api.tailscale.com/api/v2/device/#{device_id}/routes"
 
-          case Req.get(routes_url, auth: {:basic, "#{api_key}:"}) do
+          case Req.get(routes_url, headers: headers) do
             {:ok, %{status: 200, body: %{"advertisedRoutes" => advertised_routes}}} ->
               if advertised_routes != [] do
                 Logger.info(
@@ -655,7 +660,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
                 routes_payload = %{routes: advertised_routes}
 
-                case Req.post(routes_url, json: routes_payload, auth: {:basic, "#{api_key}:"}) do
+                case Req.post(routes_url, json: routes_payload, headers: headers) do
                   {:ok, %{status: 200}} ->
                     Logger.info("Successfully auto-approved routes for #{expected_hostname}")
                     {:ok, :approved}
@@ -677,7 +682,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                 )
 
                 Process.sleep(3000)
-                do_approve_exit_node(api_key, tailnet, expected_hostname, retries_left - 1)
+                do_approve_exit_node(token, tailnet, expected_hostname, retries_left - 1)
               end
 
             {:ok, %{status: status, body: body}} ->
@@ -694,7 +699,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           )
 
           Process.sleep(3000)
-          do_approve_exit_node(api_key, tailnet, expected_hostname, retries_left - 1)
+          do_approve_exit_node(token, tailnet, expected_hostname, retries_left - 1)
         end
 
       {:ok, %{status: status, body: body}} ->
@@ -872,6 +877,104 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   end
 
   def oauth_auth_key?(_), do: false
+
+  @doc """
+  Resolves a valid Tailscale REST API access token from a raw key string or profile/config map.
+  Supports:
+  - Direct API access tokens (`tskey-api-...`)
+  - OAuth client credentials (`tskey-client-[client_id]-[secret]`), dynamically exchanged for an access token
+  - Fallbacks to settings and environment variables
+  """
+  def get_api_token(key_or_config)
+
+  def get_api_token(key) when is_binary(key) do
+    trimmed = String.trim(key)
+
+    cond do
+      trimmed == "" ->
+        {:error, :empty_key}
+
+      String.starts_with?(trimmed, "tskey-auth-") ->
+        Logger.warning(
+          "Tailscale key is a pre-authenticated auth key (tskey-auth-). Pre-auth keys cannot be used with Tailscale Admin APIs. Please use an OAuth client key (tskey-client-) or API token (tskey-api-)."
+        )
+
+        {:error, :unsupported_auth_key}
+
+      String.starts_with?(trimmed, "tskey-api-") ->
+        {:ok, trimmed}
+
+      oauth_auth_key?(trimmed) ->
+        exchange_oauth_token(trimmed)
+
+      mock?() ->
+        {:ok, "mock-access-token"}
+
+      true ->
+        {:error, :unknown_key_format}
+    end
+  end
+
+  def get_api_token(config) when is_map(config) do
+    key =
+      Map.get(config, "ts_auth_key") ||
+        Map.get(config, :ts_auth_key) ||
+        Map.get(config, "ts_api_key") ||
+        Map.get(config, :ts_api_key) ||
+        System.get_env("TAILSCALE_AUTH_KEY") ||
+        System.get_env("TS_AUTHKEY") ||
+        System.get_env("TAILSCALE_API_KEY") ||
+        System.get_env("TS_API_KEY") ||
+        Hermit.Vpn.Setting.get_value("tailscale_api_key", "") ||
+        (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+        ""
+
+    get_api_token(key)
+  end
+
+  def get_api_token(_), do: {:error, :invalid_argument}
+
+  @doc """
+  Exchanges an OAuth client secret (`tskey-client-...`) for a short-lived Bearer access token.
+  """
+  def exchange_oauth_token(secret) when is_binary(secret) do
+    if mock?() do
+      {:ok, "mock-access-token"}
+    else
+      clean_secret = secret |> String.split("?") |> List.first() |> String.trim()
+
+      case Regex.run(~r/^tskey-client-([^-]+)-.+/, clean_secret) do
+        [_, client_id] ->
+          url = "https://api.tailscale.com/api/v2/oauth/token"
+
+          case Req.post(url,
+                 form: [
+                   client_id: client_id,
+                   client_secret: clean_secret,
+                   grant_type: "client_credentials"
+                 ]
+               ) do
+            {:ok, %{status: 200, body: %{"access_token" => token}}} when is_binary(token) ->
+              {:ok, token}
+
+            {:ok, %{status: status, body: body}} ->
+              Logger.error(
+                "Failed to exchange Tailscale OAuth token (HTTP #{status}): #{inspect(body)}"
+              )
+
+              {:error, {:oauth_failed, status, body}}
+
+            {:error, reason} ->
+              Logger.error("Network error exchanging Tailscale OAuth token: #{inspect(reason)}")
+              {:error, reason}
+          end
+
+        _ ->
+          Logger.error("Could not parse Client ID from Tailscale OAuth key: #{secret}")
+          {:error, :invalid_oauth_key_format}
+      end
+    end
+  end
 
   defp get_current_tags(wg_name, socket_path) do
     if File.exists?(socket_path) do
@@ -1134,6 +1237,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     _ -> :ok
   end
 
+  def setup_tailscale_host_nat(_pair_id, _ts_port), do: :ok
+
   defp resolve_subnet_info(pair_id, ns) do
     case Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id) do
       {:ok, %{subnet: subnet, gateway_ip: gateway_ip, ns_ip: ns_ip}}
@@ -1162,8 +1267,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   rescue
     _ -> :error
   end
-
-  def setup_tailscale_host_nat(_pair_id, _ts_port), do: :ok
 
   def cleanup_tailscale_host_nat(pair_id) do
     ns = "hermit_wg_#{pair_id}"

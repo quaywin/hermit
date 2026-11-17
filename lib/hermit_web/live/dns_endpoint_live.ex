@@ -368,12 +368,31 @@ defmodule HermitWeb.DnsEndpointLive do
           # DnsWorker sync_state will automatically trigger configuration update asynchronously
           DnsWorker.sync_state(endpoint_id)
 
+          endpoint = Hermit.Repo.get(DnsEndpoint, endpoint_id)
+          profile = endpoint && endpoint.inbound_profile_id && Hermit.Repo.get(Hermit.Vpn.InboundProfile, endpoint.inbound_profile_id)
+          profile_config = (profile && profile.config) || %{}
+          auth_key =
+            Map.get(profile_config, "ts_auth_key") ||
+              Map.get(profile_config, :ts_auth_key) ||
+              System.get_env("TAILSCALE_AUTH_KEY") ||
+              System.get_env("TS_AUTHKEY") ||
+              ""
+
+          flash_msg =
+            cond do
+              override and String.starts_with?(String.trim(auth_key), "tskey-auth-") ->
+                "Tailscale DNS Override enabled locally, but note: pre-auth keys (tskey-auth-) cannot auto-update Tailscale DNS via API. Please use an OAuth key (tskey-client-) for automatic sync, or configure Tailscale Admin Console manually."
+
+              override ->
+                "Tailscale DNS Override enabled. Syncing with Tailscale..."
+
+              true ->
+                "Tailscale DNS Override disabled. Syncing with Tailscale..."
+            end
+
           {:noreply,
            socket
-           |> put_flash(
-             :info,
-             "Tailscale DNS Override #{if override, do: "enabled", else: "disabled"}."
-           )
+           |> put_flash(:info, flash_msg)
            |> assign(endpoints: get_endpoints())}
 
         {:error, _} ->

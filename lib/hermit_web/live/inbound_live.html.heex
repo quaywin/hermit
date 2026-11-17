@@ -171,12 +171,12 @@
             <% "tailscale" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
                 <div class="space-y-1.5">
-                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Auth Key (Optional)</label>
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Key (OAuth or Auth Key)</label>
                   <input
                     type="password"
                     name="inbound_profile[config][ts_auth_key]"
                     value={Phoenix.HTML.Form.input_value(f, :config)["ts_auth_key"]}
-                    placeholder="tskey-auth-... or tskey-client-..."
+                    placeholder="tskey-client-... or tskey-auth-..."
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>

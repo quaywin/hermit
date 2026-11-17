@@ -20,8 +20,10 @@ if System.get_env("PHX_SERVER") do
   config :hermit, HermitWeb.Endpoint, server: true
 end
 
+web_port = System.get_env("PORT") || System.get_env("HERMIT_PORT") || "3000"
+
 config :hermit, HermitWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "3000"))]
+  http: [port: String.to_integer(web_port)]
 
 if config_env() in [:dev, :prod] do
   database_name = if config_env() == :dev, do: "hermit_dev.db", else: "hermit_prod.db"
@@ -78,15 +80,35 @@ if config_env() in [:dev, :prod] do
       )
 
   if config_env() == :prod do
-    host = System.get_env("PHX_HOST") || "example.com"
+    host = System.get_env("PHX_HOST") || "localhost"
+
+    check_origin =
+      case System.get_env("CHECK_ORIGIN") do
+        "false" ->
+          false
+
+        origins when is_binary(origins) and origins != "" ->
+          origins
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+
+        _ ->
+          if host in ["localhost", "127.0.0.1", "example.com"] do
+            false
+          else
+            [
+              "https://#{host}",
+              "http://#{host}",
+              "//#{host}",
+              "//localhost",
+              "//127.0.0.1"
+            ]
+          end
+      end
 
     config :hermit, HermitWeb.Endpoint,
       url: [host: host, port: 443, scheme: "https"],
-      check_origin: [
-        "https://#{host}",
-        "http://#{host}",
-        "//#{host}"
-      ]
+      check_origin: check_origin
   end
 
   config :hermit, HermitWeb.Endpoint,

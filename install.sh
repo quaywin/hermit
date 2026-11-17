@@ -37,38 +37,136 @@ IS_UPGRADE=false
 mkdir -p "$HERMIT_DIR/storage"
 echo "✓ Prepared config & storage directory at $HERMIT_DIR"
 
+# Detect interactive terminal capability
+INTERACTIVE=false
+if [ -t 0 ] || ([ -e /dev/tty ] && [ -r /dev/tty ] && [ -w /dev/tty ]); then
+  INTERACTIVE=true
+fi
+
+for arg in "$@"; do
+  if [ "$arg" = "-y" ] || [ "$arg" = "--yes" ] || [ "$arg" = "--non-interactive" ]; then
+    INTERACTIVE=false
+    break
+  fi
+done
+
+if [ -n "$CI" ] || [ "$DEBIAN_FRONTEND" = "noninteractive" ]; then
+  INTERACTIVE=false
+fi
+
+is_port_in_use() {
+  local p="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -tulpn 2>/dev/null | grep -q ":$p\b"
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -i ":$p" >/dev/null 2>&1
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -tulpn 2>/dev/null | grep -q ":$p\b"
+  else
+    return 1
+  fi
+}
+
+ask_prompt() {
+  local prompt="$1"
+  local default_val="$2"
+  local result=""
+
+  if [ "$INTERACTIVE" = true ]; then
+    if [ -t 0 ]; then
+      read -r -p "$prompt" result || true
+    elif [ -e /dev/tty ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+      printf "%s" "$prompt" > /dev/tty 2>/dev/null || true
+      read -r result < /dev/tty 2>/dev/null || true
+    fi
+  fi
+
+  if [ -z "$result" ]; then
+    echo "$default_val"
+  else
+    echo "$result"
+  fi
+}
+
 # 3. Check if this is an upgrade or fresh installation
 if [ -f "$ENV_FILE" ]; then
   IS_UPGRADE=true
-  echo "✓ Existing configuration detected. Running in UPGRADE mode..."
-else
-  echo "✓ Fresh installation detected. Generating secure credentials..."
-  if command -v openssl >/dev/null 2>&1; then
-    SECRET_KEY=$(openssl rand -base64 48 | tr -d '\n')
-    BASIC_AUTH_PASS=$(openssl rand -hex 6)
-  else
-    SECRET_KEY="hermit_secret_key_$(date +%s)_$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
-    BASIC_AUTH_PASS="admin$(head -c 4 /dev/urandom | base64 | tr -dc '0-9' | head -c 4)"
+  echo "✓ Existing configuration detected at $ENV_FILE."
+  
+  if [ "$INTERACTIVE" = true ]; then
+    printf "👉 Keep existing configuration? [Y/n]: " > /dev/tty 2>/dev/null || true
+    read -r RECONF_CHOICE < /dev/tty 2>/dev/null || true
+    if [ "$RECONF_CHOICE" = "n" ] || [ "$RECONF_CHOICE" = "N" ]; then
+      IS_UPGRADE=false
+      echo "Reconfiguring Hermit settings..."
+    fi
+  fi
+fi
+
+if [ "$IS_UPGRADE" = false ]; then
+  echo ""
+  echo "========================================="
+  echo "   Hermit Configuration Setup            "
+  echo "========================================="
+  echo "Configure setup parameters (press Enter to accept defaults):"
+  echo ""
+
+  # 1. Dashboard Port selection with collision detection
+  SUGGESTED_PORT=3000
+  if is_port_in_use 3000; then
+    echo "⚠️  Port 3000 is currently in use by another service on this host."
+    SUGGESTED_PORT=3008
+    while is_port_in_use "$SUGGESTED_PORT"; do
+      SUGGESTED_PORT=$((SUGGESTED_PORT + 1))
+    done
+    echo "👉 Suggested alternative port: $SUGGESTED_PORT"
   fi
 
-  # Smart port probe for Tailscale UDP
-  if ss -ulpn 2>/dev/null | grep -q ":41641\b" || lsof -i :41641 >/dev/null 2>&1; then
-    TS_PORT_RANGE="41642-41700"
+  INPUT_PORT=$(ask_prompt "1. Web Dashboard Port [$SUGGESTED_PORT]: " "$SUGGESTED_PORT")
+  HERMIT_PORT=$(echo "$INPUT_PORT" | tr -dc '0-9')
+  [ -z "$HERMIT_PORT" ] && HERMIT_PORT="$SUGGESTED_PORT"
+
+  # 2. Hostname / Domain
+  INPUT_HOST=$(ask_prompt "2. Domain or Hostname (e.g. dns.example.com or Enter for 'localhost') [localhost]: " "localhost")
+  PHX_HOST=$(echo "$INPUT_HOST" | sed -E -e 's|^https?://||' -e 's|/.*$||' -e 's|:.*$||' | tr -d '[:space:]')
+  [ -z "$PHX_HOST" ] && PHX_HOST="localhost"
+
+  # 3. Admin Username
+  INPUT_USER=$(ask_prompt "3. Admin Username [admin]: " "admin")
+  HERMIT_BASIC_AUTH_USER=$(echo "$INPUT_USER" | tr -d '[:space:]')
+  [ -z "$HERMIT_BASIC_AUTH_USER" ] && HERMIT_BASIC_AUTH_USER="admin"
+
+  # 4. Admin Password
+  if command -v openssl >/dev/null 2>&1; then
+    GEN_PASS=$(openssl rand -hex 6)
   else
-    TS_PORT_RANGE="41641-41700"
+    GEN_PASS="admin$(head -c 4 /dev/urandom | base64 | tr -dc '0-9' | head -c 4)"
+  fi
+  INPUT_PASS=$(ask_prompt "4. Admin Password [press Enter to use auto-generated: $GEN_PASS]: " "$GEN_PASS")
+  HERMIT_BASIC_AUTH_PASS=$(echo "$INPUT_PASS" | tr -d '[:space:]')
+  [ -z "$HERMIT_BASIC_AUTH_PASS" ] && HERMIT_BASIC_AUTH_PASS="$GEN_PASS"
+
+  # 5. Secret Key Base
+  if command -v openssl >/dev/null 2>&1; then
+    SECRET_KEY=$(openssl rand -base64 48 | tr -d '\n')
+  else
+    SECRET_KEY="hermit_secret_key_$(date +%s)_$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
   fi
 
   cat <<EOF > "$ENV_FILE"
 # Hermit Environment Configurations
 SECRET_KEY_BASE=$SECRET_KEY
-PHX_HOST=localhost
-HERMIT_PORT=3000
-TAILSCALE_PORT_RANGE=$TS_PORT_RANGE
-HERMIT_BASIC_AUTH_USER=admin
-HERMIT_BASIC_AUTH_PASS=$BASIC_AUTH_PASS
+PHX_HOST=$PHX_HOST
+HERMIT_PORT=$HERMIT_PORT
+HERMIT_BASIC_AUTH_USER=$HERMIT_BASIC_AUTH_USER
+HERMIT_BASIC_AUTH_PASS=$HERMIT_BASIC_AUTH_PASS
 EOF
-  echo "✓ Generated secure environment file at $ENV_FILE (Tailscale UDP port range: $TS_PORT_RANGE)"
+  echo ""
+  echo "✓ Generated environment configuration file at $ENV_FILE"
 fi
+
+# Ensure .env symlink exists for Docker Compose variable interpolation
+ln -sf "$ENV_FILE" "$HERMIT_DIR/.env"
 
 # 4. Setup Docker Compose configuration
 if [ -f docker-compose.yml ]; then
@@ -114,7 +212,8 @@ case "$1" in
     ;;
   restart)
     echo "Restarting Hermit container..."
-    docker compose -f "$COMPOSE_FILE" restart
+    docker compose -f "$COMPOSE_FILE" down
+    docker compose -f "$COMPOSE_FILE" up -d
     ;;
   stop|down)
     docker compose -f "$COMPOSE_FILE" stop
@@ -162,6 +261,7 @@ fi
 
 # 7. Resolve Server Access URLs (Public IP, Tailscale IP, Localhost)
 PORT=$(grep -E "^HERMIT_PORT=" "$ENV_FILE" | cut -d'=' -f2 || echo "3000")
+HOST=$(grep -E "^PHX_HOST=" "$ENV_FILE" | cut -d'=' -f2 || echo "localhost")
 USER=$(grep -E "^HERMIT_BASIC_AUTH_USER=" "$ENV_FILE" | cut -d'=' -f2 || echo "admin")
 PASS=$(grep -E "^HERMIT_BASIC_AUTH_PASS=" "$ENV_FILE" | cut -d'=' -f2 || echo "")
 
@@ -180,6 +280,9 @@ else
 fi
 
 echo "Access URLs:"
+if [ "$HOST" != "localhost" ] && [ "$HOST" != "127.0.0.1" ]; then
+  echo "  👉 Domain URL    : http://${HOST}:${PORT:-3000} (or https://${HOST} if SSL reverse proxy)"
+fi
 if [ -n "$PUBLIC_IP" ]; then
   echo "  👉 Public URL    : http://${PUBLIC_IP}:${PORT:-3000}"
 fi

@@ -7,7 +7,13 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
     wg_name = "hermit_wg_#{pair_id}"
     ts_name = "hermit_ts_#{pair_id}"
-    ts_auth_key = Map.get(config, "ts_auth_key") || ""
+    ts_auth_key =
+      Map.get(config, "ts_auth_key") ||
+        Map.get(config, :ts_auth_key) ||
+        System.get_env("TAILSCALE_AUTH_KEY") ||
+        System.get_env("TS_AUTHKEY") ||
+        (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+        ""
     login_server = Map.get(config, "login_server")
 
     advertise_exit_node =
@@ -205,13 +211,21 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             ts_up_args
           end
 
+        update_auth_key =
+          Map.get(config, "ts_auth_key") ||
+            Map.get(config, :ts_auth_key) ||
+            System.get_env("TAILSCALE_AUTH_KEY") ||
+            System.get_env("TS_AUTHKEY") ||
+            (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+            ""
+
         ts_up_args =
           append_advertise_args(ts_up_args, config, %{
             pair_id: pair_id,
             wg_name: wg_name,
             socket_path: socket_path,
             advertise_exit_node: advertise_exit_node,
-            ts_auth_key: Map.get(config, "ts_auth_key")
+            ts_auth_key: update_auth_key
           })
 
         case run_cmd("ip", ts_up_args) do
@@ -828,19 +842,17 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     end
   end
 
-  def resolve_tags(_pair_id, config, opts \\ %{}) do
+  def resolve_tags(_pair_id, config, _opts \\ %{}) do
     explicit_tags =
       Map.get(config, "advertise_tags") ||
         Map.get(config, :advertise_tags) ||
         Map.get(config, "tag") ||
         Map.get(config, :tag)
 
-    auth_key =
-      opts[:ts_auth_key] ||
-        Map.get(config, "ts_auth_key") ||
-        Map.get(config, :ts_auth_key) || ""
-
     cond do
+      is_binary(explicit_tags) and String.trim(explicit_tags) in ["none", "false"] ->
+        nil
+
       is_binary(explicit_tags) and String.trim(explicit_tags) != "" ->
         explicit_tags
         |> String.split([",", " "], trim: true)
@@ -850,11 +862,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         end)
         |> Enum.join(",")
 
-      oauth_auth_key?(auth_key) ->
-        "tag:hermit"
-
       true ->
-        nil
+        "tag:hermit"
     end
   end
 
@@ -1110,28 +1119,48 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     ns = "hermit_wg_#{pair_id}"
     table_name = "hermit_local_#{pair_id}"
 
-    case System.cmd("ip", ["netns", "exec", ns, "ip", "-o", "-4", "addr", "show"]) do
-      {output, 0} ->
-        case Regex.run(~r/inet\s+(10\.\d+\.\d+\.\d+)/, output) do
-          [_, ns_ip] ->
-            subnet = Regex.replace(~r/\.\d+$/, ns_ip, ".0") <> "/30"
-            host_gateway_ip = Regex.replace(~r/\.\d+$/, ns_ip, ".1")
+    case resolve_subnet_info(pair_id, ns) do
+      {:ok, subnet, host_gateway_ip, ns_ip} ->
+        Hermit.Vpn.Nat.setup_nat(table_name, subnet, ns_ip, ts_port)
+        Hermit.Vpn.Nat.cleanup_nat("hermit_ts_nat_#{pair_id}")
 
-            Hermit.Vpn.Nat.setup_nat(table_name, subnet, ns_ip, ts_port)
-            Hermit.Vpn.Nat.cleanup_nat("hermit_ts_nat_#{pair_id}")
-
-            setup_tailscale_netns_policy_routing(ns, host_gateway_ip, ts_port)
-            :ok
-
-          _ ->
-            :ok
-        end
+        setup_tailscale_netns_policy_routing(ns, host_gateway_ip, ts_port)
+        :ok
 
       _ ->
         :ok
     end
   rescue
     _ -> :ok
+  end
+
+  defp resolve_subnet_info(pair_id, ns) do
+    case Hermit.Vpn.SubnetPool.get_or_allocate_subnet(pair_id) do
+      {:ok, %{subnet: subnet, gateway_ip: gateway_ip, ns_ip: ns_ip}}
+      when is_binary(subnet) and is_binary(gateway_ip) and is_binary(ns_ip) ->
+        {:ok, subnet, gateway_ip, ns_ip}
+
+      _ ->
+        case System.cmd("ip", ["netns", "exec", ns, "ip", "-o", "-4", "addr", "show", "dev", "eth0"]) do
+          {output, 0} ->
+            case Regex.run(~r/inet\s+(10\.200\.\d+\.\d+)/, output) do
+              [_, ns_ip] ->
+                [a, b, c, d] = String.split(ns_ip, ".") |> Enum.map(&String.to_integer/1)
+                base_d = div(d, 4) * 4
+                subnet = "#{a}.#{b}.#{c}.#{base_d}/30"
+                gateway_ip = "#{a}.#{b}.#{c}.#{base_d + 1}"
+                {:ok, subnet, gateway_ip, ns_ip}
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+    end
+  rescue
+    _ -> :error
   end
 
   def setup_tailscale_host_nat(_pair_id, _ts_port), do: :ok

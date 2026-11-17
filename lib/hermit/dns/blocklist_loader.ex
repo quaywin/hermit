@@ -172,74 +172,85 @@ defmodule Hermit.Dns.BlocklistLoader do
   Loads a specific blocklist into the unified ETS table.
   """
   def load_blocklist(%Blocklist{} = blocklist) do
-    Logger.info("Starting loading Blocklist '#{blocklist.name}' from #{blocklist.url}...")
-    start_time = System.monotonic_time()
+    if :ets.info(:dns_blocklist_entries) == :undefined do
+      Logger.warning("Blocklist table :dns_blocklist_entries does not exist. Skipping '#{blocklist.name}'.")
+      {:error, :table_not_found}
+    else
+      try do
+        Logger.info("Starting loading Blocklist '#{blocklist.name}' from #{blocklist.url}...")
+        start_time = System.monotonic_time()
 
-    # Clean old entries for this blocklist first
-    :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
-    :ets.delete(:dns_bloom_filter, blocklist.id)
+        # Clean old entries for this blocklist first
+        :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
+        :ets.delete(:dns_bloom_filter, blocklist.id)
 
-    case get_lines(blocklist.url) do
-      {:ok, line_stream_or_enum, temp_path} ->
-        try do
-          # 1. Parse and extract all valid unique domains from stream into a flat list
-          domains =
-            line_stream_or_enum
-            |> Stream.map(&String.trim/1)
-            |> Stream.map(fn line ->
-              case blocklist.format do
-                "adguard" -> parse_adguard_line(line)
-                "hosts" -> parse_hosts_line(line)
-                "domains" -> parse_domains_line(line)
-                _ -> nil
+        case get_lines(blocklist.url) do
+          {:ok, line_stream_or_enum, temp_path} ->
+            try do
+              # 1. Parse and extract all valid unique domains from stream into a flat list
+              domains =
+                line_stream_or_enum
+                |> Stream.map(&String.trim/1)
+                |> Stream.map(fn line ->
+                  case blocklist.format do
+                    "adguard" -> parse_adguard_line(line)
+                    "hosts" -> parse_hosts_line(line)
+                    "domains" -> parse_domains_line(line)
+                    _ -> nil
+                  end
+                end)
+                |> Stream.reject(&is_nil/1)
+                |> Stream.uniq()
+                |> Enum.to_list()
+
+              count = length(domains)
+
+              # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
+              domains
+              |> Enum.chunk_every(5000)
+              |> Enum.each(fn chunk ->
+                entries = Enum.map(chunk, &{&1, blocklist.id})
+                :ets.insert(:dns_blocklist_entries, entries)
+              end)
+
+              # 3. Generate Bloom Filter and store it as a single binary key in ETS
+              if count > 0 do
+                bit_size = Hermit.Dns.BloomFilter.calculate_size(count)
+                empty_bloom = Hermit.Dns.BloomFilter.new(bit_size)
+                bloom_binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
+                :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
               end
-            end)
-            |> Stream.reject(&is_nil/1)
-            |> Stream.uniq()
-            |> Enum.to_list()
 
-          count = length(domains)
+              duration =
+                System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
 
-          # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
-          domains
-          |> Enum.chunk_every(5000)
-          |> Enum.each(fn chunk ->
-            entries = Enum.map(chunk, &{&1, blocklist.id})
-            :ets.insert(:dns_blocklist_entries, entries)
-          end)
+              Logger.info(
+                "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
+              )
 
-          # 3. Generate Bloom Filter and store it as a single binary key in ETS
-          if count > 0 do
-            bit_size = Hermit.Dns.BloomFilter.calculate_size(count)
-            empty_bloom = Hermit.Dns.BloomFilter.new(bit_size)
-            bloom_binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
-            :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
-          end
+              # Update rules count and timestamp in DB without triggering callbacks
+              update_rules_count(blocklist.id, count)
 
-          duration =
-            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+              # Store metadata in ETS
+              :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
+            after
+              # Cleanup temporary file if downloaded
+              if temp_path && File.exists?(temp_path) do
+                File.rm(temp_path)
+              end
 
-          Logger.info(
-            "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
-          )
+              # Reclaim temporary heap memory after building bloom filter
+              :erlang.garbage_collect()
+            end
 
-          # Update rules count and timestamp in DB without triggering callbacks
-          update_rules_count(blocklist.id, count)
-
-          # Store metadata in ETS
-          :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
-        after
-          # Cleanup temporary file if downloaded
-          if temp_path && File.exists?(temp_path) do
-            File.rm(temp_path)
-          end
-
-          # Reclaim temporary heap memory after building bloom filter
-          :erlang.garbage_collect()
+          {:error, reason} ->
+            Logger.error("Failed to load Blocklist '#{blocklist.name}': #{inspect(reason)}")
         end
-
-      {:error, reason} ->
-        Logger.error("Failed to load Blocklist '#{blocklist.name}': #{inspect(reason)}")
+      rescue
+        e in ArgumentError ->
+          Logger.warning("ETS table disappeared while loading Blocklist '#{blocklist.name}': #{Exception.message(e)}")
+          {:error, :table_terminated}
+      end
     end
   end
 

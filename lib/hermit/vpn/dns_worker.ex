@@ -272,7 +272,13 @@ defmodule Hermit.Vpn.DnsWorker do
   defp get_dns_credentials(profile) do
     profile_config = (profile && profile.config) || %{}
 
-    auth_key = Map.get(profile_config, "ts_auth_key") || ""
+    auth_key =
+      Map.get(profile_config, "ts_auth_key") ||
+        Map.get(profile_config, :ts_auth_key) ||
+        System.get_env("TAILSCALE_AUTH_KEY") ||
+        System.get_env("TS_AUTHKEY") ||
+        (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+        ""
     api_key = Map.get(profile_config, "ts_api_key") || ""
     tailnet = Map.get(profile_config, "ts_tailnet") || ""
     login_server = Map.get(profile_config, "login_server") || ""

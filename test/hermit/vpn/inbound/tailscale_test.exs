@@ -96,8 +96,8 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
       assert "--advertise-tags=tag:custom,tag:server" in args
     end
 
-    test "does not advertise tags for normal pre-auth key without custom tags" do
-      config = %{"ts_auth_key" => "tskey-auth-normal-key"}
+    test "does not advertise tags when explicitly set to none" do
+      config = %{"ts_auth_key" => "tskey-auth-normal-key", "advertise_tags" => "none"}
 
       args = Tailscale.append_advertise_args(["up"], config, @opts)
 
@@ -116,8 +116,12 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
 
     test "resolve_tags normalizes tags and handles defaults" do
       assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "my-tag"}) == "tag:my-tag"
+      assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "tag:my-tag, server"}) == "tag:my-tag,tag:server"
+      assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "none"}) == nil
+      assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "false"}) == nil
       assert Tailscale.resolve_tags("p1", %{"ts_auth_key" => "tskey-client-abc"}) == "tag:hermit"
-      assert Tailscale.resolve_tags("p1", %{"ts_auth_key" => "tskey-auth-abc"}) == nil
+      assert Tailscale.resolve_tags("p1", %{"ts_auth_key" => "tskey-auth-abc"}) == "tag:hermit"
+      assert Tailscale.resolve_tags("p1", %{}) == "tag:hermit"
     end
   end
 end

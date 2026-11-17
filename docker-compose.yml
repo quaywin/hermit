@@ -13,7 +13,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PHX_SERVER=true
-      - PORT=${HERMIT_PORT:-3000}
       - STORAGE_BASE_PATH=/app/storage
       - GOMEMLIMIT=32MiB
       - GOGC=50

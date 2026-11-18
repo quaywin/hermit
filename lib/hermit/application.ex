@@ -218,13 +218,25 @@ defmodule Hermit.Application do
       add rule inet hermit_host postrouting ip saddr 100.64.0.0/10 masquerade
       """
 
-      case System.cmd("nft", ["-f", "-"], input: script, stderr_to_stdout: true) do
-        {_, 0} ->
-          :ok
+      tmp_path =
+        Path.join(
+          System.tmp_dir!(),
+          "hermit_host_#{System.unique_integer([:positive])}.conf"
+        )
 
-        {error_output, code} ->
-          IO.inspect({code, error_output}, label: "Warning: nft -f batch failed, falling back to sequential")
-          fallback_nftables_host()
+      try do
+        File.write!(tmp_path, script)
+
+        case System.cmd("nft", ["-f", tmp_path], stderr_to_stdout: true) do
+          {_, 0} ->
+            :ok
+
+          {error_output, code} ->
+            IO.inspect({code, error_output}, label: "Warning: nft -f batch failed, falling back to sequential")
+            fallback_nftables_host()
+        end
+      after
+        File.rm(tmp_path)
       end
     rescue
       e ->

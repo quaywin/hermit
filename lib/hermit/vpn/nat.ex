@@ -61,12 +61,24 @@ defmodule Hermit.Vpn.Nat do
 
       script = Enum.join(all_commands, "\n") <> "\n"
 
-      case System.cmd("nft", ["-f", "-"], input: script, stderr_to_stdout: true) do
-        {_, 0} ->
-          :ok
+      tmp_path =
+        Path.join(
+          System.tmp_dir!(),
+          "hermit_nat_#{table_name}_#{System.unique_integer([:positive])}.conf"
+        )
 
-        {error_output, _code} ->
-          Logger.warning("Failed to batch apply nftables NAT rules for #{table_name}: #{error_output}")
+      try do
+        File.write!(tmp_path, script)
+
+        case System.cmd("nft", ["-f", tmp_path], stderr_to_stdout: true) do
+          {_, 0} ->
+            :ok
+
+          {error_output, _code} ->
+            Logger.warning("Failed to batch apply nftables NAT rules for #{table_name}: #{error_output}")
+        end
+      after
+        File.rm(tmp_path)
       end
 
       :ok

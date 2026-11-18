@@ -65,6 +65,11 @@ If you prefer managing files yourself:
    HERMIT_PORT=3000
    HERMIT_BASIC_AUTH_USER=admin
    HERMIT_BASIC_AUTH_PASS=choose_your_password
+
+   # Resource limits & BEAM schedulers (tune based on server CPU / RAM)
+   HERMIT_CPUS=1.5
+   HERMIT_MEM_LIMIT=1024m
+   ERL_FLAGS=+S 2:2
    EOF
    ```
 

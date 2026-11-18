@@ -4,8 +4,8 @@ services:
     container_name: hermit_orchestrator
     network_mode: host
     privileged: true
-    cpus: 2.0
-    mem_limit: 1024m
+    cpus: ${HERMIT_CPUS:-2.0}
+    mem_limit: ${HERMIT_MEM_LIMIT:-1024m}
     env_file:
       - ${HOME}/.hermit/env
     volumes:
@@ -18,5 +18,5 @@ services:
       - STORAGE_BASE_PATH=/app/storage
       - GOMEMLIMIT=32MiB
       - GOGC=50
-      - ERL_FLAGS=+S 2:2
+      - ERL_FLAGS=${ERL_FLAGS:-+S 2:2}
     restart: "unless-stopped"

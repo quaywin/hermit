@@ -101,6 +101,33 @@ if [ -f "$ENV_FILE" ]; then
       echo "Reconfiguring Hermit settings..."
     fi
   fi
+
+  if [ "$IS_UPGRADE" = true ]; then
+    # Ensure resource limit parameters exist in existing env file
+    HOST_CORES=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    if [ "$HOST_CORES" -le 1 ]; then
+      UPGRADE_CPUS="1.0"
+      UPGRADE_ERL="+S 1:1"
+    elif [ "$HOST_CORES" -eq 2 ]; then
+      UPGRADE_CPUS="1.5"
+      UPGRADE_ERL="+S 2:2"
+    else
+      UPGRADE_CPUS="2.0"
+      UPGRADE_ERL="+S 2:2"
+    fi
+
+    if ! grep -q "^HERMIT_CPUS=" "$ENV_FILE" 2>/dev/null; then
+      echo "" >> "$ENV_FILE"
+      echo "# Resource limits & Erlang Schedulers (tune for your server CPU / RAM)" >> "$ENV_FILE"
+      echo "HERMIT_CPUS=$UPGRADE_CPUS" >> "$ENV_FILE"
+    fi
+    if ! grep -q "^HERMIT_MEM_LIMIT=" "$ENV_FILE" 2>/dev/null; then
+      echo "HERMIT_MEM_LIMIT=1024m" >> "$ENV_FILE"
+    fi
+    if ! grep -q "^ERL_FLAGS=" "$ENV_FILE" 2>/dev/null; then
+      echo "ERL_FLAGS=$UPGRADE_ERL" >> "$ENV_FILE"
+    fi
+  fi
 fi
 
 if [ "$IS_UPGRADE" = false ]; then
@@ -146,7 +173,30 @@ if [ "$IS_UPGRADE" = false ]; then
   HERMIT_BASIC_AUTH_PASS=$(echo "$INPUT_PASS" | tr -d '[:space:]')
   [ -z "$HERMIT_BASIC_AUTH_PASS" ] && HERMIT_BASIC_AUTH_PASS="$GEN_PASS"
 
-  # 5. Secret Key Base
+  # 5. Resource Limits & CPU Allocation
+  HOST_CORES=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+  if [ "$HOST_CORES" -le 1 ]; then
+    DEFAULT_CPUS="1.0"
+    DEFAULT_ERL_FLAGS="+S 1:1"
+  elif [ "$HOST_CORES" -eq 2 ]; then
+    DEFAULT_CPUS="1.5"
+    DEFAULT_ERL_FLAGS="+S 2:2"
+  else
+    DEFAULT_CPUS="2.0"
+    DEFAULT_ERL_FLAGS="+S 2:2"
+  fi
+
+  INPUT_CPUS=$(ask_prompt "5. CPU Limit for Hermit (Host detected: ${HOST_CORES} cores) [$DEFAULT_CPUS]: " "$DEFAULT_CPUS")
+  HERMIT_CPUS=$(echo "$INPUT_CPUS" | tr -d '[:space:]')
+  [ -z "$HERMIT_CPUS" ] && HERMIT_CPUS="$DEFAULT_CPUS"
+
+  if awk "BEGIN {exit !($HERMIT_CPUS <= 1.0)}" 2>/dev/null; then
+    ERL_FLAGS="+S 1:1"
+  else
+    ERL_FLAGS="$DEFAULT_ERL_FLAGS"
+  fi
+
+  # 6. Secret Key Base
   if command -v openssl >/dev/null 2>&1; then
     SECRET_KEY=$(openssl rand -base64 48 | tr -d '\n')
   else
@@ -160,6 +210,11 @@ PHX_HOST=$PHX_HOST
 HERMIT_PORT=$HERMIT_PORT
 HERMIT_BASIC_AUTH_USER=$HERMIT_BASIC_AUTH_USER
 HERMIT_BASIC_AUTH_PASS=$HERMIT_BASIC_AUTH_PASS
+
+# Resource limits & Erlang Schedulers (tune for your server CPU / RAM)
+HERMIT_CPUS=$HERMIT_CPUS
+HERMIT_MEM_LIMIT=1024m
+ERL_FLAGS=$ERL_FLAGS
 EOF
   echo ""
   echo "✓ Generated environment configuration file at $ENV_FILE"

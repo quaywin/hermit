@@ -90,13 +90,28 @@ defmodule HermitWeb.SystemLive do
     storage_base =
       System.get_env("STORAGE_BASE_PATH", Path.expand("storage", File.cwd!()))
 
+    schedulers_online = :erlang.system_info(:schedulers_online)
+    schedulers_total = :erlang.system_info(:schedulers)
+
+    logical_cores =
+      case :erlang.system_info(:logical_processors_online) do
+        n when is_integer(n) -> n
+        _ -> schedulers_total
+      end
+
+    erl_flags = System.get_env("ERL_FLAGS", "+S #{schedulers_online}:#{schedulers_total}")
+
     %{
       elixir_version: System.version(),
       otp_release: :erlang.system_info(:otp_release) |> to_string(),
       memory_usage: total_mem,
       uptime: uptime_str,
       storage_base_path: storage_base,
-      docker_socket: Updater.docker_socket_available?()
+      docker_socket: Updater.docker_socket_available?(),
+      schedulers_online: schedulers_online,
+      schedulers_total: schedulers_total,
+      logical_cores: logical_cores,
+      erl_flags: erl_flags
     }
   end
 
@@ -275,6 +290,14 @@ defmodule HermitWeb.SystemLive do
           </h2>
 
           <div class="space-y-3">
+            <div class="flex justify-between items-center py-2 border-b border-base-200 text-xs">
+              <span class="text-base-content/60">CPU Schedulers</span>
+              <span class="font-mono font-bold text-base-content">
+                {@system_info.schedulers_online} active / {@system_info.logical_cores} cores
+                <span class="text-base-content/40 font-normal text-[10px]">({@system_info.erl_flags})</span>
+              </span>
+            </div>
+
             <div class="flex justify-between items-center py-2 border-b border-base-200 text-xs">
               <span class="text-base-content/60">BEAM Memory Usage</span>
               <span class="font-mono font-bold text-base-content">

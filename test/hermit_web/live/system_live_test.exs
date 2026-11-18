@@ -9,6 +9,7 @@ defmodule HermitWeb.SystemLiveTest do
     assert html =~ "Check for Updates"
     assert html =~ "Software Version"
     assert html =~ "Runtime Environment"
+    assert html =~ "CPU Schedulers"
 
     # Test check updates button
     rendered = render_click(view, :check_updates)

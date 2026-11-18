@@ -3,17 +3,12 @@ defmodule HermitWeb.DnsServicesLive do
   import Ecto.Query
   alias Hermit.Vpn.DnsConfig
   alias Hermit.Services.Catalog
-  alias Hermit.Vpn.SniProxy
 
   @topic_vpn "vpn_pairs"
 
   @impl true
   def mount(_params, _session, socket) do
-    dns_profiles =
-      Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-      |> Hermit.Repo.preload([:dns_endpoints])
-
-    selected_profile = List.first(dns_profiles)
+    config = DnsConfig.get_global_config()
 
     vpn_pairs =
       Hermit.Repo.all(from(p in Hermit.Vpn.VpnPair, order_by: p.pair_id))
@@ -21,16 +16,13 @@ defmodule HermitWeb.DnsServicesLive do
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic_vpn)
-
-      if selected_profile do
-        Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{selected_profile.id}")
-      end
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "global_dns_rules")
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
     end
 
     {:ok,
      socket
-     |> assign(dns_profiles: dns_profiles)
-     |> assign(selected_profile: selected_profile)
+     |> assign(config: config)
      |> assign(vpn_pairs: vpn_pairs)
      |> assign(categories: Catalog.categories())
      |> assign(selected_category: :all)
@@ -39,33 +31,7 @@ defmodule HermitWeb.DnsServicesLive do
   end
 
   @impl true
-  def handle_params(%{"profile_id" => profile_id_str}, _uri, socket) do
-    profile_id = String.to_integer(profile_id_str)
-
-    profile =
-      Hermit.Repo.get(DnsConfig, profile_id)
-      |> Hermit.Repo.preload([:dns_endpoints])
-
-    if socket.assigns.selected_profile && socket.assigns.selected_profile.id != profile.id do
-      if :erlang.whereis(Hermit.PubSub) != :undefined do
-        Phoenix.PubSub.unsubscribe(
-          Hermit.PubSub,
-          "dns_config_profile:#{socket.assigns.selected_profile.id}"
-        )
-
-        Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{profile.id}")
-      end
-    end
-
-    {:noreply, assign(socket, selected_profile: profile)}
-  end
-
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
-
-  @impl true
-  def handle_event("select_profile", %{"id" => id_str}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/dns/services?profile_id=#{id_str}")}
-  end
 
   @impl true
   def handle_event("select_category", %{"category" => cat_str}, socket) do
@@ -100,96 +66,79 @@ defmodule HermitWeb.DnsServicesLive do
 
   @impl true
   def handle_event("set_service_action", params, socket) do
-    profile = socket.assigns.selected_profile
+    config = socket.assigns.config
+    svc_id = params["service_id"]
+    action = params["action"] || "bypass"
+    pair_id = params["pair_id"]
 
-    if is_nil(profile) do
-      {:noreply, socket}
-    else
-      svc_id = params["service_id"]
-      action = params["action"] || "bypass"
-      pair_id = params["pair_id"]
+    current_services = config.services || %{}
 
-      current_services = profile.services || %{}
+    updated_services =
+      case action do
+        "bypass" ->
+          Map.delete(current_services, svc_id)
 
-      updated_services =
-        case action do
-          "bypass" ->
-            # Bypass removes the override or sets to bypass
-            Map.delete(current_services, svc_id)
+        "block" ->
+          Map.put(current_services, svc_id, %{"action" => "block"})
 
-          "block" ->
-            Map.put(current_services, svc_id, %{"action" => "block"})
-
-          "route_tunnel" ->
+        "route_tunnel" ->
+          target_pair =
             if is_binary(pair_id) and pair_id != "" do
-              Map.put(current_services, svc_id, %{
-                "action" => "route_tunnel",
-                "pair_id" => pair_id
-              })
+              pair_id
             else
-              # If no pair selected, default to first available vpn pair or keep old
               first_pair = List.first(socket.assigns.vpn_pairs)
-              default_id = if first_pair, do: first_pair.pair_id, else: ""
-
-              Map.put(current_services, svc_id, %{
-                "action" => "route_tunnel",
-                "pair_id" => default_id
-              })
+              if first_pair, do: first_pair.pair_id, else: ""
             end
 
-          _ ->
-            current_services
-        end
+          Map.put(current_services, svc_id, %{
+            "action" => "route_tunnel",
+            "pair_id" => target_pair
+          })
 
-      case DnsConfig.changeset(profile, %{services: updated_services})
-           |> Hermit.Repo.update() do
-        {:ok, updated_profile} ->
-          # 1. Sync ETS and Notify running pairs
-          SniProxy.sync_all_routes()
+        _ ->
+          current_services
+      end
 
-          # 2. Broadcast to DNS servers
-          if :erlang.whereis(Hermit.PubSub) != :undefined do
-            Phoenix.PubSub.broadcast(
-              Hermit.PubSub,
-              "dns_config_profile:#{updated_profile.id}",
-              {:dns_config_updated, updated_profile}
-            )
+    case DnsConfig.update_global_services(updated_services) do
+      {:ok, updated_config} ->
+        svc = Catalog.get(svc_id)
+        name = if svc, do: svc.name, else: svc_id
+
+        action_desc =
+          case action do
+            "bypass" ->
+              "direct connection (Bypass)"
+
+            "block" ->
+              "blocked"
+
+            "route_tunnel" ->
+              routed_to = get_in(updated_services, [svc_id, "pair_id"]) || pair_id || ""
+              "routed via tunnel #{routed_to}"
+
+            _ ->
+              "updated"
           end
 
-          # 3. Reload profile with preload
-          reloaded_profile =
-            updated_profile |> Hermit.Repo.preload([:dns_endpoints], force: true)
+        {:noreply,
+         socket
+         |> assign(config: updated_config)
+         |> put_flash(:info, "#{name} is now #{action_desc}.")}
 
-          # Find service name for nice toast
-          svc = Catalog.get(svc_id)
-          name = if svc, do: svc.name, else: svc_id
-
-          action_desc =
-            case action do
-              "bypass" -> "direct connection (Bypass)"
-              "block" -> "blocked"
-              "route_tunnel" -> "routed via tunnel #{pair_id}"
-              _ -> "updated"
-            end
-
-          {:noreply,
-           socket
-           |> assign(selected_profile: reloaded_profile)
-           |> put_flash(:info, "#{name} is now #{action_desc}.")}
-
-        {:error, changeset} ->
-          {:noreply,
-           put_flash(socket, :error, "Failed to update service: #{inspect(changeset.errors)}")}
-      end
+      {:error, changeset} ->
+        {:noreply,
+         put_flash(socket, :error, "Failed to update service: #{inspect(changeset.errors)}")}
     end
   end
 
   @impl true
+  def handle_info({:global_dns_rules_updated, updated_config}, socket) do
+    {:noreply, assign(socket, config: updated_config)}
+  end
+
   def handle_info({:dns_config_updated, updated_profile}, socket) do
-    if socket.assigns.selected_profile &&
-         socket.assigns.selected_profile.id == updated_profile.id do
-      reloaded = updated_profile |> Hermit.Repo.preload([:dns_endpoints], force: true)
-      {:noreply, assign(socket, selected_profile: reloaded)}
+    if socket.assigns.config && socket.assigns.config.id == updated_profile.id do
+      {:noreply, assign(socket, config: updated_profile)}
     else
       {:noreply, socket}
     end

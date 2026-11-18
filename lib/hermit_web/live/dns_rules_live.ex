@@ -2,17 +2,12 @@ defmodule HermitWeb.DnsRulesLive do
   use HermitWeb, :live_view
   import Ecto.Query
   alias Hermit.Vpn.DnsConfig
-  alias Hermit.Vpn.SniProxy
 
   @topic_vpn "vpn_pairs"
 
   @impl true
   def mount(_params, _session, socket) do
-    dns_profiles =
-      Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-      |> Hermit.Repo.preload([:dns_endpoints])
-
-    selected_profile = List.first(dns_profiles)
+    config = DnsConfig.get_global_config()
 
     vpn_pairs =
       Hermit.Repo.all(from(p in Hermit.Vpn.VpnPair, order_by: p.pair_id))
@@ -20,19 +15,17 @@ defmodule HermitWeb.DnsRulesLive do
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic_vpn)
-
-      if selected_profile do
-        Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{selected_profile.id}")
-      end
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "global_dns_rules")
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
     end
 
     {:ok,
      socket
-     |> assign(dns_profiles: dns_profiles)
-     |> assign(selected_profile: selected_profile)
+     |> assign(config: config)
      |> assign(vpn_pairs: vpn_pairs)
      |> assign(search_query: "")
      |> assign(filter_action: "all")
+     |> assign(show_add_modal: false)
      |> assign(custom_rule_action: "route_tunnel")
      |> assign(custom_rule_domain: "")
      |> assign(custom_rule_value: "")
@@ -40,32 +33,25 @@ defmodule HermitWeb.DnsRulesLive do
   end
 
   @impl true
-  def handle_params(%{"profile_id" => profile_id_str}, _uri, socket) do
-    profile_id = String.to_integer(profile_id_str)
-
-    profile =
-      Hermit.Repo.get(DnsConfig, profile_id)
-      |> Hermit.Repo.preload([:dns_endpoints])
-
-    if socket.assigns.selected_profile && socket.assigns.selected_profile.id != profile.id do
-      if :erlang.whereis(Hermit.PubSub) != :undefined do
-        Phoenix.PubSub.unsubscribe(
-          Hermit.PubSub,
-          "dns_config_profile:#{socket.assigns.selected_profile.id}"
-        )
-
-        Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{profile.id}")
-      end
-    end
-
-    {:noreply, assign(socket, selected_profile: profile)}
-  end
-
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_event("select_profile", %{"id" => id_str}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/dns/rules?profile_id=#{id_str}")}
+  def handle_event("open_add_modal", _params, socket) do
+    first_pair = List.first(socket.assigns.vpn_pairs)
+    default_val = if first_pair, do: first_pair.pair_id, else: ""
+
+    {:noreply,
+     socket
+     |> assign(show_add_modal: true)
+     |> assign(custom_rule_action: "route_tunnel")
+     |> assign(custom_rule_domain: "")
+     |> assign(custom_rule_value: default_val)
+     |> assign(custom_rule_proxy_pair_id: "")}
+  end
+
+  @impl true
+  def handle_event("close_add_modal", _params, socket) do
+    {:noreply, assign(socket, show_add_modal: false)}
   end
 
   @impl true
@@ -104,144 +90,101 @@ defmodule HermitWeb.DnsRulesLive do
 
   @impl true
   def handle_event("add_custom_rule", params, socket) do
-    profile = socket.assigns.selected_profile
+    config = socket.assigns.config
+    domain = String.trim(params["domain"] || "") |> String.downcase()
+    action = params["action"]
+    value = params["value"]
+    proxy_pair_id = params["proxy_pair_id"]
 
-    if is_nil(profile) do
-      {:noreply, socket}
-    else
-      domain = String.trim(params["domain"] || "") |> String.downcase()
-      action = params["action"]
-      value = params["value"]
-      proxy_pair_id = params["proxy_pair_id"]
+    cond do
+      domain == "" ->
+        {:noreply, put_flash(socket, :error, "Domain cannot be empty.")}
 
-      cond do
-        domain == "" ->
-          {:noreply, put_flash(socket, :error, "Domain cannot be empty.")}
-
-        action in ["redirect", "forward_dns", "route_tunnel"] and (is_nil(value) or value == "") ->
-          msg =
-            case action do
-              "route_tunnel" -> "Please select a target tunnel."
-              "redirect" -> "Target IP is required for redirect action."
-              "forward_dns" -> "DNS Server IP or URL is required."
-            end
-
-          {:noreply, put_flash(socket, :error, msg)}
-
-        true ->
-          # Clean domain prefix
-          clean_domain =
-            if String.starts_with?(domain, "*.") do
-              domain
-            else
-              domain
-            end
-
-          existing_rules = profile.custom_rules || []
-          # Remove old rule for this domain if exists
-          filtered_rules =
-            Enum.reject(existing_rules, fn r ->
-              (r["domain"] || r[:domain]) == clean_domain
-            end)
-
-          new_rule = %{
-            "domain" => clean_domain,
-            "action" => action,
-            "value" => if(action in ["block", "bypass"], do: nil, else: value),
-            "proxy_pair_id" => if(action == "forward_dns", do: proxy_pair_id, else: nil)
-          }
-
-          updated_rules = [new_rule | filtered_rules]
-
-          case DnsConfig.changeset(profile, %{custom_rules: updated_rules})
-               |> Hermit.Repo.update() do
-            {:ok, updated_profile} ->
-              # Sync ETS and tunnels
-              SniProxy.sync_all_routes()
-
-              if :erlang.whereis(Hermit.PubSub) != :undefined do
-                Phoenix.PubSub.broadcast(
-                  Hermit.PubSub,
-                  "dns_config_profile:#{updated_profile.id}",
-                  {:dns_config_updated, updated_profile}
-                )
-              end
-
-              reloaded =
-                updated_profile |> Hermit.Repo.preload([:dns_endpoints], force: true)
-
-              {:noreply,
-               socket
-               |> assign(selected_profile: reloaded)
-               |> assign(custom_rule_domain: "")
-               |> assign(custom_rule_value: "")
-               |> assign(custom_rule_proxy_pair_id: "")
-               |> put_flash(:info, "Rule for #{clean_domain} added successfully.")}
-
-            {:error, changeset} ->
-              {:noreply,
-               put_flash(
-                 socket,
-                 :error,
-                 "Failed to save rule: #{inspect(changeset.errors)}"
-               )}
+      action in ["redirect", "forward_dns", "route_tunnel"] and (is_nil(value) or value == "") ->
+        msg =
+          case action do
+            "route_tunnel" -> "Please select a target tunnel."
+            "redirect" -> "Target IP is required for redirect action."
+            "forward_dns" -> "DNS Server IP or URL is required."
           end
-      end
+
+        {:noreply, put_flash(socket, :error, msg)}
+
+      true ->
+        existing_rules = config.custom_rules || []
+
+        # Remove old rule for this domain if exists
+        filtered_rules =
+          Enum.reject(existing_rules, fn r ->
+            (r["domain"] || r[:domain]) == domain
+          end)
+
+        new_rule = %{
+          "domain" => domain,
+          "action" => action,
+          "value" => if(action in ["block", "bypass"], do: nil, else: value),
+          "proxy_pair_id" => if(action == "forward_dns", do: proxy_pair_id, else: nil)
+        }
+
+        updated_rules = [new_rule | filtered_rules]
+
+        case DnsConfig.update_global_rules(updated_rules) do
+          {:ok, updated_config} ->
+            {:noreply,
+             socket
+             |> assign(config: updated_config)
+             |> assign(show_add_modal: false)
+             |> assign(custom_rule_domain: "")
+             |> assign(custom_rule_value: "")
+             |> assign(custom_rule_proxy_pair_id: "")
+             |> put_flash(:info, "Rule for #{domain} added successfully.")}
+
+          {:error, changeset} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Failed to save rule: #{inspect(changeset.errors)}"
+             )}
+        end
     end
   end
 
   @impl true
   def handle_event("delete_custom_rule", %{"domain" => domain}, socket) do
-    profile = socket.assigns.selected_profile
+    config = socket.assigns.config
+    existing_rules = config.custom_rules || []
 
-    if is_nil(profile) do
-      {:noreply, socket}
-    else
-      existing_rules = profile.custom_rules || []
+    updated_rules =
+      Enum.reject(existing_rules, fn r ->
+        (r["domain"] || r[:domain]) == domain
+      end)
 
-      updated_rules =
-        Enum.reject(existing_rules, fn r ->
-          (r["domain"] || r[:domain]) == domain
-        end)
+    case DnsConfig.update_global_rules(updated_rules) do
+      {:ok, updated_config} ->
+        {:noreply,
+         socket
+         |> assign(config: updated_config)
+         |> put_flash(:info, "Rule for #{domain} deleted.")}
 
-      case DnsConfig.changeset(profile, %{custom_rules: updated_rules})
-           |> Hermit.Repo.update() do
-        {:ok, updated_profile} ->
-          SniProxy.sync_all_routes()
-
-          if :erlang.whereis(Hermit.PubSub) != :undefined do
-            Phoenix.PubSub.broadcast(
-              Hermit.PubSub,
-              "dns_config_profile:#{updated_profile.id}",
-              {:dns_config_updated, updated_profile}
-            )
-          end
-
-          reloaded =
-            updated_profile |> Hermit.Repo.preload([:dns_endpoints], force: true)
-
-          {:noreply,
-           socket
-           |> assign(selected_profile: reloaded)
-           |> put_flash(:info, "Rule for #{domain} deleted.")}
-
-        {:error, changeset} ->
-          {:noreply,
-           put_flash(
-             socket,
-             :error,
-             "Failed to delete rule: #{inspect(changeset.errors)}"
-           )}
-      end
+      {:error, changeset} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Failed to delete rule: #{inspect(changeset.errors)}"
+         )}
     end
   end
 
   @impl true
+  def handle_info({:global_dns_rules_updated, updated_config}, socket) do
+    {:noreply, assign(socket, config: updated_config)}
+  end
+
   def handle_info({:dns_config_updated, updated_profile}, socket) do
-    if socket.assigns.selected_profile &&
-         socket.assigns.selected_profile.id == updated_profile.id do
-      reloaded = updated_profile |> Hermit.Repo.preload([:dns_endpoints], force: true)
-      {:noreply, assign(socket, selected_profile: reloaded)}
+    if socket.assigns.config && socket.assigns.config.id == updated_profile.id do
+      {:noreply, assign(socket, config: updated_profile)}
     else
       {:noreply, socket}
     end
@@ -290,6 +233,12 @@ defmodule HermitWeb.DnsRulesLive do
         String.contains?(domain, q) or String.contains?(val, q)
       end)
     end
+  end
+
+  def count_action(rules, "all"), do: length(rules || [])
+
+  def count_action(rules, action) do
+    Enum.count(rules || [], fn r -> (r["action"] || r[:action]) == action end)
   end
 
   def format_tunnel_label(pair) do

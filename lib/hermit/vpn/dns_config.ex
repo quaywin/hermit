@@ -257,4 +257,93 @@ defmodule Hermit.Vpn.DnsConfig do
     |> Ecto.Changeset.put_assoc(:blocklists, blocklists)
     |> Hermit.Repo.update()
   end
+
+  @doc """
+  Gets or creates the global/default DNS configuration used for system-wide
+  Smart DNS services and custom domain rules.
+  """
+  def get_global_config do
+    import Ecto.Query
+
+    case Hermit.Repo.get_by(__MODULE__, name: "Default DNS Profile") ||
+           Hermit.Repo.get_by(__MODULE__, name: "Global DNS Configuration") ||
+           (Hermit.Repo.all(from(d in __MODULE__, order_by: [asc: d.id])) |> List.first()) do
+      nil ->
+        %__MODULE__{}
+        |> changeset(%{name: "Default DNS Profile", custom_rules: [], services: %{}})
+        |> Hermit.Repo.insert!()
+
+      config ->
+        config
+    end
+  end
+
+  @doc """
+  Updates global Smart DNS services and syncs across all DNS profiles and SNI proxy routes.
+  """
+  def update_global_services(services) when is_map(services) do
+    import Ecto.Query
+    global = get_global_config()
+
+    case global |> changeset(%{services: services}) |> Hermit.Repo.update() do
+      {:ok, updated} ->
+        # Also sync services across any other DNS profiles
+        from(d in __MODULE__, where: d.id != ^updated.id)
+        |> Hermit.Repo.update_all(set: [services: services])
+
+        Hermit.Vpn.SniProxy.sync_all_routes()
+        broadcast_global_update(updated)
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Updates global custom domain rules and syncs across all DNS profiles and SNI proxy routes.
+  """
+  def update_global_rules(custom_rules) when is_list(custom_rules) do
+    import Ecto.Query
+    global = get_global_config()
+
+    case global |> changeset(%{custom_rules: custom_rules}) |> Hermit.Repo.update() do
+      {:ok, updated} ->
+        # Also sync custom rules across any other DNS profiles
+        from(d in __MODULE__, where: d.id != ^updated.id)
+        |> Hermit.Repo.update_all(set: [custom_rules: custom_rules])
+
+        Hermit.Vpn.SniProxy.sync_all_routes()
+        broadcast_global_update(updated)
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Broadcasts DNS configuration updates to all endpoints and global subscribers.
+  """
+  def broadcast_global_update(updated) do
+    import Ecto.Query
+
+    if :erlang.whereis(Hermit.PubSub) != :undefined do
+      all_ids = Hermit.Repo.all(from(d in __MODULE__, select: d.id))
+
+      Enum.each(all_ids, fn id ->
+        Phoenix.PubSub.broadcast(
+          Hermit.PubSub,
+          "dns_config_profile:#{id}",
+          {:dns_config_updated, updated}
+        )
+      end)
+
+      Phoenix.PubSub.broadcast(
+        Hermit.PubSub,
+        "global_dns_rules",
+        {:global_dns_rules_updated, updated}
+      )
+    end
+  end
 end

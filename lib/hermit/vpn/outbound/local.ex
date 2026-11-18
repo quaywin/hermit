@@ -422,7 +422,7 @@ defmodule Hermit.Vpn.Outbound.Local do
 
   defp run_cmd(cmd, args) do
     flat_args = List.flatten(args)
-    Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
+    Logger.debug("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
     case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
       {output, 0} ->

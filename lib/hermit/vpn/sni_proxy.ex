@@ -239,7 +239,7 @@ defmodule Hermit.Vpn.SniProxy do
     # 4. Find existing pair_ids with routes currently in ETS
     existing_pairs =
       :ets.select(@table, [{{:"$1", :"$2"}, [], [:"$2"]}])
-      |> Enum.reject(&(&1 in [:ports]))
+      |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
     all_pairs = Enum.uniq(existing_pairs ++ Map.keys(pair_routes))

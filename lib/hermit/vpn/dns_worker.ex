@@ -457,42 +457,10 @@ defmodule Hermit.Vpn.DnsWorker do
                  ns,
                  "sysctl",
                  "-w",
-                 "net.ipv4.ip_forward=1"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "sysctl",
-                 "-w",
-                 "net.ipv6.conf.all.forwarding=1"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "sysctl",
-                 "-w",
-                 "net.ipv4.conf.all.rp_filter=0"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "sysctl",
-                 "-w",
-                 "net.ipv4.conf.default.rp_filter=0"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "sysctl",
-                 "-w",
+                 "net.ipv4.ip_forward=1",
+                 "net.ipv6.conf.all.forwarding=1",
+                 "net.ipv4.conf.all.rp_filter=0",
+                 "net.ipv4.conf.default.rp_filter=0",
                  "net.ipv4.conf.eth0.rp_filter=0"
                ]),
              {:ok, _} <-
@@ -1108,7 +1076,7 @@ defmodule Hermit.Vpn.DnsWorker do
       {:ok, ""}
     else
       flat_args = List.flatten(args)
-      Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
+      Logger.debug("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
       try do
         case System.cmd(cmd, flat_args, stderr_to_stdout: true) do

@@ -13,12 +13,7 @@ defmodule HermitWeb.DnsRulesLiveTest do
   end
 
   test "renders custom rules page, adds and deletes rules", %{conn: conn} do
-    {:ok, config} =
-      Hermit.Repo.insert(%DnsConfig{
-        name: "Rules Profile",
-        upstream_dns: "1.1.1.1",
-        custom_rules: []
-      })
+    _config = DnsConfig.get_global_config()
 
     {:ok, _pair} =
       Hermit.Repo.insert(%VpnPair{
@@ -27,14 +22,17 @@ defmodule HermitWeb.DnsRulesLiveTest do
         status: "running"
       })
 
-    {:ok, view, html} = live(conn, ~p"/dns/rules?profile_id=#{config.id}")
+    {:ok, view, html} = live(conn, ~p"/dns/rules")
 
     assert html =~ "Custom Domain Rules"
-    assert html =~ "No domain rules found"
+    assert html =~ "No custom domain rules configured yet"
+
+    # Open add modal
+    view |> element("button", "Add Domain Rule") |> render_click()
 
     # Add a custom rule routing *.internal.corp to wg_sg
     view
-    |> form("#add-custom-rule-form", %{
+    |> form("#modal-add-custom-rule-form", %{
       "domain" => "*.internal.corp",
       "action" => "route_tunnel",
       "value" => "wg_sg"
@@ -47,7 +45,7 @@ defmodule HermitWeb.DnsRulesLiveTest do
 
     # Verify rule appears in UI table
     updated_html = render(view)
-    assert updated_html =~ "*.internal.corp"
+    assert updated_html =~ "internal.corp"
     assert updated_html =~ "Route Tunnel"
     assert updated_html =~ "wg_sg"
 

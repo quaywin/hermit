@@ -13,14 +13,9 @@ defmodule HermitWeb.DnsServicesLiveTest do
   end
 
   test "renders services catalog and switches categories", %{conn: conn} do
-    {:ok, config} =
-      Hermit.Repo.insert(%DnsConfig{
-        name: "Default Profile",
-        upstream_dns: "1.1.1.1",
-        services: %{}
-      })
+    _config = DnsConfig.get_global_config()
 
-    {:ok, view, html} = live(conn, ~p"/dns/services?profile_id=#{config.id}")
+    {:ok, view, html} = live(conn, ~p"/dns/services")
 
     assert html =~ "Smart DNS Services"
     assert html =~ "Netflix"
@@ -39,12 +34,7 @@ defmodule HermitWeb.DnsServicesLiveTest do
   end
 
   test "updates service action to route_tunnel and syncs to SniProxy", %{conn: conn} do
-    {:ok, config} =
-      Hermit.Repo.insert(%DnsConfig{
-        name: "Streaming Profile",
-        upstream_dns: "1.1.1.1",
-        services: %{}
-      })
+    config = DnsConfig.get_global_config()
 
     # Insert a fake active VPN pair
     {:ok, _pair} =
@@ -54,7 +44,7 @@ defmodule HermitWeb.DnsServicesLiveTest do
         status: "running"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/dns/services?profile_id=#{config.id}")
+    {:ok, view, _html} = live(conn, ~p"/dns/services")
 
     # Set Netflix to route via wg_us
     view

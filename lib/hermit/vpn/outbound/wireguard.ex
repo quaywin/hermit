@@ -129,33 +129,9 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                    wg_name,
                    "sysctl",
                    "-w",
-                   "net.ipv4.ip_forward=1"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "sysctl",
-                   "-w",
-                   "net.ipv6.conf.all.forwarding=#{if block_ipv6, do: 0, else: 1}"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "sysctl",
-                   "-w",
-                   "net.ipv4.udp_rmem_min=8192"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "sysctl",
-                   "-w",
+                   "net.ipv4.ip_forward=1",
+                   "net.ipv6.conf.all.forwarding=#{if block_ipv6, do: 0, else: 1}",
+                   "net.ipv4.udp_rmem_min=8192",
                    "net.ipv4.udp_wmem_min=8192"
                  ]),
                {:ok, _} <-
@@ -531,7 +507,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
 
   defp run_cmd(cmd, args) do
     flat_args = List.flatten(args)
-    Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
+    Logger.debug("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
     case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
       {output, 0} ->

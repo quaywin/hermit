@@ -317,7 +317,7 @@
                       {rules_count} rules
                     </span>
                     <.link
-                      navigate={~p"/dns/rules?profile_id=#{@selected_profile.id}"}
+                      navigate={~p"/dns/rules"}
                       class="text-xs font-semibold text-emerald-500 hover:text-emerald-600 underline"
                     >
                       Manage &rarr;
@@ -329,13 +329,13 @@
 
             <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-base-300/50">
               <.link
-                navigate={~p"/dns/services?profile_id=#{@selected_profile.id}"}
+                navigate={~p"/dns/services"}
                 class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-1.5 rounded-[4px] flex items-center gap-1.5"
               >
                 <.icon name="hero-sparkles" class="size-3.5" /> Open Services Catalog
               </.link>
               <.link
-                navigate={~p"/dns/rules?profile_id=#{@selected_profile.id}"}
+                navigate={~p"/dns/rules"}
                 class="btn btn-outline btn-xs uppercase tracking-wider px-3 py-1.5 rounded-[4px] flex items-center gap-1.5"
               >
                 <.icon name="hero-list-bullet" class="size-3.5" /> Open Domain Rules

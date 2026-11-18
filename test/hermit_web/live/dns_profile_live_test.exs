@@ -110,8 +110,8 @@ defmodule HermitWeb.DnsProfileLiveTest do
 
     assert html =~ "Open Services Catalog"
     assert html =~ "Open Domain Rules"
-    assert html =~ ~p"/dns/services?profile_id=#{profile.id}"
-    assert html =~ ~p"/dns/rules?profile_id=#{profile.id}"
+    assert html =~ ~p"/dns/services"
+    assert html =~ ~p"/dns/rules"
   end
 
   test "supports renaming the DNS profile inline", %{conn: conn, default_profile: profile} do

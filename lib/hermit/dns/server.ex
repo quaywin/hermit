@@ -757,7 +757,21 @@ defmodule Hermit.Dns.Server do
       {:ok, resp}
     else
       # 1. Lookup cache first (max optimization)
-      case Cache.lookup(profile_id, query.domain, query.qtype) do
+      cache_result =
+        case Cache.lookup(profile_id, query.domain, query.qtype) do
+          {:ok, _packet, "smart_routed", _info} ->
+            # Never return cached smart_route answers to internal queries (prevents loops)
+            if Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) do
+              :error
+            else
+              Cache.lookup(profile_id, query.domain, query.qtype)
+            end
+
+          other ->
+            other
+        end
+
+      case cache_result do
         {:ok, cached_packet, status, answer_log_info} ->
           <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
           resp_packet = query.id <> rest_packet
@@ -811,8 +825,9 @@ defmodule Hermit.Dns.Server do
             end
 
           # 2.5 Match Smart Routed Domains (SNI Proxy) if not matched by custom rules
+          # Do not hijack queries from Hermit itself or internal netns veths to prevent recursive loops
           {action, redirect_val} =
-            if is_nil(action) do
+            if is_nil(action) and not Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) do
               case Hermit.Vpn.SniProxy.match(query.domain) do
                 {:ok, smart_pair_id} ->
                   {"smart_route", smart_pair_id}
@@ -979,15 +994,10 @@ defmodule Hermit.Dns.Server do
                   Packet.build_empty_response(query.id, query.query_record)
                 end
 
-              Cache.store(
-                profile_id,
-                query.domain,
-                query.qtype,
-                resp,
-                "smart_routed",
-                "Smart Route -> #{redirect_val} (#{smart_ip})",
-                5
-              )
+              # Note: We deliberately do NOT cache "smart_routed" responses in Cache.store.
+              # Smart route packets are generated in <1µs in memory and depend on client_ip subnet.
+              # Not caching prevents cache pollution across subnets and guarantees internal clients
+              # never receive a looped smart_ip from cache.
 
               :telemetry.execute(
                 [:hermit, :dns, :query],

@@ -19,6 +19,48 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
     end
   end
 
+  @doc """
+  Checks if an IP belongs to Hermit itself (internal container/host IP, netns veth, or Tailscale node IP).
+  Used to prevent DNS and SNI proxy routing loops.
+  """
+  @spec internal_ip?(tuple() | String.t() | nil) :: boolean()
+  def internal_ip?(ip) do
+    case parse_ip(ip) do
+      {10, 200, _, _} ->
+        true
+
+      parsed when is_tuple(parsed) ->
+        parsed in get_ipv4_interfaces() or parsed in get_all_node_ips()
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Retrieves Tailscale IPs belonging to active tunnel nodes to prevent them from routing to themselves.
+  """
+  @spec get_all_node_ips() :: [tuple()]
+  def get_all_node_ips do
+    try do
+      case Code.ensure_loaded(Hermit.Vpn.PairWorker) do
+        {:module, _} ->
+          Hermit.Vpn.PairWorker.list_pairs()
+          |> Enum.flat_map(fn pair ->
+            metrics = Map.get(pair, :metrics) || %{}
+            Map.get(metrics, :ts_ips, [])
+          end)
+          |> Enum.map(&parse_ip/1)
+          |> Enum.reject(&is_nil/1)
+
+        _ ->
+          []
+      end
+    rescue
+      _ -> []
+    end
+  end
+
   defp get_override_ip do
     env_ip = System.get_env("SMART_DNS_IP") || System.get_env("HERMIT_SMART_DNS_IP")
 

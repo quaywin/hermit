@@ -27,7 +27,8 @@
 
 1. 🛡️ **Encrypted DNS & Ad-Blocking Control Plane**: A self-hosted alternative to NextDNS / Control D / AdGuard Home. Filter ads, malware, and trackers with built-in blocklists (AdGuard, GoodbyeAds, Adult filters) and custom routing rules. Deploy via secure **DNS-over-HTTPS (DoH)**, **Android Private DNS**, **Apple `.mobileconfig` (1-click install)**, or dedicated **Tailscale Mesh DNS Nodes**.
 2. 🌐 **Multi-Tunnel VPN Orchestrator**: Pair incoming connections (**Tailscale nodes**, **SOCKS5/HTTP proxies**) with outgoing VPN gateways (**WireGuard**, **Host Direct**) running in completely **isolated Linux network namespaces (`netns`)**. Zero port conflicts, zero route leaks, and zero impact on your host network.
-3. 📊 **Real-Time Web Dashboard**: Built with Phoenix LiveView. Monitor 24-hour DNS telemetry, query volume, blocked threats, throughput, ping latencies, and device status with real-time updates and zero polling overhead.
+3. 🔀 **Domain-Based Split Tunneling (Smart DNS & SNI Proxy)**: Route specific geo-restricted domains (`netflix.com`, `*.openai.com`, etc.) through designated VPN tunnels automatically without needing an Exit Node or installing VPN clients on your device. Zero SSL certificate errors, zero battery drain.
+4. 📊 **Real-Time Web Dashboard**: Built with Phoenix LiveView. Monitor 24-hour DNS telemetry, query volume, blocked threats, throughput, ping latencies, and device status with real-time updates and zero polling overhead.
 
 ---
 
@@ -120,6 +121,31 @@ flowchart LR
 
 ---
 
+### Use Case 3: Domain-Based Split Tunneling (Smart DNS & SNI Proxy)
+
+Stream geo-restricted media (e.g. Netflix US, BBC iPlayer) or unblock services (e.g. OpenAI) on your Smart TV, phone, or laptop without routing all your computer's traffic through a full VPN exit node:
+
+```mermaid
+flowchart LR
+    Client["Client (Phone / TV / PC)\n(Only sets Hermit DNS)"] -->|1. Query netflix.com| DNS["Hermit Smart DNS\n(:53 / DoH)"]
+    DNS -->|2. Returns Hermit IP| Client
+    Client -->|3. HTTPS port 443\n(TLS ClientHello)| SNI["Transparent SNI Proxy\n(Ports 443 / 80)"]
+    subgraph Tunnel ["Isolated Tunnel Netns"]
+        SNI -->|4. SOCKS5 Relay| SOCKS["microsocks Daemon"]
+        SOCKS -->|5. WireGuard Outbound| Target["US WireGuard Gateway\n(netflix.com)"]
+    end
+    Client -.->|Normal traffic (e.g. google.com)\nDirect local ISP connection| Internet["Direct Internet"]
+```
+
+1. Open your tunnel's detail page on Hermit.
+2. In the unified **Routing Targets (Split-Tunnel)** box, enter your targets:
+   * **Domains** (e.g. `netflix.com, *.openai.com`): Automatically intercepted via Smart DNS & SNI Proxy.
+   * **IP Subnets** (e.g. `192.168.1.0/24, 10.0.0.0/8`): Automatically advertised via Tailscale Subnet Router.
+3. Configure your device or home router to use Hermit's DNS.
+4. Enjoy transparent domain-level split tunneling with **zero client VPN apps** and **zero SSL certificate errors**!
+
+---
+
 ## 🛠️ Everyday Management via `hermit` CLI
 
 The installer creates a lightweight `hermit` CLI helper on your server:
@@ -161,6 +187,7 @@ When running in standard Production Mode (`network_mode: host`):
 | Port / Protocol | Service | Description |
 | :--- | :--- | :--- |
 | **`3000/tcp`** | Web Dashboard & DoH | Phoenix LiveView Web UI and DoH resolver (`/dns-query/:token`). Customizable via `HERMIT_PORT`. |
+| **`443/tcp, 80/tcp`** | Smart DNS SNI Proxy | Transparent SNI proxy for domain-based split tunneling (Zero-crypto raw TCP streaming). |
 | **`Dynamic UDP`** | Tailscale Inbounds | **Zero-config**: Automatically allocates free ephemeral ports (`41642-41700`) for direct P2P connections. |
 | **`53/udp, tcp`** | Port 53 DNS | Standard DNS resolver (optional fallback or for LAN router upstream). |
 

@@ -91,9 +91,20 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
       assert {:ok, {_addr, _port, resp_ai}} = :gen_udp.recv(client_sock, 1024, 3000)
       assert binary_part(resp_ai, 0, 2) == tx_id_ai
 
+      # Verify smart_routed responses are NOT stored in Cache (prevents cross-contamination & loops)
+      assert Hermit.Dns.Cache.lookup(profile_id, "netflix.com", :A) == :error
+
       :gen_udp.close(client_sock)
     after
       Process.exit(server_pid, :kill)
     end
+  end
+
+  test "IpResolver.internal_ip? correctly identifies loopback, veth, and external IPs" do
+    assert IpResolver.internal_ip?({10, 200, 1, 2}) == true
+    assert IpResolver.internal_ip?("10.200.5.2") == true
+    assert IpResolver.internal_ip?({1, 1, 1, 1}) == false
+    assert IpResolver.internal_ip?("8.8.8.8") == false
+    assert IpResolver.internal_ip?("100.120.1.5") == false
   end
 end

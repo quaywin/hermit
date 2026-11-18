@@ -13,6 +13,26 @@ defmodule Hermit.Vpn.SniProxy.Handler do
   """
   @spec handle(port(), pos_integer()) :: :ok
   def handle(client_socket, default_target_port) do
+    # Prevent recursive connection loop if connection originates from Hermit itself
+    case :inet.peername(client_socket) do
+      {:ok, {peer_ip, _peer_port}} ->
+        if SniProxy.IpResolver.internal_ip?(peer_ip) do
+          Logger.warning(
+            "SNI Proxy: Loop prevented! Connection rejected from internal IP #{inspect(peer_ip)}"
+          )
+
+          :gen_tcp.close(client_socket)
+          :ok
+        else
+          do_handle(client_socket, default_target_port)
+        end
+
+      _ ->
+        do_handle(client_socket, default_target_port)
+    end
+  end
+
+  defp do_handle(client_socket, default_target_port) do
     # Read the initial packet with a 5-second timeout
     case :gen_tcp.recv(client_socket, 0, 5000) do
       {:ok, initial_packet} ->

@@ -755,7 +755,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
 
           dns_servers =
             if dns_mode == "default" do
-              ["100.100.100.100", "1.1.1.1", "8.8.8.8"]
+              ["1.1.1.1", "8.8.8.8"]
             else
               String.split(dns_resolvers_str, [",", "\n"])
               |> Enum.map(&String.trim/1)

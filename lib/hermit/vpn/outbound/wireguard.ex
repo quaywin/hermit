@@ -274,12 +274,11 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                   else
                     {:ok, :skipped}
                   end} do
-            # Setup network namespace specific DNS
-            if dns_servers != [] do
-              File.mkdir_p!(netns_dns_dir)
-              dns_lines = dns_servers |> Enum.map(&"nameserver #{&1}") |> Enum.join("\n")
-              File.write!(Path.join(netns_dns_dir, "resolv.conf"), dns_lines)
-            end
+            # Setup network namespace specific DNS (guarantee isolated public fallback to prevent host resolv.conf inheritance)
+            dns_to_write = if dns_servers != [], do: dns_servers, else: ["1.1.1.1", "8.8.8.8"]
+            File.mkdir_p!(netns_dns_dir)
+            dns_lines = dns_to_write |> Enum.map(&"nameserver #{&1}") |> Enum.join("\n")
+            File.write!(Path.join(netns_dns_dir, "resolv.conf"), dns_lines)
 
             # Apply UDP GRO forwarding optimizations (gracefully)
             case run_cmd("ip", [

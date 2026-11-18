@@ -767,6 +767,16 @@ defmodule Hermit.Dns.Server do
               Cache.lookup(profile_id, query.domain, query.qtype)
             end
 
+          {:ok, _packet, _status, _info} = hit ->
+            # If domain is now matched by Smart Route (and not internal query),
+            # bypass upstream cache hit immediately so the new route takes effect without delay
+            if not Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) and
+                 match?({:ok, _}, Hermit.Vpn.SniProxy.match(query.domain)) do
+              :error
+            else
+              hit
+            end
+
           other ->
             other
         end

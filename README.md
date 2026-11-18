@@ -137,12 +137,29 @@ flowchart LR
     Client -.->|Normal traffic (e.g. google.com)\nDirect local ISP connection| Internet["Direct Internet"]
 ```
 
+#### Why Smart DNS is Faster & Better than a Full Exit Node:
+* ⚡ **Traffic Offloading (Max Speed)**: 98% of your everyday browsing (YouTube, banking, gaming, local sites) stays on your direct ISP connection with 1 Gbps speed and 2–5ms latency. Only specified domains are routed through VPN tunnels.
+* 🚀 **Low Latency Handshake**: TLS ClientHello connections to Hermit occur over fast Tailscale P2P / LAN (1–5ms RTT), avoiding round-trip penalties across the globe on initial connection.
+* 🛡️ **Bypasses ISP IP & DPI Blocks**: Because DNS returns Hermit's IP, your device never attempts to connect directly to the target server's IP. All web content (HTML, media, video streams) is fetched through the WireGuard tunnel at the destination country and proxied back to you.
+* 🚫 **No CAPTCHAs**: Normal browsing retains your clean residential ISP IP, preventing annoying Cloudflare/Google robot checks.
+* 🔋 **Zero Battery Drain & Zero Client Apps**: Smart TVs, Apple TVs, gaming consoles, and mobile devices only need Hermit DNS configured (or Tailscale connected with Exit Node **OFF**).
+
+#### How to Configure:
 1. Open your tunnel's detail page on Hermit.
 2. In the unified **Routing Targets (Split-Tunnel)** box, enter your targets:
-   * **Domains** (e.g. `netflix.com, *.openai.com`): Automatically intercepted via Smart DNS & SNI Proxy.
+   * **Domains** (e.g. `*.netflix.com, *.openai.com`): Automatically intercepted via Smart DNS & SNI Proxy.
    * **IP Subnets** (e.g. `192.168.1.0/24, 10.0.0.0/8`): Automatically advertised via Tailscale Subnet Router.
 3. Configure your device or home router to use Hermit's DNS.
 4. Enjoy transparent domain-level split tunneling with **zero client VPN apps** and **zero SSL certificate errors**!
+
+> [!TIP]
+> **Common Domain Sets for Popular Services (Include Asset & CDN Domains)**:
+> Major streaming and AI platforms serve static files, images, and video feeds from separate CDN domains. For full coverage without broken styles or missing assets:
+> * **BBC (UK)**: `*.bbc.co.uk, *.bbci.co.uk, *.bbc.com` *(covers main portal, iPlayer, iChef image CDN, and static file CDN)*.
+> * **OpenAI / ChatGPT**: `*.openai.com, *.chatgpt.com, *.oaistatic.com, *.oaiusercontent.com`.
+> * **Netflix**: `*.netflix.com, *.nflxvideo.net, *.nflximg.net, *.nflxext.com`.
+> 
+> Changes apply **instantly (0s delay)** without restarting tunnels — Hermit automatically clears its internal DNS cache and refreshes routing rules in real-time.
 
 ---
 

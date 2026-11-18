@@ -360,23 +360,24 @@ defmodule Hermit.Vpn.Outbound.Local do
   defp parse_net_dev(_), do: %{}
 
   defp extract_metrics(interfaces) when is_map(interfaces) do
+    eth_stats = Map.get(interfaces, "eth0", %{rx: 0, tx: 0})
+
     tailscale_iface =
       Enum.find(Map.keys(interfaces), fn name ->
         String.starts_with?(name, "tailscale")
       end)
 
-    if tailscale_iface do
-      stats = Map.get(interfaces, tailscale_iface)
-      %{bytes_received: stats.tx, bytes_sent: stats.rx}
-    else
-      case Map.get(interfaces, "eth0") do
-        %{rx: rx, tx: tx} ->
-          %{bytes_received: rx, bytes_sent: tx}
-
-        nil ->
-          %{bytes_received: 0, bytes_sent: 0}
+    ts_stats =
+      if tailscale_iface do
+        stats = Map.get(interfaces, tailscale_iface, %{rx: 0, tx: 0})
+        %{rx: stats.tx, tx: stats.rx}
+      else
+        %{rx: 0, tx: 0}
       end
-    end
+
+    rx = max(eth_stats.rx, ts_stats.rx)
+    tx = max(eth_stats.tx, ts_stats.tx)
+    %{bytes_received: rx, bytes_sent: tx}
   end
 
   defp get_storage_base_path do

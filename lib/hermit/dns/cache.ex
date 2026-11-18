@@ -97,4 +97,41 @@ defmodule Hermit.Dns.Cache do
     :ets.delete_all_objects(@dns_cache_table)
     :ok
   end
+
+  @doc """
+  Deletes cache entries matching a domain or wildcard domain across all profiles.
+  Used when Smart Routes are updated to immediately invalidate stale upstream DNS responses.
+  """
+  @spec delete_domain(String.t()) :: :ok
+  def delete_domain(domain) when is_binary(domain) do
+    norm = domain |> String.trim() |> String.downcase()
+
+    if String.starts_with?(norm, "*.") do
+      suffix = String.slice(norm, 1..-1//1)
+      base = String.slice(norm, 2..-1//1)
+
+      :ets.select_delete(@dns_cache_table, [
+        {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [{:==, :"$2", base}], [true]}
+      ])
+
+      all_keys =
+        :ets.select(@dns_cache_table, [
+          {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}
+        ])
+
+      Enum.each(all_keys, fn {p_id, d, qtype} ->
+        if String.ends_with?(d, suffix) do
+          :ets.delete(@dns_cache_table, {p_id, d, qtype})
+        end
+      end)
+    else
+      :ets.select_delete(@dns_cache_table, [
+        {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [{:==, :"$2", norm}], [true]}
+      ])
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
 end

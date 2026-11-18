@@ -504,30 +504,27 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
   defp parse_net_dev(_), do: %{}
 
   defp extract_metrics(interfaces) when is_map(interfaces) do
-    # Look for tailscale0 interface first
-    tailscale_iface =
-      Enum.find(Map.keys(interfaces), fn name ->
-        String.starts_with?(name, "tailscale")
-      end)
+    # For WireGuard outbound, wg0 is the actual tunnel interface to the internet.
+    # It accounts for all outbound traffic (Tailscale exit node, Smart DNS SNI Proxy, and SOCKS5 proxy).
+    case Map.get(interfaces, "wg0") do
+      %{rx: rx, tx: tx} ->
+        %{bytes_received: rx, bytes_sent: tx}
 
-    if tailscale_iface do
-      stats = Map.get(interfaces, tailscale_iface)
-      # For tailscale inbound interface:
-      # Bytes Received (Download) = Tx (sent to client)
-      # Bytes Sent (Upload) = Rx (received from client)
-      %{bytes_received: stats.tx, bytes_sent: stats.rx}
-    else
-      # Fallback to wg0
-      case Map.get(interfaces, "wg0") do
-        %{rx: rx, tx: tx} ->
-          # For wg0 outbound interface:
-          # Bytes Received = Rx (received from internet)
-          # Bytes Sent = Tx (sent to internet)
-          %{bytes_received: rx, bytes_sent: tx}
+      nil ->
+        tailscale_iface =
+          Enum.find(Map.keys(interfaces), fn name ->
+            String.starts_with?(name, "tailscale")
+          end)
 
-        nil ->
+        if tailscale_iface do
+          stats = Map.get(interfaces, tailscale_iface)
+          # For tailscale inbound interface:
+          # Bytes Received (Download) = Tx (sent to client)
+          # Bytes Sent (Upload) = Rx (received from client)
+          %{bytes_received: stats.tx, bytes_sent: stats.rx}
+        else
           %{bytes_received: 0, bytes_sent: 0}
-      end
+        end
     end
   end
 

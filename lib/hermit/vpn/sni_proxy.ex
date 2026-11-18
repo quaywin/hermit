@@ -34,10 +34,14 @@ defmodule Hermit.Vpn.SniProxy do
       if norm != "" do
         :ets.insert(@table, {norm, pair_id})
 
+        # Clear any existing upstream cache on Hermit DNS for this domain/wildcard
+        Hermit.Dns.Cache.delete_domain(norm)
+
         # If it's a wildcard like *.domain.com, also match domain.com itself
         if String.starts_with?(norm, "*.") do
           base = String.slice(norm, 2..-1//1)
           :ets.insert(@table, {base, pair_id})
+          Hermit.Dns.Cache.delete_domain(base)
         end
       end
     end)

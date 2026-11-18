@@ -227,25 +227,39 @@ defmodule HermitWeb.DnsEndpointLive do
         DnsEndpoint.clear_cache()
         Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
-        # Reboot DNS node if it was running with old config
-        {status, _, _} = DnsWorker.get_status(updated_endpoint.id)
+        # Check if network connection type / inbound profile changed
+        network_changed? =
+          endpoint.inbound_profile_id != updated_endpoint.inbound_profile_id or
+            endpoint.ddns_hostname != updated_endpoint.ddns_hostname
 
-        if status in [:running, :starting, :error] do
-          Hermit.Vpn.DnsSupervisor.stop_dns(updated_endpoint.id)
+        {worker_status, _, _} = DnsWorker.get_status(updated_endpoint.id)
+        worker_running? = worker_status in [:running, :starting, :error]
 
-          if updated_endpoint.enabled do
-            Hermit.Vpn.DnsSupervisor.start_dns(
-              updated_endpoint.id,
-              updated_endpoint.inbound_profile_id
-            )
-          end
-        else
-          if updated_endpoint.enabled do
-            Hermit.Vpn.DnsSupervisor.start_dns(
-              updated_endpoint.id,
-              updated_endpoint.inbound_profile_id
-            )
-          end
+        cond do
+          # If network changed or worker was running, full restart of worker + server
+          network_changed? or worker_running? ->
+            Hermit.Vpn.DnsSupervisor.stop_dns(updated_endpoint.id)
+
+            if updated_endpoint.enabled do
+              Hermit.Vpn.DnsSupervisor.start_dns(
+                updated_endpoint.id,
+                updated_endpoint.inbound_profile_id
+              )
+            end
+
+          # If DNS profile or settings changed and endpoint is enabled / server was running
+          true ->
+            Hermit.Vpn.DnsSupervisor.restart_dns_server(updated_endpoint.id)
+        end
+
+        new_config = Hermit.Vpn.DnsConfig.get_for_endpoint(updated_endpoint.id)
+
+        if :erlang.whereis(Hermit.PubSub) != :undefined do
+          Phoenix.PubSub.broadcast(
+            Hermit.PubSub,
+            "dns_config:#{updated_endpoint.id}",
+            {:dns_config_updated, new_config}
+          )
         end
 
         {:noreply,
@@ -459,11 +473,21 @@ defmodule HermitWeb.DnsEndpointLive do
         {:ok, updated_endpoint} ->
           DnsEndpoint.clear_cache()
 
-          # Restart DNS server with new profile if it's currently running
-          {status, _, _} = DnsWorker.get_status(endpoint_id)
+          # Restart DNS server with new profile if it's currently running or enabled
+          Hermit.Vpn.DnsSupervisor.restart_dns_server(endpoint_id)
 
-          if status == :running do
-            Hermit.Vpn.DnsSupervisor.restart_dns_server(endpoint_id)
+          # If DnsWorker is running (Tailscale endpoint), sync its state
+          DnsWorker.sync_state(endpoint_id)
+
+          # Broadcast config update to notify any listeners
+          new_config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
+
+          if :erlang.whereis(Hermit.PubSub) != :undefined do
+            Phoenix.PubSub.broadcast(
+              Hermit.PubSub,
+              "dns_config:#{endpoint_id}",
+              {:dns_config_updated, new_config}
+            )
           end
 
           {:noreply,
@@ -512,24 +536,20 @@ defmodule HermitWeb.DnsEndpointLive do
          ddns_hostname == endpoint.ddns_hostname do
       {:noreply, socket}
     else
-      # Nếu đang chạy node cũ, ta tự động dừng nó trước khi chuyển đổi profile mạng
-      {status, ts_ip, _} = DnsWorker.get_status(endpoint_id)
+      # Tự động dừng node cũ và server trước khi chuyển đổi profile mạng
+      {_status, ts_ip, _} = DnsWorker.get_status(endpoint_id)
+      config = DnsConfig.get_for_endpoint(endpoint_id)
+      endpoint = Hermit.Repo.preload(endpoint, :inbound_profile)
 
-      if status in [:running, :starting] do
-        # Xóa override config cũ nếu có
-        config = DnsConfig.get_for_endpoint(endpoint_id)
-        endpoint = Hermit.Repo.preload(endpoint, :inbound_profile)
+      if config.tailscale_override_dns do
+        Task.start(fn ->
+          DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
+        end)
 
-        if config.tailscale_override_dns do
-          Task.start(fn ->
-            DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
-          end)
-
-          DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
-        end
-
-        Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
+        DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
       end
+
+      Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
 
       case endpoint
            |> DnsEndpoint.changeset(%{

@@ -103,8 +103,53 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
   test "IpResolver.internal_ip? correctly identifies loopback, veth, and external IPs" do
     assert IpResolver.internal_ip?({10, 200, 1, 2}) == true
     assert IpResolver.internal_ip?("10.200.5.2") == true
+    assert IpResolver.internal_ip?({:doh, "10.200.1.2", "internal_client"}) == true
+    assert IpResolver.internal_ip?({:doh, {10, 200, 1, 2}, "internal_client"}) == true
     assert IpResolver.internal_ip?({1, 1, 1, 1}) == false
     assert IpResolver.internal_ip?("8.8.8.8") == false
     assert IpResolver.internal_ip?("100.120.1.5") == false
+    assert IpResolver.internal_ip?({:doh, "100.120.1.5", "tailscale_client"}) == false
+  end
+
+  test "route_tunnel does not hijack internal client queries (loop prevention)" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_LoopPrev",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test"}
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    {:ok, config} =
+      Hermit.Vpn.DnsConfig.update_for_endpoint(endpoint.id, %{
+        enabled: true,
+        upstream_dns: "1.1.1.1",
+        custom_rules: [
+          %{"domain" => "netflix.com", "action" => "route_tunnel", "value" => "pair_1"}
+        ]
+      })
+
+    custom_rules = Hermit.Dns.Rules.precompile(config)
+    :ets.insert(:inbound_profiles_cache, {{:endpoint_config, endpoint.id}, {config, custom_rules}})
+
+    qname = <<7>> <> "netflix" <> <<3>> <> "com" <> <<0>>
+    packet = <<0, 15, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> qname <> <<0, 1, 0, 1>>
+
+    # 1. External client (LAN/WAN) gets smart_route
+    assert {:ok, resp_external} =
+             Server.resolve_fast_path(endpoint.id, packet, {192, 168, 1, 100})
+
+    {:ok, parsed_ext} = Packet.parse(resp_external)
+    assert parsed_ext.domain == "netflix.com"
+
+    # 2. Internal client (netns veth 10.200.x.x) is NOT hijacked, returns :miss so it resolves upstream
+    assert Server.resolve_fast_path(endpoint.id, packet, {10, 200, 0, 2}) == :miss
+    assert Server.resolve_fast_path(endpoint.id, packet, {:doh, "10.200.0.2", "dev"}) == :miss
   end
 end

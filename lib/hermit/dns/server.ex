@@ -271,6 +271,14 @@ defmodule Hermit.Dns.Server do
     new_state = sync_upstreams_config(state, upstreams)
     custom_rules = Rules.precompile(updated_config)
 
+    # Dynamic profile switch: update PubSub topic subscription if profile ID changed
+    if state.config && state.config.id != updated_config.id do
+      if :erlang.whereis(Hermit.PubSub) != :undefined do
+        Phoenix.PubSub.unsubscribe(Hermit.PubSub, "dns_config_profile:#{state.config.id}")
+        Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{updated_config.id}")
+      end
+    end
+
     if :ets.info(:inbound_profiles_cache) != :undefined do
       :ets.insert(
         :inbound_profiles_cache,
@@ -654,6 +662,7 @@ defmodule Hermit.Dns.Server do
   def terminate(_reason, state) do
     if :ets.info(:inbound_profiles_cache) != :undefined do
       :ets.delete(:inbound_profiles_cache, {:endpoint_config, state.endpoint_id})
+      :ets.delete(:inbound_profiles_cache, {:endpoint_name, state.endpoint_id})
     end
 
     :ok
@@ -771,7 +780,8 @@ defmodule Hermit.Dns.Server do
             # If domain is now matched by Smart Route (and not internal query),
             # bypass upstream cache hit immediately so the new route takes effect without delay
             if not Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) and
-                 match?({:ok, _}, Hermit.Vpn.SniProxy.match(query.domain)) do
+                 (match?({:ok, _}, Hermit.Vpn.SniProxy.match(query.domain)) or
+                    match?({"route_tunnel", _, _}, Rules.match(query.domain, custom_rules))) do
               :error
             else
               hit
@@ -830,9 +840,18 @@ defmodule Hermit.Dns.Server do
           # 2. Match custom rules
           {action, redirect_val, block_reason} =
             case Rules.match(query.domain, custom_rules) do
-              {"block", nil, _} -> {"block", nil, "custom_rule"}
-              {"route_tunnel", pair_id, _} -> {"smart_route", pair_id, nil}
-              {act, val, _p_id} -> {act, val, nil}
+              {"block", nil, _} ->
+                {"block", nil, "custom_rule"}
+
+              {"route_tunnel", pair_id, _} ->
+                if Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) do
+                  {nil, nil, nil}
+                else
+                  {"smart_route", pair_id, nil}
+                end
+
+              {act, val, _p_id} ->
+                {act, val, nil}
             end
 
           # 2.5 Match Smart Routed Domains (SNI Proxy) if not matched by custom rules

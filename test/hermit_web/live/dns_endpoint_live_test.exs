@@ -123,6 +123,84 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
   end
 
+  test "updates running DNS server when switching dns_profile_id via quick_select and edit modal", %{conn: conn} do
+    {:ok, p1} =
+      Hermit.Repo.insert(%DnsConfig{
+        name: "Profile Alpha",
+        enabled: true,
+        upstream_dns: "1.1.1.1",
+        custom_rules: []
+      })
+
+    {:ok, p2} =
+      Hermit.Repo.insert(%DnsConfig{
+        name: "Profile Beta",
+        enabled: true,
+        upstream_dns: "8.8.8.8",
+        custom_rules: []
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%DnsEndpoint{
+        name: "DoH Test EP",
+        dns_profile_id: p1.id,
+        inbound_profile_id: nil,
+        enabled: true,
+        doh_token: "doh_test_token_live"
+      })
+
+    # Start DNS server for endpoint (DoH in-memory mode)
+    {:ok, {_, _server_pid}} = Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, nil)
+
+    # Initial ETS config check
+    [{_, {initial_config, _}}] =
+      :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
+
+    assert initial_config.id == p1.id
+    assert initial_config.upstream_dns == "1.1.1.1"
+
+    {:ok, view, _html} = live(conn, ~p"/dns/endpoints")
+
+    # 1. Change profile to p2 using quick_select_dns_profile
+    view
+    |> form("#quick-select-dns-form-#{endpoint.id}")
+    |> render_change(%{
+      "endpoint_id" => to_string(endpoint.id),
+      "dns_profile_id" => to_string(p2.id)
+    })
+
+    # Verify server config was updated to p2 in ETS cache
+    [{_, {updated_config, _}}] =
+      :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
+
+    assert updated_config.id == p2.id
+    assert updated_config.upstream_dns == "8.8.8.8"
+
+    # 2. Change profile back to p1 using edit modal (save_edit)
+    view
+    |> element("button[phx-click=\"edit_endpoint\"][phx-value-id=\"#{endpoint.id}\"]")
+    |> render_click()
+
+    view
+    |> form("#edit-endpoint-form", %{
+      "dns_endpoint" => %{
+        "name" => "DoH Test EP Renamed",
+        "dns_profile_id" => to_string(p1.id)
+      }
+    })
+    |> render_submit()
+
+    # Verify server config was updated back to p1
+    [{_, {final_config, _}}] =
+      :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
+
+    assert final_config.id == p1.id
+    assert final_config.upstream_dns == "1.1.1.1"
+
+    # Cleanup
+    Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
+  end
+
   defp wait_until_running(view, retries \\ 30) do
     send(view.pid, :tick)
     html = render(view)

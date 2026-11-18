@@ -86,32 +86,53 @@ defmodule Hermit.Vpn.DnsSupervisor do
   end
 
   @doc """
+  Checks if a DNS server process is currently running for an endpoint.
+  """
+  def server_running?(endpoint_id) do
+    match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}))
+  end
+
+  @doc """
+  Checks if a DNS worker (Tailscale) process is currently running for an endpoint.
+  """
+  def worker_running?(endpoint_id) do
+    match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint_id}))
+  end
+
+  @doc """
   Restarts only the DNS server component for an endpoint, keeping the worker (Tailscale node) running.
   """
   def restart_dns_server(endpoint_id) do
     Logger.info("DnsSupervisor: restarting DNS server (only) for endpoint: #{endpoint_id}")
 
-    case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
-      [{server_pid, _}] ->
-        DynamicSupervisor.terminate_child(@name, server_pid)
-        wait_until_unregistered({:dns_server, endpoint_id})
+    was_running? =
+      case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
+        [{server_pid, _}] ->
+          DynamicSupervisor.terminate_child(@name, server_pid)
+          wait_until_unregistered({:dns_server, endpoint_id})
+          true
 
-      [] ->
-        :ok
-    end
+        [] ->
+          false
+      end
 
-    port = 5400 + endpoint_id
     endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
-    inbound_profile_id = endpoint && endpoint.inbound_profile_id
 
-    server_spec =
-      {Hermit.Dns.Server,
-       endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id, port: port}
+    if was_running? or (endpoint && endpoint.enabled) do
+      port = 5400 + endpoint_id
+      inbound_profile_id = endpoint && endpoint.inbound_profile_id
 
-    case DynamicSupervisor.start_child(@name, server_spec) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      {:error, reason} -> {:error, reason}
+      server_spec =
+        {Hermit.Dns.Server,
+         endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id, port: port}
+
+      case DynamicSupervisor.start_child(@name, server_spec) do
+        {:ok, pid} -> {:ok, pid}
+        {:error, {:already_started, pid}} -> {:ok, pid}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
     end
   end
 

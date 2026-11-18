@@ -214,11 +214,15 @@ defmodule Hermit.Vpn.DnsConfig do
         %{new_config | dns_endpoint_id: endpoint_id}
 
       true ->
-        config =
-          Hermit.Repo.get!(__MODULE__, endpoint.dns_profile_id)
-          |> Hermit.Repo.preload(:blocklists)
+        case Hermit.Repo.get(__MODULE__, endpoint.dns_profile_id) do
+          nil ->
+            config = get_global_config() |> Hermit.Repo.preload(:blocklists)
+            %{config | dns_endpoint_id: endpoint_id}
 
-        %{config | dns_endpoint_id: endpoint_id}
+          config ->
+            config = Hermit.Repo.preload(config, :blocklists)
+            %{config | dns_endpoint_id: endpoint_id}
+        end
     end
   end
 

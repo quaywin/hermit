@@ -1039,6 +1039,8 @@ defmodule Hermit.Vpn.DnsWorker do
     add chain ip hermit_ns postrouting { type nat hook postrouting priority srcnat - 10 ; }
     add rule ip hermit_ns prerouting udp dport 53 dnat to #{host_ip}:#{port}
     add rule ip hermit_ns prerouting tcp dport 53 dnat to #{host_ip}:#{port}
+    add rule ip hermit_ns prerouting tcp dport 80 dnat to #{host_ip}:80
+    add rule ip hermit_ns prerouting tcp dport 443 dnat to #{host_ip}:443
     add rule ip hermit_ns forward accept
     """
 
@@ -1066,7 +1068,9 @@ defmodule Hermit.Vpn.DnsWorker do
          {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "forward", "{ type filter hook forward priority filter ; }"]),
          {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "postrouting", "{ type nat hook postrouting priority srcnat - 10 ; }"]),
          {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "udp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]) do
+         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]),
+         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "80", "dnat", "to", "#{host_ip}:80"]),
+         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "443", "dnat", "to", "#{host_ip}:443"]) do
       run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "forward", "accept"])
     end
   end

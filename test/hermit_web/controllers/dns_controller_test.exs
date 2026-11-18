@@ -407,4 +407,47 @@ defmodule HermitWeb.DNSControllerTest do
     cached_endpoint3 = Hermit.Vpn.DnsEndpoint.get_by_doh_token("doh_cache_token")
     assert cached_endpoint3.name == "New_Name"
   end
+
+  test "resolves Smart DNS routes via DoH", %{conn: conn} do
+    {:ok, config} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsConfig{
+        name: "Smart_DNS_DoH_Config",
+        enabled: true,
+        upstream_dns: "127.0.0.1",
+        custom_rules: [
+          %{"domain" => "smartdoh.com", "action" => "route_tunnel", "value" => "test_pair"}
+        ]
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Smart_DNS_DoH_Endpoint",
+        doh_token: "doh_smart_token",
+        dns_profile_id: config.id,
+        enabled: true
+      })
+
+    # Start DNS server for endpoint
+    port = 36363 + endpoint.id
+    {:ok, server_pid} = Server.start_link(endpoint_id: endpoint.id, port: port)
+
+    # Query smartdoh.com
+    qname = <<8>> <> "smartdoh" <> <<3>> <> "com" <> <<0>>
+    query_packet = <<0, 42, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> qname <> <<0, 1, 0, 1>>
+
+    conn_post =
+      conn
+      |> put_req_header("content-type", "application/dns-message")
+      |> post(~p"/dns-query/#{endpoint.doh_token}", query_packet)
+
+    assert conn_post.status == 200
+    resp_body = response(conn_post, 200)
+    {:ok, parsed} = Packet.parse(resp_body)
+    assert parsed.domain == "smartdoh.com"
+    # Verify response contains 1 question and 1 answer (ancount = 1)
+    assert byte_size(resp_body) > byte_size(query_packet)
+    assert <<0, 42, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, _rest::binary>> = resp_body
+
+    Process.exit(server_pid, :kill)
+  end
 end

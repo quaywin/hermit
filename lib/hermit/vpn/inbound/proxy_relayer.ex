@@ -102,6 +102,18 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
                 Logger.info("Host SOCKS5 Proxy listening on port #{actual_socks_port}")
                 Logger.info("Host HTTP Proxy listening on port #{actual_http_port}")
 
+                # Register directly into ETS tables for instant zero-disk lookups
+                if :ets.info(:hermit_smart_routes) != :undefined do
+                  :ets.insert(:hermit_smart_routes, {{:ports, pair_id}, actual_socks_port})
+                end
+
+                if :ets.info(:dns_proxy_cache) != :undefined do
+                  :ets.insert(
+                    :dns_proxy_cache,
+                    {{:ports, pair_id}, {actual_http_port, actual_socks_port}}
+                  )
+                end
+
                 # Write proxy connection info to JSON file
                 info = %{
                   "socks5_port" => actual_socks_port,
@@ -243,6 +255,15 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     File.rm(Path.join(state.storage_dir, "microsocks.pid"))
     File.rm(Path.join(state.storage_dir, "tinyproxy.pid"))
     File.rm(Path.join(state.storage_dir, "tinyproxy.conf"))
+
+    # Clean up ETS route and proxy cache
+    if :ets.info(:hermit_smart_routes) != :undefined do
+      :ets.delete(:hermit_smart_routes, {:ports, state.pair_id})
+    end
+
+    if :ets.info(:dns_proxy_cache) != :undefined do
+      :ets.delete(:dns_proxy_cache, {:ports, state.pair_id})
+    end
 
     :ok
   end

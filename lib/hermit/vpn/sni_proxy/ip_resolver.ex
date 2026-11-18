@@ -62,26 +62,55 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   """
   @spec get_all_node_ips() :: [tuple()]
   def get_all_node_ips do
-    try do
-      case Code.ensure_loaded(Hermit.Vpn.PairWorker) do
-        {:module, _} ->
-          Hermit.Vpn.PairWorker.list_pairs()
-          |> Enum.flat_map(fn pair ->
-            metrics = Map.get(pair, :metrics) || %{}
-            Map.get(metrics, :ts_ips, [])
-          end)
-          |> Enum.map(&parse_ip/1)
-          |> Enum.reject(&is_nil/1)
+    pair_ips =
+      try do
+        case Code.ensure_loaded(Hermit.Vpn.PairWorker) do
+          {:module, _} ->
+            Hermit.Vpn.PairWorker.list_pairs()
+            |> Enum.flat_map(fn pair ->
+              metrics = Map.get(pair, :metrics) || %{}
+              Map.get(metrics, :ts_ips, [])
+            end)
+            |> Enum.map(&parse_ip/1)
+            |> Enum.reject(&is_nil/1)
 
-        _ ->
-          []
+          _ ->
+            []
+        end
+      rescue
+        _ -> []
+      catch
+        :exit, _ -> []
+        _kind, _reason -> []
       end
-    rescue
-      _ -> []
-    catch
-      :exit, _ -> []
-      _kind, _reason -> []
-    end
+
+    dns_worker_ips =
+      try do
+        case Code.ensure_loaded(Hermit.Vpn.DnsWorker) do
+          {:module, _} ->
+            Hermit.Repo.all(Hermit.Vpn.DnsEndpoint)
+            |> Enum.flat_map(fn ep ->
+              case Hermit.Vpn.DnsWorker.get_status(ep.id) do
+                {:running, ts_ip, _} when is_binary(ts_ip) and ts_ip != "" ->
+                  [parse_ip(ts_ip)]
+
+                _ ->
+                  []
+              end
+            end)
+            |> Enum.reject(&is_nil/1)
+
+          _ ->
+            []
+        end
+      rescue
+        _ -> []
+      catch
+        :exit, _ -> []
+        _kind, _reason -> []
+      end
+
+    Enum.uniq(pair_ips ++ dns_worker_ips)
   end
 
   defp get_cached_internal_ips do
@@ -186,8 +215,14 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
       # If client is connecting from Tailscale (100.64.0.0/10)
       parsed_client && in_tailscale_range?(parsed_client) ->
         case find_tailscale_ip(all_ifaces) do
-          {:ok, ts_ip} -> ts_ip
-          :none -> fallback_ip(all_ifaces)
+          {:ok, ts_ip} ->
+            ts_ip
+
+          :none ->
+            case Enum.find(get_all_node_ips(), &in_tailscale_range?/1) do
+              nil -> fallback_ip(all_ifaces)
+              ts_tuple -> ip_to_string(ts_tuple)
+            end
         end
 
       # Find an interface in the same subnet
@@ -202,6 +237,9 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
     end
   end
 
+  defp parse_ip({:doh, ip, _}), do: parse_ip(ip)
+  defp parse_ip({:dot, ip, _}), do: parse_ip(ip)
+  defp parse_ip({:tcp, ip, _}), do: parse_ip(ip)
   defp parse_ip({_, _, _, _} = ip), do: ip
 
   defp parse_ip(ip_str) when is_binary(ip_str) do

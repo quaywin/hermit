@@ -69,7 +69,7 @@ defmodule Hermit.Vpn.DnsEndpoint do
 
   def clear_cache do
     try do
-      :ets.delete_all_objects(:inbound_profiles_cache)
+      :ets.match_delete(:inbound_profiles_cache, {{:dns_endpoint, :_}, :_})
     rescue
       ArgumentError -> :ok
     end

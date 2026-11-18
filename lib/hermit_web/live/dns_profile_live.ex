@@ -219,17 +219,36 @@ defmodule HermitWeb.DnsProfileLive do
     id = String.to_integer(id_str)
     profile = Hermit.Repo.get!(DnsConfig, id)
 
-    # Kiểm tra xem có Inbound Profile nào đang dùng không
+    # Kiểm tra xem có Inbound Profile hoặc DNS Endpoint nào đang dùng không
     inbounds =
       Hermit.Repo.all(from(i in Hermit.Vpn.InboundProfile, where: i.dns_profile_id == ^id))
 
-    if inbounds != [] do
-      names = Enum.map_join(inbounds, ", ", & &1.name)
+    endpoints =
+      Hermit.Repo.all(from(e in Hermit.Vpn.DnsEndpoint, where: e.dns_profile_id == ^id))
 
-      {:noreply,
-       put_flash(socket, :error, "Cannot delete profile because it is used by inbounds: #{names}")}
-    else
-      case Hermit.Repo.delete(profile) do
+    cond do
+      inbounds != [] ->
+        names = Enum.map_join(inbounds, ", ", & &1.name)
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Cannot delete profile because it is used by inbounds: #{names}"
+         )}
+
+      endpoints != [] ->
+        names = Enum.map_join(endpoints, ", ", & &1.name)
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Cannot delete profile because it is used by endpoints: #{names}"
+         )}
+
+      true ->
+        case Hermit.Repo.delete(profile) do
         {:ok, _} ->
           dns_profiles =
             Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))

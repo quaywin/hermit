@@ -26,8 +26,33 @@ defmodule HermitWeb.DNSController do
                 |> send_resp(200, response_packet)
 
               :miss ->
-                case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
-                  [{pid, _}] ->
+                server_target =
+                  case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
+                    [{pid, _}] ->
+                      {:ok, pid}
+
+                    [] ->
+                      if endpoint.enabled do
+                        case Hermit.Vpn.DnsSupervisor.start_dns(
+                               endpoint.id,
+                               endpoint.inbound_profile_id
+                             ) do
+                          {:ok, {_worker, pid}} when is_pid(pid) ->
+                            {:ok, pid}
+
+                          _ ->
+                            case Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint_id}) do
+                              [{pid, _}] -> {:ok, pid}
+                              [] -> :unavailable
+                            end
+                        end
+                      else
+                        :disabled
+                      end
+                  end
+
+                case server_target do
+                  {:ok, pid} ->
                     result =
                       try do
                         GenServer.call(
@@ -67,10 +92,15 @@ defmodule HermitWeb.DNSController do
                         |> text("Internal Server Error")
                     end
 
-                  [] ->
+                  :disabled ->
                     conn
-                    |> put_status(404)
-                    |> text("DNS Server not running for endpoint")
+                    |> put_status(403)
+                    |> text("DNS Endpoint is disabled")
+
+                  :unavailable ->
+                    conn
+                    |> put_status(503)
+                    |> text("DNS Server temporarily unavailable")
                 end
             end
 

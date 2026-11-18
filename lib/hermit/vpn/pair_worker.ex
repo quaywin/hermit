@@ -1014,6 +1014,18 @@ defmodule Hermit.Vpn.PairWorker do
 
     auth_key_changed? = new_auth_key != nil and new_auth_key != old_auth_key
 
+    old_targets =
+      Map.get(state.inbound_config || %{}, "routing_targets") ||
+        Map.get(state.inbound_config || %{}, :routing_targets)
+
+    new_targets =
+      Map.get(new_config, "routing_targets") ||
+        Map.get(new_config, :routing_targets)
+
+    if new_targets != nil and new_targets != old_targets do
+      Hermit.Vpn.SniProxy.sync_all_routes()
+    end
+
     updated_state = %{state | inbound_config: new_config}
     updated_state = sync_smart_routes_and_relayer(updated_state)
     updated_state = broadcast_update(updated_state)
@@ -2124,16 +2136,6 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp sync_smart_routes_and_relayer(state) do
-    targets =
-      Map.get(state.inbound_config || %{}, "routing_targets") ||
-        Map.get(state.inbound_config || %{}, :routing_targets) || ""
-
-    parsed = Hermit.Vpn.RoutingParser.parse(targets)
-
-    if parsed.domains != [] do
-      Hermit.Vpn.SniProxy.register_routes(state.id, parsed.domains)
-    end
-
     if Hermit.Vpn.SniProxy.has_routes?(state.id) do
       # If inbound is not already proxy and wg is running, ensure sidecar Proxy.Relayer is active
       if state.inbound_type != "proxy" and state.wg_status == :running do

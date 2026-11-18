@@ -810,7 +810,21 @@ defmodule Hermit.Dns.Server do
               {act, val, _p_id} -> {act, val, nil}
             end
 
-          # 3. Match dynamic blocklists if not matched by custom rules
+          # 2.5 Match Smart Routed Domains (SNI Proxy) if not matched by custom rules
+          {action, redirect_val} =
+            if is_nil(action) do
+              case Hermit.Vpn.SniProxy.match(query.domain) do
+                {:ok, smart_pair_id} ->
+                  {"smart_route", smart_pair_id}
+
+                :nomatch ->
+                  {action, redirect_val}
+              end
+            else
+              {action, redirect_val}
+            end
+
+          # 3. Match dynamic blocklists if not matched by custom rules or smart routes
           {action, redirect_val, block_reason, blocklist_id} =
             if is_nil(action) do
               blocklists_list =
@@ -954,6 +968,44 @@ defmodule Hermit.Dns.Server do
 
                 {:ok, resp}
               end
+
+            "smart_route" ->
+              smart_ip = Hermit.Vpn.SniProxy.IpResolver.resolve_ip(client_ip)
+
+              resp =
+                if query.qtype == :A do
+                  Packet.build_a_response(query.id, query.query_record, smart_ip)
+                else
+                  Packet.build_empty_response(query.id, query.query_record)
+                end
+
+              Cache.store(
+                profile_id,
+                query.domain,
+                query.qtype,
+                resp,
+                "smart_routed",
+                "Smart Route -> #{redirect_val} (#{smart_ip})",
+                5
+              )
+
+              :telemetry.execute(
+                [:hermit, :dns, :query],
+                %{duration: 0},
+                %{
+                  profile_id: profile_id,
+                  config_id: config.id,
+                  client_ip: client_ip,
+                  domain: query.domain,
+                  qtype: query.qtype,
+                  status: "smart_routed",
+                  answer: smart_ip,
+                  resolver: "Smart Route (#{redirect_val})",
+                  enable_query_logging: enable_query_logging
+                }
+              )
+
+              {:ok, resp}
 
             _ ->
               :miss

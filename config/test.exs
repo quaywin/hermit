@@ -31,6 +31,9 @@ config :hermit, :docker,
 # Configure Storage base directory for test
 config :hermit, :storage, base_path: Path.expand("storage", File.cwd!())
 
+# Disable privileged SNI Proxy ports in test environment by default
+config :hermit, :sni_proxy, enabled: false
+
 # Configure database for test
 config :hermit, Hermit.Repo,
   database: Path.expand("storage/hermit_test.db", File.cwd!()),

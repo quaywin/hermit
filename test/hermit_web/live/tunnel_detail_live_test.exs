@@ -346,7 +346,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
       view
       |> form("#save_routes_dns_settings_form", %{
         "dns_resolvers" => "76.76.2.0, 76.76.10.0",
-        "advertise_routes" => "192.168.1.0/24"
+        "routing_targets" => "192.168.1.0/24"
       })
       |> render_submit()
 
@@ -357,6 +357,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     assert updated_pair.inbound_config["dns_mode"] == "custom"
     assert updated_pair.inbound_config["dns_resolvers"] == "76.76.2.0, 76.76.10.0"
     assert updated_pair.inbound_config["advertise_routes"] == "192.168.1.0/24"
+    assert updated_pair.inbound_config["routing_targets"] == "192.168.1.0/24"
 
     # Toggle it back on to use default Tailscale DNS settings
     view |> element("button[phx-click=toggle_use_tailscale_dns]") |> render_click()
@@ -364,7 +365,7 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     html =
       view
       |> form("#save_routes_dns_settings_form", %{
-        "advertise_routes" => "192.168.1.0/24"
+        "routing_targets" => "192.168.1.0/24"
       })
       |> render_submit()
 

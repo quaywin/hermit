@@ -240,13 +240,20 @@ defmodule HermitWeb.TunnelDetailLive do
         {"custom", dns_val}
       end
 
-    advertise_routes = Map.get(params, "advertise_routes", "") |> String.trim()
+    routing_targets =
+      (Map.get(params, "routing_targets") || Map.get(params, "advertise_routes") || "")
+      |> String.trim()
+
+    parsed_routing = Hermit.Vpn.RoutingParser.parse(routing_targets)
+    advertise_routes = Hermit.Vpn.RoutingParser.format_subnets(parsed_routing.subnets)
 
     new_config =
       inbound_config
       |> Map.put("dns_mode", dns_mode)
       |> Map.put("dns_resolvers", dns_resolvers)
+      |> Map.put("routing_targets", routing_targets)
       |> Map.put("advertise_routes", advertise_routes)
+      |> Map.put("routed_domains", parsed_routing.domains)
 
     case PairWorker.update_inbound_config(id, new_config) do
       {:ok, updated_pair} ->

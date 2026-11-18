@@ -7,13 +7,16 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
     config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
     wg_name = "hermit_wg_#{pair_id}"
     ts_name = "hermit_ts_#{pair_id}"
+
     ts_auth_key =
       Map.get(config, "ts_auth_key") ||
         Map.get(config, :ts_auth_key) ||
         System.get_env("TAILSCALE_AUTH_KEY") ||
         System.get_env("TS_AUTHKEY") ||
-        (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+        (Application.get_env(:hermit, :docker) &&
+           Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
         ""
+
     login_server = Map.get(config, "login_server")
 
     advertise_exit_node =
@@ -216,7 +219,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             Map.get(config, :ts_auth_key) ||
             System.get_env("TAILSCALE_AUTH_KEY") ||
             System.get_env("TS_AUTHKEY") ||
-            (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+            (Application.get_env(:hermit, :docker) &&
+               Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
             ""
 
         ts_up_args =
@@ -413,9 +417,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             {:error, :api_fetch_failed}
 
           {:error, reason} ->
-            Logger.error(
-              "Failed to call Tailscale devices API for deletion: #{inspect(reason)}"
-            )
+            Logger.error("Failed to call Tailscale devices API for deletion: #{inspect(reason)}")
 
             {:error, reason}
         end
@@ -619,7 +621,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
                 _ -> true
               end
 
-            advertise_routes = Map.get(config, "advertise_routes") || ""
+            advertise_routes =
+              case Map.get(config, "routing_targets") do
+                targets when is_binary(targets) and targets != "" ->
+                  parsed = Hermit.Vpn.RoutingParser.parse(targets)
+                  Hermit.Vpn.RoutingParser.format_subnets(parsed.subnets)
+
+                _ ->
+                  Map.get(config, "advertise_routes") || ""
+              end
 
             if advertise_exit_node or clean_routes(advertise_routes) != "" do
               expected_hostname = "hermit-node-#{String.replace(pair_id, "_", "-")}"
@@ -939,7 +949,8 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         System.get_env("TAILSCALE_API_KEY") ||
         System.get_env("TS_API_KEY") ||
         Hermit.Vpn.Setting.get_value("tailscale_api_key", "") ||
-        (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+        (Application.get_env(:hermit, :docker) &&
+           Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
         ""
 
     get_api_token(key)
@@ -1074,7 +1085,15 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           ts_up_args
       end
 
-    advertise_routes = Map.get(config, "advertise_routes") || ""
+    advertise_routes =
+      case Map.get(config, "routing_targets") do
+        targets when is_binary(targets) and targets != "" ->
+          parsed = Hermit.Vpn.RoutingParser.parse(targets)
+          Hermit.Vpn.RoutingParser.format_subnets(parsed.subnets)
+
+        _ ->
+          Map.get(config, "advertise_routes") || ""
+      end
 
     if clean_routes(advertise_routes) != "" do
       ts_up_args ++ ["--advertise-routes=#{clean_routes(advertise_routes)}"]
@@ -1259,7 +1278,18 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         {:ok, subnet, gateway_ip, ns_ip}
 
       _ ->
-        case System.cmd("ip", ["netns", "exec", ns, "ip", "-o", "-4", "addr", "show", "dev", "eth0"]) do
+        case System.cmd("ip", [
+               "netns",
+               "exec",
+               ns,
+               "ip",
+               "-o",
+               "-4",
+               "addr",
+               "show",
+               "dev",
+               "eth0"
+             ]) do
           {output, 0} ->
             case Regex.run(~r/inet\s+(10\.200\.\d+\.\d+)/, output) do
               [_, ns_ip] ->

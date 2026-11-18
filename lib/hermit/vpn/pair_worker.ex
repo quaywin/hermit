@@ -46,7 +46,8 @@ defmodule Hermit.Vpn.PairWorker do
     bootstrap_task: nil,
     current_ping_task: nil,
     latency_last_checked_at: 0,
-    last_db_state: nil
+    last_db_state: nil,
+    smart_relayer_pid: nil
   ]
 
   # --- Client API ---
@@ -531,6 +532,8 @@ defmodule Hermit.Vpn.PairWorker do
       last_db_state: last_db_state
     }
 
+    state = sync_smart_routes_and_relayer(state)
+
     cond do
       wg_status == :starting and ts_status == :starting ->
         {:ok, state, {:continue, :bootstrap}}
@@ -566,6 +569,12 @@ defmodule Hermit.Vpn.PairWorker do
       stop_inbound_process(state.ts_port)
     end
 
+    Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+      Process.exit(state.smart_relayer_pid, :shutdown)
+    end
+
     state.inbound_module.cleanup(state.id, state.storage_dir)
     state.outbound_module.cleanup(state.id, state.storage_dir)
 
@@ -581,6 +590,12 @@ defmodule Hermit.Vpn.PairWorker do
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
+    end
+
+    Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+      Process.exit(state.smart_relayer_pid, :shutdown)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -601,6 +616,12 @@ defmodule Hermit.Vpn.PairWorker do
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
+    end
+
+    Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+      Process.exit(state.smart_relayer_pid, :shutdown)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -786,6 +807,12 @@ defmodule Hermit.Vpn.PairWorker do
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
+    end
+
+    Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+      Process.exit(state.smart_relayer_pid, :shutdown)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -984,6 +1011,7 @@ defmodule Hermit.Vpn.PairWorker do
     auth_key_changed? = new_auth_key != nil and new_auth_key != old_auth_key
 
     updated_state = %{state | inbound_config: new_config}
+    updated_state = sync_smart_routes_and_relayer(updated_state)
     updated_state = broadcast_update(updated_state)
 
     cond do
@@ -1061,6 +1089,12 @@ defmodule Hermit.Vpn.PairWorker do
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
+    end
+
+    Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+      Process.exit(state.smart_relayer_pid, :shutdown)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -1143,6 +1177,7 @@ defmodule Hermit.Vpn.PairWorker do
             state =
               if state.wg_status != :running do
                 %{state | wg_status: :running, wg_error_reason: nil}
+                |> sync_smart_routes_and_relayer()
                 |> broadcast_update()
               else
                 state
@@ -1485,6 +1520,13 @@ defmodule Hermit.Vpn.PairWorker do
         maybe_schedule_ts_recovery(updated_state)
         {:noreply, updated_state}
 
+      pid == state.smart_relayer_pid ->
+        if reason not in [:normal, :shutdown, :killed] do
+          Logger.warning("Smart relayer for pair #{state.id} exited: #{inspect(reason)}")
+        end
+
+        {:noreply, %{state | smart_relayer_pid: nil}}
+
       true ->
         if reason not in [:normal, :shutdown, :killed] do
           Logger.warning(
@@ -1508,6 +1550,12 @@ defmodule Hermit.Vpn.PairWorker do
 
     if state.ts_port do
       stop_inbound_process(state.ts_port)
+    end
+
+    Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+      Process.exit(state.smart_relayer_pid, :shutdown)
     end
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
@@ -2064,5 +2112,55 @@ defmodule Hermit.Vpn.PairWorker do
             end
         end
     end
+  end
+
+  defp sync_smart_routes_and_relayer(state) do
+    targets =
+      Map.get(state.inbound_config || %{}, "routing_targets") ||
+        Map.get(state.inbound_config || %{}, :routing_targets) || ""
+
+    parsed = Hermit.Vpn.RoutingParser.parse(targets)
+
+    if parsed.domains != [] do
+      Hermit.Vpn.SniProxy.register_routes(state.id, parsed.domains)
+
+      # If inbound is not already proxy and wg is running, ensure sidecar Proxy.Relayer is active
+      if state.inbound_type != "proxy" and state.wg_status == :running do
+        if state.smart_relayer_pid == nil or not Process.alive?(state.smart_relayer_pid) do
+          case Hermit.Vpn.Inbound.Proxy.Relayer.start_link(
+                 pair_id: state.id,
+                 storage_dir: state.storage_dir,
+                 port: 0
+               ) do
+            {:ok, pid} ->
+              %{state | smart_relayer_pid: pid}
+
+            {:error, reason} ->
+              Logger.warning(
+                "Failed to start smart DNS Proxy.Relayer sidecar for #{state.id}: #{inspect(reason)}"
+              )
+
+              state
+          end
+        else
+          state
+        end
+      else
+        state
+      end
+    else
+      Hermit.Vpn.SniProxy.unregister_pair(state.id)
+
+      if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
+        Process.exit(state.smart_relayer_pid, :shutdown)
+        %{state | smart_relayer_pid: nil}
+      else
+        state
+      end
+    end
+  rescue
+    e ->
+      Logger.warning("Error in sync_smart_routes_and_relayer for #{state.id}: #{inspect(e)}")
+      state
   end
 end

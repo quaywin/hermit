@@ -122,7 +122,10 @@
                       <.icon name="hero-adjustments-vertical" class="size-3.5" />
                       Advanced Network Settings (Port & Headscale)
                     </span>
-                    <.icon name="hero-chevron-down" class="size-3.5 transition-transform group-open:rotate-180" />
+                    <.icon
+                      name="hero-chevron-down"
+                      class="size-3.5 transition-transform group-open:rotate-180"
+                    />
                   </summary>
                   <div class="p-3 pt-1 space-y-3 border-t border-base-300/60">
                     <div class="space-y-1.5">
@@ -140,7 +143,9 @@
                       <input
                         type="text"
                         name="inbound_profile[config][ts_port_range]"
-                        value={(Phoenix.HTML.Form.input_value(f, :config) || %{})["ts_port_range"]}
+                        value={
+                          (Phoenix.HTML.Form.input_value(f, :config) || %{})["ts_port_range"]
+                        }
                         placeholder="e.g., 41642-41700"
                         class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                       />
@@ -262,9 +267,10 @@
                         <% end %>
                       </td>
                       <td class="py-3 px-4">
-                        <%= if pair.inbound_config["advertise_routes"] && String.trim(pair.inbound_config["advertise_routes"]) != "" do %>
+                        <%= if (pair.inbound_config["routing_targets"] && String.trim(pair.inbound_config["routing_targets"]) != "") || (pair.inbound_config["advertise_routes"] && String.trim(pair.inbound_config["advertise_routes"]) != "") do %>
                           <span class="font-mono bg-base-200 px-1.5 py-0.5 rounded-[4px] border border-base-300 text-xs">
-                            {pair.inbound_config["advertise_routes"]}
+                            {pair.inbound_config["routing_targets"] ||
+                              pair.inbound_config["advertise_routes"]}
                           </span>
                         <% else %>
                           <span class="text-base-content/40 italic">None</span>

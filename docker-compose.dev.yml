@@ -15,8 +15,10 @@ services:
     volumes:
       # Mount the whole project directory so code updates are hot-reloaded
       - .:/app
-      - /app/_build
+      - hermit_dev_build:/app/_build
       - ${HOME}/.hermit/dev-storage:/app/storage
+    cpus: 2.0
+    mem_limit: 1024m
     environment:
       - MIX_ENV=dev
       - PHX_SERVER=true
@@ -24,4 +26,8 @@ services:
       - STORAGE_BASE_PATH=/app/storage
       - GOMEMLIMIT=32MiB
       - GOGC=50
+      - ERL_FLAGS=+S 2:2
     restart: "on-failure:5"
+
+volumes:
+  hermit_dev_build:

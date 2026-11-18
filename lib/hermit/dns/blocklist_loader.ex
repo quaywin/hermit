@@ -109,7 +109,7 @@ defmodule Hermit.Dns.BlocklistLoader do
   def handle_info(:periodic_update, state) do
     Logger.info("Starting scheduled periodic update of DNS blocklists...")
     # Run blocklist reloading in a background task to prevent freezing the GenServer during update
-    Task.start(fn -> reload_all() end)
+    Task.start(fn -> reload_all(force: true) end)
     state = schedule_next_update(state)
     {:noreply, state}
   end
@@ -146,15 +146,17 @@ defmodule Hermit.Dns.BlocklistLoader do
 
   @doc """
   Reloads all enabled blocklists from the database into the ETS table.
+  Options:
+    - `:force`: If true, bypasses disk cache and fetches freshly. Default: false.
   """
-  def reload_all do
+  def reload_all(opts \\ []) do
     try do
       if Repo.aggregate(Blocklist, :count) > 0 do
         Blocklist
         |> Repo.all()
         |> Enum.filter(& &1.enabled)
         # Load blocklists sequentially to prevent RAM spikes from concurrent parsing
-        |> Task.async_stream(&load_blocklist/1, max_concurrency: 1, timeout: 120_000)
+        |> Task.async_stream(&load_blocklist(&1, opts), max_concurrency: 1, timeout: 120_000)
         |> Stream.run()
 
         # Reclaim memory for the main loader task after parallel stream finishes
@@ -170,96 +172,195 @@ defmodule Hermit.Dns.BlocklistLoader do
 
   @doc """
   Loads a specific blocklist into the unified ETS table.
+  Options:
+    - `:force`: If true, bypasses disk cache and fetches freshly. Default: false.
   """
-  def load_blocklist(%Blocklist{} = blocklist) do
+  def load_blocklist(%Blocklist{} = blocklist, opts \\ []) do
     if :ets.info(:dns_blocklist_entries) == :undefined do
-      Logger.warning("Blocklist table :dns_blocklist_entries does not exist. Skipping '#{blocklist.name}'.")
+      Logger.warning(
+        "Blocklist table :dns_blocklist_entries does not exist. Skipping '#{blocklist.name}'."
+      )
+
       {:error, :table_not_found}
     else
-      try do
-        Logger.info("Starting loading Blocklist '#{blocklist.name}' from #{blocklist.url}...")
-        start_time = System.monotonic_time()
+      force? = Keyword.get(opts, :force, false)
+      cache_path = get_cache_path(blocklist.id)
 
-        # Clean old entries for this blocklist first
-        :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
-        :ets.delete(:dns_bloom_filter, blocklist.id)
+      if not force? and File.exists?(cache_path) do
+        load_blocklist_from_cache(blocklist, cache_path)
+      else
+        load_blocklist_fresh(blocklist, cache_path)
+      end
+    end
+  end
 
-        case get_lines(blocklist.url) do
-          {:ok, line_stream_or_enum, temp_path} ->
-            try do
-              # 1. Parse and extract all valid unique domains from stream into a flat list
-              domains =
-                line_stream_or_enum
-                |> Stream.map(&String.trim/1)
-                |> Stream.map(fn line ->
-                  case blocklist.format do
-                    "adguard" -> parse_adguard_line(line)
-                    "hosts" -> parse_hosts_line(line)
-                    "domains" -> parse_domains_line(line)
-                    _ -> nil
-                  end
-                end)
-                |> Stream.reject(&is_nil/1)
-                |> Stream.uniq()
-                |> Enum.to_list()
+  defp load_blocklist_from_cache(%Blocklist{} = blocklist, cache_path) do
+    start_time = System.monotonic_time()
 
-              count = length(domains)
+    case File.read(cache_path) do
+      {:ok, binary} ->
+        try do
+          %{count: count, domains: domains, bloom_binary: bloom_binary} =
+            :erlang.binary_to_term(binary)
 
-              # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
-              domains
-              |> Enum.chunk_every(5000)
-              |> Enum.each(fn chunk ->
-                entries = Enum.map(chunk, &{&1, blocklist.id})
-                :ets.insert(:dns_blocklist_entries, entries)
+          # Clean old entries for this blocklist first
+          :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
+          :ets.delete(:dns_bloom_filter, blocklist.id)
+
+          # Populate ETS in chunks of 5000
+          domains
+          |> Enum.chunk_every(5000)
+          |> Enum.each(fn chunk ->
+            entries = Enum.map(chunk, &{&1, blocklist.id})
+            :ets.insert(:dns_blocklist_entries, entries)
+          end)
+
+          if count > 0 and is_binary(bloom_binary) do
+            :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
+          end
+
+          :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
+
+          duration =
+            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
+          Logger.info(
+            "Loaded #{count} domains into Blocklist '#{blocklist.name}' from disk cache in #{duration}ms (0% CPU spike)"
+          )
+
+          {:ok, count}
+        rescue
+          _ ->
+            File.rm(cache_path)
+            load_blocklist_fresh(blocklist, cache_path)
+        end
+
+      {:error, _} ->
+        load_blocklist_fresh(blocklist, cache_path)
+    end
+  end
+
+  defp load_blocklist_fresh(%Blocklist{} = blocklist, cache_path) do
+    try do
+      Logger.info("Starting loading Blocklist '#{blocklist.name}' from #{blocklist.url}...")
+      start_time = System.monotonic_time()
+
+      # Clean old entries for this blocklist first
+      :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
+      :ets.delete(:dns_bloom_filter, blocklist.id)
+
+      case get_lines(blocklist.url) do
+        {:ok, line_stream_or_enum, temp_path} ->
+          try do
+            # 1. Parse and extract all valid unique domains from stream into a flat list
+            domains =
+              line_stream_or_enum
+              |> Stream.map(&String.trim/1)
+              |> Stream.map(fn line ->
+                case blocklist.format do
+                  "adguard" -> parse_adguard_line(line)
+                  "hosts" -> parse_hosts_line(line)
+                  "domains" -> parse_domains_line(line)
+                  _ -> nil
+                end
               end)
+              |> Stream.reject(&is_nil/1)
+              |> Stream.uniq()
+              |> Enum.to_list()
 
-              # 3. Generate Bloom Filter and store it as a single binary key in ETS
+            count = length(domains)
+
+            # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
+            domains
+            |> Enum.chunk_every(5000)
+            |> Enum.each(fn chunk ->
+              entries = Enum.map(chunk, &{&1, blocklist.id})
+              :ets.insert(:dns_blocklist_entries, entries)
+            end)
+
+            # 3. Generate Bloom Filter and store it as a single binary key in ETS
+            bloom_binary =
               if count > 0 do
                 bit_size = Hermit.Dns.BloomFilter.calculate_size(count)
                 empty_bloom = Hermit.Dns.BloomFilter.new(bit_size)
-                bloom_binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
-                :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
+                binary = Hermit.Dns.BloomFilter.put_many(empty_bloom, domains, bit_size)
+                :ets.insert(:dns_bloom_filter, {blocklist.id, binary})
+                binary
+              else
+                nil
               end
 
-              duration =
-                System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+            # Save compiled data to disk cache for instantaneous future boots
+            save_to_disk_cache(cache_path, %{
+              count: count,
+              domains: domains,
+              bloom_binary: bloom_binary
+            })
 
-              Logger.info(
-                "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
+            duration =
+              System.convert_time_unit(
+                System.monotonic_time() - start_time,
+                :native,
+                :millisecond
               )
 
-              # Update rules count and timestamp in DB without triggering callbacks
-              update_rules_count(blocklist.id, count)
+            Logger.info(
+              "Loaded #{count} domains into Blocklist '#{blocklist.name}' and built Bloom Filter in #{duration}ms"
+            )
 
-              # Store metadata in ETS
-              :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
-            after
-              # Cleanup temporary file if downloaded
-              if temp_path && File.exists?(temp_path) do
-                File.rm(temp_path)
-              end
+            # Update rules count and timestamp in DB without triggering callbacks
+            update_rules_count(blocklist.id, count)
 
-              # Reclaim temporary heap memory after building bloom filter
-              :erlang.garbage_collect()
+            # Store metadata in ETS
+            :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
+          after
+            # Cleanup temporary file if downloaded
+            if temp_path && File.exists?(temp_path) do
+              File.rm(temp_path)
             end
 
-          {:error, reason} ->
-            Logger.error("Failed to load Blocklist '#{blocklist.name}': #{inspect(reason)}")
-        end
-      rescue
-        e in ArgumentError ->
-          Logger.warning("ETS table disappeared while loading Blocklist '#{blocklist.name}': #{Exception.message(e)}")
-          {:error, :table_terminated}
+            # Reclaim temporary heap memory after building bloom filter
+            :erlang.garbage_collect()
+          end
+
+        {:error, reason} ->
+          Logger.error("Failed to load Blocklist '#{blocklist.name}': #{inspect(reason)}")
       end
+    rescue
+      e in ArgumentError ->
+        Logger.warning(
+          "ETS table disappeared while loading Blocklist '#{blocklist.name}': #{Exception.message(e)}"
+        )
+
+        {:error, :table_terminated}
     end
+  end
+
+  defp save_to_disk_cache(cache_path, data) do
+    try do
+      File.mkdir_p!(Path.dirname(cache_path))
+      binary = :erlang.term_to_binary(data, [:compressed])
+      File.write!(cache_path, binary)
+    rescue
+      e ->
+        Logger.warning("Failed to save blocklist cache to #{cache_path}: #{inspect(e)}")
+    end
+  end
+
+  defp get_cache_path(blocklist_id) do
+    base =
+      Application.get_env(:hermit, :storage, [])
+      |> Keyword.get(:base_path, "/app/storage")
+
+    Path.join([base, "cache", "blocklists", "#{blocklist_id}.bin"])
   end
 
   @doc """
   Triggers a background task to load a specific blocklist so it doesn't block calling process.
   """
-  def load_blocklist_async(blocklist) do
+  def load_blocklist_async(blocklist, opts \\ []) do
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
-      load_blocklist(blocklist)
+      load_blocklist(blocklist, opts)
     end)
   end
 
@@ -267,6 +368,9 @@ defmodule Hermit.Dns.BlocklistLoader do
   Unloads a specific blocklist from the ETS table.
   """
   def unload_blocklist(blocklist_id) do
+    cache_path = get_cache_path(blocklist_id)
+    if File.exists?(cache_path), do: File.rm(cache_path)
+
     :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist_id}, [], [true]}])
     :ets.delete(:dns_blocklist_entries, {:metadata, blocklist_id})
     :ets.delete(:dns_bloom_filter, blocklist_id)

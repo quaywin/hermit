@@ -161,7 +161,7 @@ defmodule HermitWeb.BlocklistLive do
     blocklist = Hermit.Repo.get!(Blocklist, id)
 
     if blocklist.enabled do
-      BlocklistLoader.load_blocklist_async(blocklist)
+      BlocklistLoader.load_blocklist_async(blocklist, force: true)
 
       {:noreply,
        socket |> put_flash(:info, "Update triggered for '#{blocklist.name}' in the background.")}
@@ -173,7 +173,7 @@ defmodule HermitWeb.BlocklistLive do
 
   @impl true
   def handle_event("reload_all_blocklists", _params, socket) do
-    Task.start(fn -> BlocklistLoader.reload_all() end)
+    Task.start(fn -> BlocklistLoader.reload_all(force: true) end)
 
     {:noreply,
      socket |> put_flash(:info, "All enabled blocklists reload triggered in the background.")}

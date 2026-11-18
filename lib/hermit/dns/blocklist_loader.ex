@@ -341,6 +341,7 @@ defmodule Hermit.Dns.BlocklistLoader do
       File.mkdir_p!(Path.dirname(cache_path))
       binary = :erlang.term_to_binary(data, [:compressed])
       File.write!(cache_path, binary)
+      Logger.info("Saved compiled blocklist cache to #{cache_path}")
     rescue
       e ->
         Logger.warning("Failed to save blocklist cache to #{cache_path}: #{inspect(e)}")

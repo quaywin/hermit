@@ -8,6 +8,7 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:block_ipv6, :boolean, default: false)
     field(:upstream_dns, :string, default: "1.1.1.1, 8.8.8.8")
     field(:custom_rules, {:array, :map}, default: [])
+    field(:services, :map, default: %{})
     field(:tailscale_override_dns, :boolean, default: false)
     field(:enable_query_logging, :boolean, default: false)
     field(:enable_ecs, :boolean, default: false)
@@ -35,6 +36,7 @@ defmodule Hermit.Vpn.DnsConfig do
       :block_ipv6,
       :upstream_dns,
       :custom_rules,
+      :services,
       :tailscale_override_dns,
       :enable_query_logging,
       :enable_ecs,
@@ -44,6 +46,7 @@ defmodule Hermit.Vpn.DnsConfig do
     |> validate_required([:name, :upstream_dns, :custom_rules])
     |> validate_upstream_dns()
     |> validate_custom_rules()
+    |> validate_services()
     |> validate_ecs_fallback_ip()
   end
 
@@ -139,12 +142,38 @@ defmodule Hermit.Vpn.DnsConfig do
     end
   end
 
+  defp validate_services(changeset) do
+    case get_field(changeset, :services) do
+      services when is_map(services) ->
+        if Enum.all?(services, &valid_service_entry?/1) do
+          changeset
+        else
+          add_error(changeset, :services, "contains invalid service configurations")
+        end
+
+      nil ->
+        changeset
+
+      _ ->
+        add_error(changeset, :services, "must be a map")
+    end
+  end
+
+  defp valid_service_entry?({svc_id, config}) when is_binary(svc_id) and is_map(config) do
+    action = Map.get(config, "action") || Map.get(config, :action)
+    action in ["bypass", "block", "route_tunnel"]
+  end
+
+  defp valid_service_entry?(_), do: false
+
   defp valid_rule?(rule) when is_map(rule) do
     domain = Map.get(rule, "domain") || Map.get(rule, :domain)
     action = Map.get(rule, "action") || Map.get(rule, :action)
     proxy_pair_id = Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
 
-    action_valid? = action in ["block", "bypass", "redirect", "forward_proxy", "forward_dns"]
+    action_valid? =
+      action in ["block", "bypass", "redirect", "forward_proxy", "forward_dns", "route_tunnel"]
+
     domain_valid? = is_binary(domain) and domain != ""
     proxy_valid? = is_nil(proxy_pair_id) or is_binary(proxy_pair_id)
 

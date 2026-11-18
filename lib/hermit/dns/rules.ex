@@ -25,7 +25,62 @@ defmodule Hermit.Dns.Rules do
   end
 
   @spec precompile(list() | map() | nil) :: map()
+  def precompile(%Hermit.Vpn.DnsConfig{} = config) do
+    precompile_config(config.custom_rules, config.services)
+  end
+
+  def precompile(config)
+      when is_map(config) and
+             (is_map_key(config, :services) or is_map_key(config, "services")) do
+    custom_rules = Map.get(config, :custom_rules) || Map.get(config, "custom_rules", []) || []
+    services = Map.get(config, :services) || Map.get(config, "services", %{}) || %{}
+    precompile_config(custom_rules, services)
+  end
+
   def precompile(rules) when is_list(rules) do
+    precompile_rules_list(rules)
+  end
+
+  def precompile(rules) when is_map(rules) do
+    precompile_rules_list(Map.get(rules, "custom_rules", []) || [])
+  end
+
+  def precompile(_), do: %{}
+
+  defp precompile_config(custom_rules, services) do
+    service_rules =
+      if is_map(services) do
+        Enum.flat_map(services, fn {svc_id, cfg} ->
+          action = Map.get(cfg, "action") || Map.get(cfg, :action)
+          pair_id = Map.get(cfg, "pair_id") || Map.get(cfg, :pair_id)
+          domains = Hermit.Services.Catalog.domains_for_service(to_string(svc_id))
+
+          case action do
+            "block" ->
+              Enum.map(domains, fn d -> %{"domain" => d, "action" => "block", "value" => nil} end)
+
+            "bypass" ->
+              Enum.map(domains, fn d -> %{"domain" => d, "action" => "bypass", "value" => nil} end)
+
+            "route_tunnel" when is_binary(pair_id) and pair_id != "" ->
+              Enum.map(domains, fn d ->
+                %{"domain" => d, "action" => "route_tunnel", "value" => pair_id}
+              end)
+
+            _ ->
+              []
+          end
+        end)
+      else
+        []
+      end
+
+    # Put service_rules first and custom_rules second so that custom_rules take precedence
+    all_rules = service_rules ++ (custom_rules || [])
+    precompile_rules_list(all_rules)
+  end
+
+  defp precompile_rules_list(rules) when is_list(rules) do
     rules
     |> Enum.flat_map(fn rule ->
       domain = Map.get(rule, "domain") || Map.get(rule, :domain)
@@ -55,9 +110,5 @@ defmodule Hermit.Dns.Rules do
     |> Map.new()
   end
 
-  def precompile(rules) when is_map(rules) do
-    precompile(Map.get(rules, "custom_rules", []) || [])
-  end
-
-  def precompile(_), do: %{}
+  defp precompile_rules_list(_), do: %{}
 end

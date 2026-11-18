@@ -41,6 +41,7 @@ defmodule Hermit.Application do
         seed_default_local_profile()
         boot_vpn_pairs()
         boot_dns_nodes()
+        Hermit.Vpn.SniProxy.sync_all_routes()
         {:ok, pid}
 
       other ->
@@ -107,6 +108,9 @@ defmodule Hermit.Application do
                     _ -> :ok
                   end
               end
+
+              # Stagger startup of multiple pairs by 500ms to avoid CPU spike and API throttling
+              Process.sleep(500)
             end
           end)
         rescue
@@ -146,6 +150,9 @@ defmodule Hermit.Application do
                     _ -> :ok
                   end
               end
+
+              # Stagger startup of multiple pairs by 500ms to avoid CPU spike and API throttling
+              Process.sleep(500)
             end
           end)
         rescue
@@ -176,9 +183,14 @@ defmodule Hermit.Application do
         System.cmd("sysctl", ["-w", "net.ipv4.conf.all.rp_filter=2"])
         System.cmd("sysctl", ["-w", "net.ipv4.conf.default.rp_filter=2"])
 
-        # Setup host network rules using nftables and iptables
-        setup_nftables_host()
-        setup_iptables_host()
+        # Setup host network rules using nftables (fallback to iptables only if nftables fails)
+        case setup_nftables_host() do
+          :ok ->
+            :ok
+
+          _ ->
+            setup_iptables_host()
+        end
       rescue
         e ->
           IO.inspect(e,
@@ -191,106 +203,50 @@ defmodule Hermit.Application do
 
   defp setup_nftables_host do
     try do
-      # 1. Ensure table exists
-      run_nft(["add", "table", "inet", "hermit_host"])
-      # 2. Flush to prevent duplicate rules on restart
-      run_nft(["flush", "table", "inet", "hermit_host"])
+      script = """
+      add table inet hermit_host
+      flush table inet hermit_host
+      add chain inet hermit_host input { type filter hook input priority filter ; }
+      add chain inet hermit_host forward { type filter hook forward priority filter ; }
+      add chain inet hermit_host postrouting { type nat hook postrouting priority srcnat ; }
+      add rule inet hermit_host input iifname "dns_h*" accept
+      add rule inet hermit_host input iifname "loc*" accept
+      add rule inet hermit_host input iifname "vh*" accept
+      add rule inet hermit_host forward ip saddr 100.64.0.0/10 accept
+      add rule inet hermit_host forward ip daddr 100.64.0.0/10 accept
+      add rule inet hermit_host forward tcp flags syn tcp option maxseg size set rt mtu
+      add rule inet hermit_host postrouting ip saddr 100.64.0.0/10 masquerade
+      """
 
-      # 3. Create chains
-      run_nft([
-        "add",
-        "chain",
-        "inet",
-        "hermit_host",
-        "input",
-        "{ type filter hook input priority filter ; }"
-      ])
+      case System.cmd("nft", ["-f", "-"], input: script, stderr_to_stdout: true) do
+        {_, 0} ->
+          :ok
 
-      run_nft([
-        "add",
-        "chain",
-        "inet",
-        "hermit_host",
-        "forward",
-        "{ type filter hook forward priority filter ; }"
-      ])
-
-      run_nft([
-        "add",
-        "chain",
-        "inet",
-        "hermit_host",
-        "postrouting",
-        "{ type nat hook postrouting priority srcnat ; }"
-      ])
-
-      # 4. Input rules for virtual interfaces (dns_h*, loc*, vh*)
-      run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "dns_h*", "accept"])
-      run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "loc*", "accept"])
-      run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "vh*", "accept"])
-
-      # 5. Forwarding rules for Tailscale range
-      run_nft([
-        "add",
-        "rule",
-        "inet",
-        "hermit_host",
-        "forward",
-        "ip",
-        "saddr",
-        "100.64.0.0/10",
-        "accept"
-      ])
-
-      run_nft([
-        "add",
-        "rule",
-        "inet",
-        "hermit_host",
-        "forward",
-        "ip",
-        "daddr",
-        "100.64.0.0/10",
-        "accept"
-      ])
-
-      # MSS clamping to prevent MTU issues
-      run_nft([
-        "add",
-        "rule",
-        "inet",
-        "hermit_host",
-        "forward",
-        "tcp",
-        "flags",
-        "syn",
-        "tcp",
-        "option",
-        "maxseg",
-        "size",
-        "set",
-        "rt",
-        "mtu"
-      ])
-
-      # 6. Nat masquerade for Tailscale range
-      run_nft([
-        "add",
-        "rule",
-        "inet",
-        "hermit_host",
-        "postrouting",
-        "ip",
-        "saddr",
-        "100.64.0.0/10",
-        "masquerade"
-      ])
-
-      :ok
+        {error_output, code} ->
+          IO.inspect({code, error_output}, label: "Warning: nft -f batch failed, falling back to sequential")
+          fallback_nftables_host()
+      end
     rescue
       e ->
         IO.inspect(e, label: "Warning: Failed to setup nftables host rules")
         {:error, e}
+    end
+  end
+
+  defp fallback_nftables_host do
+    with {:ok, _} <- run_nft(["add", "table", "inet", "hermit_host"]),
+         {:ok, _} <- run_nft(["flush", "table", "inet", "hermit_host"]),
+         {:ok, _} <- run_nft(["add", "chain", "inet", "hermit_host", "input", "{ type filter hook input priority filter ; }"]),
+         {:ok, _} <- run_nft(["add", "chain", "inet", "hermit_host", "forward", "{ type filter hook forward priority filter ; }"]),
+         {:ok, _} <- run_nft(["add", "chain", "inet", "hermit_host", "postrouting", "{ type nat hook postrouting priority srcnat ; }"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "dns_h*", "accept"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "loc*", "accept"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "input", "iifname", "vh*", "accept"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "forward", "ip", "saddr", "100.64.0.0/10", "accept"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "forward", "ip", "daddr", "100.64.0.0/10", "accept"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "forward", "tcp", "flags", "syn", "tcp", "option", "maxseg", "size", "set", "rt", "mtu"]),
+         {:ok, _} <- run_nft(["add", "rule", "inet", "hermit_host", "postrouting", "ip", "saddr", "100.64.0.0/10", "masquerade"]) do
+      :ok
     end
   end
 

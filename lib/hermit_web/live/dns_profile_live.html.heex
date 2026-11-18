@@ -258,197 +258,89 @@
             </div>
           </div>
 
-          <!-- Custom Routing Rules -->
-          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
-            <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
-              Custom Domain Routing Rules
-            </h3>
-            <div class="overflow-x-auto max-h-[220px]">
-              <table class="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr class="border-b border-base-300 text-base-content/40 font-semibold uppercase">
-                    <th class="pb-2 min-w-[150px]">Domain Suffix</th>
-                    <th class="pb-2 min-w-[90px]">Action</th>
-                    <th class="pb-2 min-w-[120px]">Target IP</th>
-                    <th class="pb-2 text-right w-16">Delete</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
-                  <%= if is_nil(@selected_profile.custom_rules) or @selected_profile.custom_rules == [] do %>
-                    <tr>
-                      <td colspan="4" class="py-4 text-center text-base-content/30 italic">
-                        No custom rules configured.
-                      </td>
-                    </tr>
-                  <% else %>
-                    <tr :for={rule <- @selected_profile.custom_rules}>
-                      <td class="py-2">{rule["domain"]}</td>
-                      <td class="py-2">
-                        <span class={[
-                          "px-1.5 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase font-sans border",
-                          case rule["action"] do
-                            "block" ->
-                              "bg-red-500/10 text-red-500 border-red-500/20"
+          <!-- Smart DNS & Domain Policies Summary -->
+          <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col justify-between space-y-6">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                  Routing & Domain Policies
+                </h3>
+                <span class="text-[10px] text-emerald-500 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded-[4px] border border-emerald-500/20">
+                  Control D Model
+                </span>
+              </div>
+              <p class="text-[11px] text-base-content/60 mb-4">
+                Configure smart split-tunneling presets for streaming/AI platforms or granular rules for individual domains.
+              </p>
 
-                            "bypass" ->
-                              "bg-blue-500/10 text-blue-500 border-blue-500/20"
+              <!-- Stats & Links Grid -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <!-- Services Quick Box -->
+                <% services_count = map_size(@selected_profile.services || %{}) %>
+                <div class="p-3 bg-base-200/40 rounded-[8px] border border-base-300/60 flex flex-col justify-between">
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs font-semibold text-base-content">Services Catalog</span>
+                      <.icon name="hero-sparkles" class="size-4 text-emerald-500" />
+                    </div>
+                    <p class="text-[10px] text-base-content/50">
+                      Netflix, OpenAI, Claude, Disney+, etc.
+                    </p>
+                  </div>
+                  <div class="mt-3 flex items-center justify-between">
+                    <span class="text-xs font-mono font-bold text-base-content">
+                      {services_count} configured
+                    </span>
+                    <.link
+                      navigate={~p"/dns/services?profile_id=#{@selected_profile.id}"}
+                      class="text-xs font-semibold text-emerald-500 hover:text-emerald-600 underline"
+                    >
+                      Manage &rarr;
+                    </.link>
+                  </div>
+                </div>
 
-                            "redirect" ->
-                              "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-
-                            "forward_proxy" ->
-                              "bg-purple-500/10 text-purple-500 border-purple-500/20"
-
-                            "forward_dns" ->
-                              "bg-orange-500/10 text-orange-500 border-orange-500/20"
-                          end
-                        ]}>
-                          {rule["action"]}
-                        </span>
-                      </td>
-                      <td class="py-2 text-base-content/65">
-                        {rule["value"] || "-"}
-                        <%= if rule["action"] == "forward_dns" && rule["proxy_pair_id"] do %>
-                          <span class="text-[10px] text-purple-500 font-semibold bg-purple-500/10 px-1.5 py-0.5 rounded ml-1">
-                            via {rule["proxy_pair_id"]}
-                          </span>
-                        <% end %>
-                      </td>
-                      <td class="py-2 text-right">
-                        <button
-                          phx-click="delete_custom_rule"
-                          phx-value-domain={rule["domain"]}
-                          class="text-red-500 hover:text-red-700 cursor-pointer"
-                        >
-                          <.icon name="hero-trash" class="size-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  <% end %>
-                </tbody>
-              </table>
+                <!-- Custom Rules Quick Box -->
+                <% rules_count = length(@selected_profile.custom_rules || []) %>
+                <div class="p-3 bg-base-200/40 rounded-[8px] border border-base-300/60 flex flex-col justify-between">
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs font-semibold text-base-content">Custom Rules</span>
+                      <.icon name="hero-list-bullet" class="size-4 text-primary" />
+                    </div>
+                    <p class="text-[10px] text-base-content/50">
+                      FQDN & wildcard domain overrides
+                    </p>
+                  </div>
+                  <div class="mt-3 flex items-center justify-between">
+                    <span class="text-xs font-mono font-bold text-base-content">
+                      {rules_count} rules
+                    </span>
+                    <.link
+                      navigate={~p"/dns/rules?profile_id=#{@selected_profile.id}"}
+                      class="text-xs font-semibold text-emerald-500 hover:text-emerald-600 underline"
+                    >
+                      Manage &rarr;
+                    </.link>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <!-- Form thêm Custom Rule -->
-            <form
-              id="add-custom-rule-form"
-              phx-change="custom_rule_form_changed"
-              phx-submit="add_custom_rule"
-              class="border-t border-base-300/50 pt-4 flex flex-col md:flex-row gap-3 items-end"
-            >
-              <div class="flex-1 w-full">
-                <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Domain</label>
-                <input
-                  type="text"
-                  name="domain"
-                  value={@custom_rule_domain}
-                  placeholder="e.g. ad.doubleclick.net, *.dev"
-                  required
-                  phx-debounce="200"
-                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
-                />
-              </div>
-
-              <div class="w-full md:w-32">
-                <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Action</label>
-                <select
-                  name="action"
-                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs focus:outline-none cursor-pointer"
-                >
-                  <option value="block" selected={@custom_rule_action == "block"}>Block</option>
-                  <option value="bypass" selected={@custom_rule_action == "bypass"}>
-                    Bypass Filter
-                  </option>
-                  <option value="redirect" selected={@custom_rule_action == "redirect"}>
-                    Redirect IP
-                  </option>
-                  <option value="forward_proxy" selected={@custom_rule_action == "forward_proxy"}>
-                    Forward Proxy
-                  </option>
-                  <option value="forward_dns" selected={@custom_rule_action == "forward_dns"}>
-                    Forward DNS
-                  </option>
-                </select>
-              </div>
-
-              <%= if @custom_rule_action in ["redirect", "forward_dns"] do %>
-                <div class="w-full md:w-48">
-                  <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
-                    {if @custom_rule_action == "redirect",
-                      do: "Target IP",
-                      else: "DNS Server IP/URL"}
-                  </label>
-                  <input
-                    type="text"
-                    name="value"
-                    value={@custom_rule_value}
-                    placeholder={
-                      if @custom_rule_action == "redirect",
-                        do: "e.g. 192.168.1.10",
-                        else: "e.g. 8.8.8.8 or https://..."
-                    }
-                    required
-                    phx-debounce="200"
-                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-1.5 text-xs font-mono focus:outline-none"
-                  />
-                </div>
-              <% end %>
-
-              <%= if @custom_rule_action == "forward_proxy" do %>
-                <div class="w-full md:w-48">
-                  <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Target Tunnel</label>
-                  <select
-                    name="value"
-                    required
-                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs focus:outline-none cursor-pointer"
-                  >
-                    <option value="">Select Tunnel...</option>
-                    <%= for pair <- @vpn_pairs do %>
-                      <option value={pair.pair_id} selected={@custom_rule_value == pair.pair_id}>
-                        <%= if Ecto.assoc_loaded?(pair.inbound_profile) && pair.inbound_profile && Ecto.assoc_loaded?(pair.outbound_profile) && pair.outbound_profile do %>
-                          {pair.pair_id} ({pair.inbound_profile.name} -> {pair.outbound_profile.name})
-                        <% else %>
-                          {pair.pair_id} ({pair.inbound_type} -> {pair.outbound_type})
-                        <% end %>
-                      </option>
-                    <% end %>
-                  </select>
-                </div>
-              <% end %>
-
-              <%= if @custom_rule_action == "forward_dns" do %>
-                <div class="w-full md:w-48">
-                  <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">Proxy Tunnel (Optional)</label>
-                  <select
-                    name="proxy_pair_id"
-                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs focus:outline-none cursor-pointer"
-                  >
-                    <option value="" selected={@custom_rule_proxy_pair_id in ["", nil]}>
-                      Direct (No Proxy)
-                    </option>
-                    <%= for pair <- @vpn_pairs do %>
-                      <option
-                        value={pair.pair_id}
-                        selected={@custom_rule_proxy_pair_id == pair.pair_id}
-                      >
-                        <%= if Ecto.assoc_loaded?(pair.inbound_profile) && pair.inbound_profile && Ecto.assoc_loaded?(pair.outbound_profile) && pair.outbound_profile do %>
-                          {pair.pair_id} ({pair.inbound_profile.name} -> {pair.outbound_profile.name})
-                        <% else %>
-                          {pair.pair_id} ({pair.inbound_type} -> {pair.outbound_type})
-                        <% end %>
-                      </option>
-                    <% end %>
-                  </select>
-                </div>
-              <% end %>
-
-              <button
-                type="submit"
-                class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 h-[32px] rounded-[4px] w-full md:w-auto justify-center"
+            <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-base-300/50">
+              <.link
+                navigate={~p"/dns/services?profile_id=#{@selected_profile.id}"}
+                class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-1.5 rounded-[4px] flex items-center gap-1.5"
               >
-                Add Rule
-              </button>
-            </form>
+                <.icon name="hero-sparkles" class="size-3.5" /> Open Services Catalog
+              </.link>
+              <.link
+                navigate={~p"/dns/rules?profile_id=#{@selected_profile.id}"}
+                class="btn btn-outline btn-xs uppercase tracking-wider px-3 py-1.5 rounded-[4px] flex items-center gap-1.5"
+              >
+                <.icon name="hero-list-bullet" class="size-3.5" /> Open Domain Rules
+              </.link>
+            </div>
           </div>
         </div>
 

@@ -163,117 +163,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                {:routes, :ok} <-
                  {:routes, setup_default_routes(wg_name, addresses, block_ipv6)},
                {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "nft",
-                   "add",
-                   "table",
-                   "inet",
-                   "hermit_ns"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "nft",
-                   "add",
-                   "chain",
-                   "inet",
-                   "hermit_ns",
-                   "forward",
-                   "{ type filter hook forward priority filter ; }"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "nft",
-                   "add",
-                   "chain",
-                   "inet",
-                   "hermit_ns",
-                   "postrouting",
-                   "{ type nat hook postrouting priority srcnat ; }"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "nft",
-                   "add",
-                   "rule",
-                   "inet",
-                   "hermit_ns",
-                   "forward",
-                   "tcp",
-                   "flags",
-                   "syn",
-                   "tcp",
-                   "option",
-                   "maxseg",
-                   "size",
-                   "set",
-                   "rt",
-                   "mtu"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "nft",
-                   "add",
-                   "rule",
-                   "inet",
-                   "hermit_ns",
-                   "forward",
-                   "accept"
-                 ]),
-               {:ok, _} <-
-                 run_cmd("ip", [
-                   "netns",
-                   "exec",
-                   wg_name,
-                   "nft",
-                   "add",
-                   "rule",
-                   "inet",
-                   "hermit_ns",
-                   "postrouting",
-                   "oifname",
-                   "wg0",
-                   "masquerade"
-                 ]),
-               {:block_ipv6, {:ok, _}} <-
-                 {:block_ipv6,
-                  if block_ipv6 do
-                    run_cmd("ip", [
-                      "netns",
-                      "exec",
-                      wg_name,
-                      "nft",
-                      "add",
-                      "rule",
-                      "inet",
-                      "hermit_ns",
-                      "forward",
-                      "meta",
-                      "nfproto",
-                      "ipv6",
-                      "reject",
-                      "with",
-                      "icmpv6",
-                      "type",
-                      "port-unreachable"
-                    ])
-                  else
-                    {:ok, :skipped}
-                  end} do
+                 setup_wireguard_nftables(wg_name, block_ipv6) do
             # Setup network namespace specific DNS (guarantee isolated public fallback to prevent host resolv.conf inheritance)
             dns_to_write = if dns_servers != [], do: dns_servers, else: ["1.1.1.1", "8.8.8.8"]
             File.mkdir_p!(netns_dns_dir)
@@ -587,11 +477,51 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
     |> Enum.join("\n")
   end
 
-  defp run_cmd(cmd, args) do
+  defp setup_wireguard_nftables(wg_name, block_ipv6) do
+    ipv6_rule =
+      if block_ipv6 do
+        "add rule inet hermit_ns forward meta nfproto ipv6 reject with icmpv6 type port-unreachable\n"
+      else
+        ""
+      end
+
+    script =
+      """
+      add table inet hermit_ns
+      flush table inet hermit_ns
+      add chain inet hermit_ns forward { type filter hook forward priority filter ; }
+      add chain inet hermit_ns postrouting { type nat hook postrouting priority srcnat ; }
+      add rule inet hermit_ns forward tcp flags syn tcp option maxseg size set rt mtu
+      add rule inet hermit_ns forward accept
+      add rule inet hermit_ns postrouting oifname wg0 masquerade
+      """ <> ipv6_rule
+
+    case run_cmd("ip", ["netns", "exec", wg_name, "nft", "-f", "-"], input: script) do
+      {:ok, out} ->
+        {:ok, out}
+
+      {:error, _} ->
+        # Fallback to sequential execution
+        with {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "table", "inet", "hermit_ns"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "chain", "inet", "hermit_ns", "forward", "{ type filter hook forward priority filter ; }"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "chain", "inet", "hermit_ns", "postrouting", "{ type nat hook postrouting priority srcnat ; }"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "forward", "tcp", "flags", "syn", "tcp", "option", "maxseg", "size", "set", "rt", "mtu"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "forward", "accept"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "postrouting", "oifname", "wg0", "masquerade"]) do
+          if block_ipv6 do
+            run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "forward", "meta", "nfproto", "ipv6", "reject", "with", "icmpv6", "type", "port-unreachable"])
+          else
+            {:ok, :skipped}
+          end
+        end
+    end
+  end
+
+  defp run_cmd(cmd, args, opts \\ []) do
     flat_args = List.flatten(args)
     Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
-    case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
+    case System.cmd(cmd, flat_args, [stderr_to_stdout: true] ++ opts) do
       {output, 0} ->
         {:ok, String.trim(output)}
 

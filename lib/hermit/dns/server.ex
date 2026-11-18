@@ -50,7 +50,7 @@ defmodule Hermit.Dns.Server do
         nil
       end
 
-    custom_rules = Rules.precompile(config.custom_rules)
+    custom_rules = Rules.precompile(config)
 
     if :ets.info(:inbound_profiles_cache) != :undefined do
       :ets.insert(
@@ -269,7 +269,7 @@ defmodule Hermit.Dns.Server do
     )
 
     new_state = sync_upstreams_config(state, upstreams)
-    custom_rules = Rules.precompile(updated_config.custom_rules)
+    custom_rules = Rules.precompile(updated_config)
 
     if :ets.info(:inbound_profiles_cache) != :undefined do
       :ets.insert(
@@ -831,6 +831,7 @@ defmodule Hermit.Dns.Server do
           {action, redirect_val, block_reason} =
             case Rules.match(query.domain, custom_rules) do
               {"block", nil, _} -> {"block", nil, "custom_rule"}
+              {"route_tunnel", pair_id, _} -> {"smart_route", pair_id, nil}
               {act, val, _p_id} -> {act, val, nil}
             end
 

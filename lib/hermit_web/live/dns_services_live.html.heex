@@ -1,0 +1,282 @@
+<div class="space-y-6">
+  <!-- Header Section -->
+  <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-base-300 pb-6 gap-4">
+    <div>
+      <h1 class="text-xl sm:text-2xl font-medium tracking-display-lg text-base-content uppercase">
+        Smart DNS Services
+      </h1>
+      <p class="text-base-content/60 mt-1 text-xs sm:text-sm">
+        Route streaming, AI platforms, and geo-restricted apps through designated VPN tunnels or block them with 1-click presets.
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      <.link
+        navigate={~p"/dns/rules"}
+        class="btn btn-outline btn-sm rounded-[6px] text-xs font-semibold uppercase tracking-wider px-3 flex items-center gap-1.5"
+      >
+        <.icon name="hero-list-bullet" class="size-4" /> Manage Custom Domain Rules
+      </.link>
+    </div>
+  </header>
+
+  <!-- Horizontal Profile Selector -->
+  <%= if @dns_profiles != [] do %>
+    <div class="flex flex-wrap items-center gap-2 border-b border-base-300 pb-4">
+      <span class="text-xs font-semibold uppercase tracking-wider text-base-content/40 mr-2">
+        Profile:
+      </span>
+      <div class="flex flex-wrap gap-1.5">
+        <button
+          :for={profile <- @dns_profiles}
+          phx-click="select_profile"
+          phx-value-id={profile.id}
+          class={[
+            "px-4 py-2 text-xs font-medium uppercase tracking-wider rounded-[6px] transition-all flex items-center gap-2 cursor-pointer border",
+            if(@selected_profile && @selected_profile.id == profile.id,
+              do:
+                "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 font-semibold shadow-sm",
+              else:
+                "text-base-content/65 hover:bg-base-200/50 hover:text-base-content border-transparent"
+            )
+          ]}
+        >
+          <span>{profile.name}</span>
+          <span class="size-1.5 rounded-full bg-emerald-500" />
+        </button>
+      </div>
+    </div>
+  <% end %>
+
+  <%= if is_nil(@selected_profile) do %>
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-12 text-center shadow-sm">
+      <p class="text-base-content/40 italic">
+        No DNS Profiles found. Please create a DNS profile first.
+      </p>
+    </div>
+  <% else %>
+    <!-- Filters & Search Toolbar -->
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <!-- Category Tabs -->
+      <div class="flex flex-wrap gap-1.5">
+        <button
+          :for={cat <- @categories}
+          phx-click="select_category"
+          phx-value-category={cat.id}
+          class={[
+            "btn btn-xs rounded-[6px] font-semibold uppercase tracking-wider px-3 transition-all",
+            if(@selected_category == cat.id,
+              do: "btn-primary",
+              else: "btn-outline border-base-300 text-base-content/70 hover:bg-base-200"
+            )
+          ]}
+        >
+          <.icon name={cat.icon} class="size-3.5 mr-1" />
+          {cat.label}
+        </button>
+      </div>
+
+      <!-- Search Box -->
+      <div class="w-full lg:w-72">
+        <form id="services-search-form" phx-change="search" phx-submit="search" onsubmit="return false;">
+          <div class="relative">
+            <.icon
+              name="hero-magnifying-glass"
+              class="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
+            />
+            <input
+              type="text"
+              name="query"
+              value={@search_query}
+              placeholder="Search services or domains..."
+              class="w-full bg-base-100 border border-base-300 rounded-[6px] pl-9 pr-3 py-1.5 text-xs placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+            />
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Active Routing Summary Banner -->
+    <% active_routes =
+      Enum.filter(
+        @selected_profile.services || %{},
+        fn {_k, v} -> (v["action"] || v[:action]) == "route_tunnel" end
+      ) %>
+    <%= if active_routes != [] do %>
+      <div class="bg-emerald-500/5 border border-emerald-500/20 rounded-[8px] p-3 px-4 flex items-center justify-between flex-wrap gap-2 text-xs">
+        <div class="flex items-center gap-2">
+          <.icon name="hero-sparkles" class="size-4 text-emerald-500" />
+          <span class="font-medium text-base-content/80">
+            Smart DNS Active:
+          </span>
+          <span class="text-emerald-500 font-semibold font-mono">
+            {length(active_routes)} services
+          </span>
+          <span class="text-base-content/60">
+            routed through VPN tunnels with full CDN & SNI coverage.
+          </span>
+        </div>
+      </div>
+    <% end %>
+
+    <!-- Services Grid -->
+    <% services = get_filtered_services(@selected_category, @search_query) %>
+    <%= if services == [] do %>
+      <div class="bg-base-100 border border-base-300 rounded-[12px] p-12 text-center shadow-sm">
+        <.icon name="hero-magnifying-glass" class="size-8 mx-auto text-base-content/30 mb-2" />
+        <p class="text-base-content/50 text-sm">
+          No services matching your criteria.
+        </p>
+      </div>
+    <% else %>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <%= for svc <- services do %>
+          <% state = service_state(@selected_profile.services, svc.id) %>
+          <div class={[
+            "bg-base-100 border rounded-[12px] p-5 shadow-sm flex flex-col justify-between transition-all",
+            case state.action do
+              "route_tunnel" -> "border-emerald-500/30 ring-1 ring-emerald-500/20"
+              "block" -> "border-red-500/30"
+              _ -> "border-base-300 hover:border-base-content/20"
+            end
+          ]}>
+            <div>
+              <!-- Service Title & Icon -->
+              <div class="flex items-start justify-between gap-3 mb-2">
+                <div class="flex items-center gap-3">
+                  <div class={[
+                    "size-9 rounded-[8px] flex items-center justify-center shrink-0",
+                    case state.action do
+                      "route_tunnel" -> "bg-emerald-500/10 text-emerald-500"
+                      "block" -> "bg-red-500/10 text-red-500"
+                      _ -> "bg-base-200 text-base-content/70"
+                    end
+                  ]}>
+                    <.icon name={svc.icon} class="size-5" />
+                  </div>
+                  <div>
+                    <h3 class="text-sm font-semibold text-base-content leading-tight">
+                      {svc.name}
+                    </h3>
+                    <span class="text-[10px] text-base-content/40 uppercase font-mono tracking-wider">
+                      {svc.category}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Status Badge -->
+                <div>
+                  <%= case state.action do %>
+                    <% "route_tunnel" -> %>
+                      <span class="px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase tracking-wider bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 flex items-center gap-1">
+                        <span class="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Routed
+                      </span>
+                    <% "block" -> %>
+                      <span class="px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase tracking-wider bg-red-500/10 text-red-500 border border-red-500/20">
+                        Blocked
+                      </span>
+                    <% _ -> %>
+                      <span class="px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase tracking-wider bg-base-200 text-base-content/50 border border-base-300">
+                        Direct
+                      </span>
+                  <% end %>
+                </div>
+              </div>
+
+              <!-- Description -->
+              <p class="text-xs text-base-content/60 mb-3 leading-relaxed">
+                {svc.description}
+              </p>
+
+              <!-- Domain Accordion Toggle -->
+              <div class="mb-4">
+                <button
+                  type="button"
+                  phx-click="toggle_domains"
+                  phx-value-id={svc.id}
+                  class="text-[11px] text-base-content/50 hover:text-base-content flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  <.icon
+                    name={
+                      if MapSet.member?(@expanded_domains, svc.id),
+                        do: "hero-chevron-down",
+                        else: "hero-chevron-right"
+                    }
+                    class="size-3"
+                  />
+                  <span>
+                    {length(svc.domains)} covered domains (incl. CDNs)
+                  </span>
+                </button>
+
+                <%= if MapSet.member?(@expanded_domains, svc.id) do %>
+                  <div class="mt-2 p-2 bg-base-200/50 rounded-[6px] border border-base-300/40 max-h-28 overflow-y-auto space-y-1 font-mono text-[10px] text-base-content/75">
+                    <%= for domain <- svc.domains do %>
+                      <div class="flex items-center gap-1.5">
+                        <span class="size-1 rounded-full bg-emerald-500/60" />
+                        <span>{domain}</span>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+
+            <!-- Action Controls Form -->
+            <div class="pt-3 border-t border-base-300/50 space-y-2">
+              <div class="flex items-center justify-between gap-2">
+                <!-- Action Selector (Bypass / Route / Block) -->
+                <div class="flex-1">
+                  <form id={"service-action-form-#{svc.id}"} phx-change="set_service_action">
+                    <input type="hidden" name="service_id" value={svc.id} />
+                    <select
+                      name="action"
+                      class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2 py-1.5 text-xs font-medium focus:outline-none focus:border-primary cursor-pointer"
+                    >
+                      <option value="bypass" selected={state.action == "bypass"}>
+                        Direct (Bypass)
+                      </option>
+                      <option value="route_tunnel" selected={state.action == "route_tunnel"}>
+                        Route via Tunnel
+                      </option>
+                      <option value="block" selected={state.action == "block"}>
+                        Block Service
+                      </option>
+                    </select>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Tunnel Selector (shown when route_tunnel is selected) -->
+              <%= if state.action == "route_tunnel" do %>
+                <form id={"service-tunnel-form-#{svc.id}"} phx-change="set_service_action">
+                  <input type="hidden" name="service_id" value={svc.id} />
+                  <input type="hidden" name="action" value="route_tunnel" />
+                  <div class="flex items-center gap-1.5">
+                    <label class="text-[10px] font-semibold text-base-content/40 uppercase shrink-0">
+                      Tunnel:
+                    </label>
+                    <select
+                      name="pair_id"
+                      class="flex-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 font-semibold rounded-[6px] px-2 py-1 text-xs focus:outline-none cursor-pointer"
+                    >
+                      <%= if @vpn_pairs == [] do %>
+                        <option value="">No Tunnels Available</option>
+                      <% else %>
+                        <%= for pair <- @vpn_pairs do %>
+                          <option value={pair.pair_id} selected={state.pair_id == pair.pair_id}>
+                            {format_tunnel_label(pair)}
+                          </option>
+                        <% end %>
+                      <% end %>
+                    </select>
+                  </div>
+                </form>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  <% end %>
+</div>

@@ -524,105 +524,7 @@ defmodule Hermit.Vpn.DnsWorker do
                ),
              # DNAT port redirection inside namespace using nftables
              {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "table",
-                 "ip",
-                 "hermit_ns"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "chain",
-                 "ip",
-                 "hermit_ns",
-                 "prerouting",
-                 "{ type nat hook prerouting priority dstnat ; }"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "chain",
-                 "ip",
-                 "hermit_ns",
-                 "forward",
-                 "{ type filter hook forward priority filter ; }"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "chain",
-                 "ip",
-                 "hermit_ns",
-                 "postrouting",
-                 "{ type nat hook postrouting priority srcnat - 10 ; }"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "rule",
-                 "ip",
-                 "hermit_ns",
-                 "prerouting",
-                 "udp",
-                 "dport",
-                 "53",
-                 "dnat",
-                 "to",
-                 "#{host_ip}:#{port}"
-               ]),
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "rule",
-                 "ip",
-                 "hermit_ns",
-                 "prerouting",
-                 "tcp",
-                 "dport",
-                 "53",
-                 "dnat",
-                 "to",
-                 "#{host_ip}:#{port}"
-               ]),
-             # Allow forwarding inside the namespace (to bypass Tailscale filter drops)
-             {:ok, _} <-
-               run_cmd("ip", [
-                 "netns",
-                 "exec",
-                 ns,
-                 "nft",
-                 "add",
-                 "rule",
-                 "ip",
-                 "hermit_ns",
-                 "forward",
-                 "accept"
-               ]),
+               setup_dns_nftables(ns, host_ip, port),
 
              # Source policy routing on host (replacing global route)
              {:ok, _} <-
@@ -1160,7 +1062,35 @@ defmodule Hermit.Vpn.DnsWorker do
     |> Enum.join("\n")
   end
 
-  defp run_cmd(cmd, args) do
+  defp setup_dns_nftables(ns, host_ip, port) do
+    script = """
+    add table ip hermit_ns
+    flush table ip hermit_ns
+    add chain ip hermit_ns prerouting { type nat hook prerouting priority dstnat ; }
+    add chain ip hermit_ns forward { type filter hook forward priority filter ; }
+    add chain ip hermit_ns postrouting { type nat hook postrouting priority srcnat - 10 ; }
+    add rule ip hermit_ns prerouting udp dport 53 dnat to #{host_ip}:#{port}
+    add rule ip hermit_ns prerouting tcp dport 53 dnat to #{host_ip}:#{port}
+    add rule ip hermit_ns forward accept
+    """
+
+    case run_cmd("ip", ["netns", "exec", ns, "nft", "-f", "-"], input: script) do
+      {:ok, out} ->
+        {:ok, out}
+
+      {:error, _} ->
+        with {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "table", "ip", "hermit_ns"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "prerouting", "{ type nat hook prerouting priority dstnat ; }"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "forward", "{ type filter hook forward priority filter ; }"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "postrouting", "{ type nat hook postrouting priority srcnat - 10 ; }"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "udp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]),
+             {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]) do
+          run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "forward", "accept"])
+        end
+    end
+  end
+
+  defp run_cmd(cmd, args, opts \\ []) do
     if mock?() do
       {:ok, ""}
     else
@@ -1168,7 +1098,7 @@ defmodule Hermit.Vpn.DnsWorker do
       Logger.info("Running: #{cmd} #{Enum.join(flat_args, " ")}")
 
       try do
-        case System.cmd(cmd, flat_args, stderr_to_stdout: true) do
+        case System.cmd(cmd, flat_args, [stderr_to_stdout: true] ++ opts) do
           {output, 0} ->
             {:ok, String.trim(output)}
 

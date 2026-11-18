@@ -13,126 +13,61 @@ defmodule Hermit.Vpn.Nat do
     container_ip = Hermit.Vpn.Inbound.Tailscale.get_container_ip()
 
     try do
-      # 1. Clean up any existing table to avoid duplicate rules
-      System.cmd("nft", ["delete", "table", "ip", table_name], stderr_to_stdout: true)
+      # 1. Build batched nftables ruleset
+      base_commands = [
+        "add table ip #{table_name}",
+        "flush table ip #{table_name}",
+        "add chain ip #{table_name} prerouting { type nat hook prerouting priority dstnat ; }",
+        "add chain ip #{table_name} postrouting { type nat hook postrouting priority srcnat ; }",
+        "add chain ip #{table_name} forward { type filter hook forward priority filter ; }"
+      ]
 
-      # 2. Create fresh table and core chains
-      System.cmd("nft", ["add", "table", "ip", table_name])
-
-      System.cmd("nft", [
-        "add",
-        "chain",
-        "ip",
-        table_name,
-        "prerouting",
-        "{ type nat hook prerouting priority dstnat ; }"
-      ])
-
-      System.cmd("nft", [
-        "add",
-        "chain",
-        "ip",
-        table_name,
-        "postrouting",
-        "{ type nat hook postrouting priority srcnat ; }"
-      ])
-
-      System.cmd("nft", [
-        "add",
-        "chain",
-        "ip",
-        table_name,
-        "forward",
-        "{ type filter hook forward priority filter ; }"
-      ])
-
-      # 3. Allow subnet forwarding
-      if subnet && subnet != "" do
-        System.cmd("nft", [
-          "add",
-          "rule",
-          "ip",
-          table_name,
-          "forward",
-          "ip",
-          "saddr",
-          subnet,
-          "accept"
-        ])
-
-        System.cmd("nft", [
-          "add",
-          "rule",
-          "ip",
-          table_name,
-          "forward",
-          "ip",
-          "daddr",
-          subnet,
-          "accept"
-        ])
-      end
-
-      # 4. Inbound DNAT and Outbound SNAT for Tailscale (if ts_port configured)
-      if (is_integer(ts_port) and ts_port > 0 and ns_ip) && ns_ip != "" do
-        # Inbound DNAT: Forward UDP packets on ts_port to inner network namespace
-        System.cmd("nft", [
-          "add",
-          "rule",
-          "ip",
-          table_name,
-          "prerouting",
-          "udp",
-          "dport",
-          to_string(ts_port),
-          "dnat",
-          "to",
-          "#{ns_ip}:#{ts_port}"
-        ])
-
-        # Outbound SNAT: Rewrite saddr to container_ip and preserve sport ts_port (runs BEFORE masquerade)
-        snat_args =
-          if container_ip do
-            ["snat", "to", "#{container_ip}:#{ts_port}"]
-          else
-            ["masquerade", "to", ":#{ts_port}"]
-          end
-
-        System.cmd(
-          "nft",
+      subnet_forward_commands =
+        if subnet && subnet != "" do
           [
-            "add",
-            "rule",
-            "ip",
-            table_name,
-            "postrouting",
-            "ip",
-            "saddr",
-            ns_ip,
-            "udp",
-            "sport",
-            to_string(ts_port)
-          ] ++ snat_args
-        )
-      end
+            "add rule ip #{table_name} forward ip saddr #{subnet} accept",
+            "add rule ip #{table_name} forward ip daddr #{subnet} accept"
+          ]
+        else
+          []
+        end
 
-      # 5. General subnet masquerade (placed AFTER specific SNAT rule)
-      if subnet && subnet != "" do
-        System.cmd("nft", [
-          "add",
-          "rule",
-          "ip",
-          table_name,
-          "postrouting",
-          "ip",
-          "saddr",
-          subnet,
-          "masquerade"
-        ])
-      end
+      tailscale_commands =
+        if (is_integer(ts_port) and ts_port > 0 and ns_ip) && ns_ip != "" do
+          snat_action =
+            if container_ip do
+              "snat to #{container_ip}:#{ts_port}"
+            else
+              "masquerade to :#{ts_port}"
+            end
 
-      # 6. Ensure host iptables allows Hermit virtual interfaces
-      Hermit.Application.setup_iptables_host()
+          [
+            "add rule ip #{table_name} prerouting udp dport #{ts_port} dnat to #{ns_ip}:#{ts_port}",
+            "add rule ip #{table_name} postrouting ip saddr #{ns_ip} udp sport #{ts_port} #{snat_action}"
+          ]
+        else
+          []
+        end
+
+      masquerade_commands =
+        if subnet && subnet != "" do
+          ["add rule ip #{table_name} postrouting ip saddr #{subnet} masquerade"]
+        else
+          []
+        end
+
+      all_commands =
+        base_commands ++ subnet_forward_commands ++ tailscale_commands ++ masquerade_commands
+
+      script = Enum.join(all_commands, "\n") <> "\n"
+
+      case System.cmd("nft", ["-f", "-"], input: script, stderr_to_stdout: true) do
+        {_, 0} ->
+          :ok
+
+        {error_output, _code} ->
+          Logger.warning("Failed to batch apply nftables NAT rules for #{table_name}: #{error_output}")
+      end
 
       :ok
     rescue

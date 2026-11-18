@@ -532,6 +532,10 @@ defmodule Hermit.Vpn.PairWorker do
       last_db_state: last_db_state
     }
 
+    if :erlang.whereis(Hermit.PubSub) != :undefined do
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "smart_routes")
+    end
+
     state = sync_smart_routes_and_relayer(state)
 
     cond do
@@ -1138,6 +1142,11 @@ defmodule Hermit.Vpn.PairWorker do
         updated_state = broadcast_update(updated_state)
         {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
     end
+  end
+
+  @impl true
+  def handle_info({:smart_routes_updated, _all_pairs}, state) do
+    {:noreply, sync_smart_routes_and_relayer(state)}
   end
 
   @impl true
@@ -2123,7 +2132,9 @@ defmodule Hermit.Vpn.PairWorker do
 
     if parsed.domains != [] do
       Hermit.Vpn.SniProxy.register_routes(state.id, parsed.domains)
+    end
 
+    if Hermit.Vpn.SniProxy.has_routes?(state.id) do
       # If inbound is not already proxy and wg is running, ensure sidecar Proxy.Relayer is active
       if state.inbound_type != "proxy" and state.wg_status == :running do
         if state.smart_relayer_pid == nil or not Process.alive?(state.smart_relayer_pid) do
@@ -2149,8 +2160,6 @@ defmodule Hermit.Vpn.PairWorker do
         state
       end
     else
-      Hermit.Vpn.SniProxy.unregister_pair(state.id)
-
       if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
         Process.exit(state.smart_relayer_pid, :shutdown)
         %{state | smart_relayer_pid: nil}

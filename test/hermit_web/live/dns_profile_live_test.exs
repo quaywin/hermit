@@ -29,7 +29,8 @@ defmodule HermitWeb.DnsProfileLiveTest do
     # Verify detail displays selected profile info
     assert html =~ "DNS Profile: Default DNS Profile"
     assert html =~ "Upstream DNS Servers"
-    assert html =~ "Custom Domain Routing Rules"
+    assert html =~ "Routing &amp; Domain Policies"
+    assert html =~ "Services Catalog"
   end
 
   test "creates new DNS Profile using modal", %{conn: conn} do
@@ -104,50 +105,13 @@ defmodule HermitWeb.DnsProfileLiveTest do
              "9.9.9.9, 149.112.112.112"
   end
 
-  test "manages custom routing rules (add & delete)", %{conn: conn, default_profile: profile} do
-    {:ok, view, _html} = live(conn, ~p"/dns?id=#{profile.id}")
+  test "links to services catalog and custom domain rules", %{conn: conn, default_profile: profile} do
+    {:ok, _view, html} = live(conn, ~p"/dns?id=#{profile.id}")
 
-    # Add custom rule: block
-    html =
-      view
-      |> form("form[phx-submit=add_custom_rule]", %{
-        "domain" => "ad.example.com",
-        "action" => "block"
-      })
-      |> render_submit()
-
-    assert html =~ "Custom rule for ad.example.com added."
-    assert html =~ "ad.example.com"
-    assert html =~ "block"
-
-    view
-    |> form("form[phx-submit=add_custom_rule]", %{
-      "action" => "redirect"
-    })
-    |> render_change()
-
-    html =
-      view
-      |> form("form[phx-submit=add_custom_rule]", %{
-        "domain" => "local-dev.org",
-        "action" => "redirect",
-        "value" => "192.168.10.20"
-      })
-      |> render_submit()
-
-    assert html =~ "Custom rule for local-dev.org added."
-    assert html =~ "local-dev.org"
-    assert html =~ "redirect"
-    assert html =~ "192.168.10.20"
-
-    # Delete custom rule
-    html = view |> element("button[phx-value-domain='ad.example.com']") |> render_click()
-    assert html =~ "Custom rule for ad.example.com deleted."
-
-    # Verify directly in DB
-    db_config = Hermit.Repo.get!(DnsConfig, profile.id)
-    assert Enum.find(db_config.custom_rules, &(&1["domain"] == "ad.example.com")) == nil
-    assert Enum.find(db_config.custom_rules, &(&1["domain"] == "local-dev.org")) != nil
+    assert html =~ "Open Services Catalog"
+    assert html =~ "Open Domain Rules"
+    assert html =~ ~p"/dns/services?profile_id=#{profile.id}"
+    assert html =~ ~p"/dns/rules?profile_id=#{profile.id}"
   end
 
   test "supports renaming the DNS profile inline", %{conn: conn, default_profile: profile} do

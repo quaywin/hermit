@@ -25,8 +25,8 @@ defmodule Hermit.Vpn.SniProxy do
   def register_routes(pair_id, domains) when is_binary(pair_id) and is_list(domains) do
     init_table()
 
-    # First clean up old routes for this pair
-    unregister_pair(pair_id)
+    # First clean up old domain routes for this pair without clearing port cache
+    unregister_routes_for_pair(pair_id)
 
     Enum.each(domains, fn domain ->
       norm = domain |> String.trim() |> String.downcase()
@@ -57,14 +57,208 @@ defmodule Hermit.Vpn.SniProxy do
   def unregister_pair(pair_id) when is_binary(pair_id) do
     init_table()
 
+    unregister_routes_for_pair(pair_id)
+    :ets.delete(@table, {:ports, pair_id})
+    Hermit.Vpn.SniProxy.IpResolver.clear_cache()
+    :ok
+  end
+
+  defp unregister_routes_for_pair(pair_id) do
     matches =
       :ets.select(@table, [
         {{:"$1", :"$2"}, [{:==, :"$2", pair_id}], [:"$1"]}
       ])
 
     Enum.each(matches, &:ets.delete(@table, &1))
-    :ets.delete(@table, {:ports, pair_id})
-    Hermit.Vpn.SniProxy.IpResolver.clear_cache()
+  end
+
+  @doc """
+  Checks if there are any registered routes for a pair_id.
+  """
+  @spec has_routes?(String.t()) :: boolean()
+  def has_routes?(pair_id) when is_binary(pair_id) do
+    init_table()
+
+    case :ets.select(@table, [{{:"$1", :"$2"}, [{:==, :"$2", pair_id}], [true]}], 1) do
+      {[true], _} -> true
+      _ -> false
+    end
+  end
+
+  @doc """
+  Returns a list of all domain strings registered for a specific pair_id.
+  """
+  @spec routes_for_pair(String.t()) :: [String.t()]
+  def routes_for_pair(pair_id) when is_binary(pair_id) do
+    init_table()
+
+    :ets.select(@table, [
+      {{:"$1", :"$2"}, [{:==, :"$2", pair_id}], [:"$1"]}
+    ])
+  end
+
+  @doc """
+  Returns a summary of services and custom domains routed to a specific pair_id.
+  """
+  @spec routed_summary_for_pair(String.t()) :: %{services: [map()], custom_domains: [String.t()]}
+  def routed_summary_for_pair(pair_id) when is_binary(pair_id) do
+    all_domains = routes_for_pair(pair_id) |> MapSet.new()
+
+    matched_services =
+      Hermit.Services.Catalog.all()
+      |> Enum.filter(fn svc ->
+        Enum.any?(svc.domains, &MapSet.member?(all_domains, String.downcase(&1)))
+      end)
+
+    service_domain_set =
+      matched_services
+      |> Enum.flat_map(& &1.domains)
+      |> Enum.flat_map(fn d ->
+        norm = String.downcase(d)
+        if String.starts_with?(norm, "*."), do: [norm, String.slice(norm, 2..-1//1)], else: [norm]
+      end)
+      |> MapSet.new()
+
+    custom_domains =
+      all_domains
+      |> MapSet.difference(service_domain_set)
+      |> MapSet.to_list()
+      |> Enum.sort()
+
+    %{
+      services: matched_services,
+      custom_domains: custom_domains
+    }
+  end
+
+  @doc """
+  Syncs all smart routes from database (Services + Custom Rules from all DNS profiles,
+  plus legacy routing_targets from active tunnels) into the ETS table.
+  """
+  @spec sync_all_routes() :: :ok
+  def sync_all_routes do
+    init_table()
+
+    # 1. Build a unified domain -> pair_id mapping with proper precedence:
+    # Service Catalog -> Custom Rules overrides -> Legacy Routing Targets
+    domain_mappings =
+      try do
+        Hermit.Repo.all(Hermit.Vpn.DnsConfig)
+        |> Enum.reduce(%{}, fn profile, acc ->
+          # A. Base: Service catalog rules
+          acc =
+            case profile.services do
+              services when is_map(services) ->
+                Enum.reduce(services, acc, fn {svc_id, cfg}, inner_acc ->
+                  action = Map.get(cfg, "action") || Map.get(cfg, :action)
+                  pair_id = Map.get(cfg, "pair_id") || Map.get(cfg, :pair_id)
+
+                  if action == "route_tunnel" and is_binary(pair_id) and pair_id != "" do
+                    domains = Hermit.Services.Catalog.domains_for_service(to_string(svc_id))
+
+                    Enum.reduce(domains, inner_acc, fn d, d_acc ->
+                      Map.put(d_acc, String.downcase(String.trim(d)), pair_id)
+                    end)
+                  else
+                    inner_acc
+                  end
+                end)
+
+              _ ->
+                acc
+            end
+
+          # B. Override: Custom domain rules (always take precedence)
+          case profile.custom_rules do
+            rules when is_list(rules) ->
+              Enum.reduce(rules, acc, fn rule, inner_acc ->
+                action = Map.get(rule, "action") || Map.get(rule, :action)
+                domain = Map.get(rule, "domain") || Map.get(rule, :domain)
+
+                if is_binary(domain) and String.trim(domain) != "" do
+                  norm = String.downcase(String.trim(domain))
+
+                  case action do
+                    act when act in ["route_tunnel", "smart_route"] ->
+                      pair_id =
+                        Map.get(rule, "value") || Map.get(rule, :value) ||
+                          Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
+
+                      if is_binary(pair_id) and pair_id != "" do
+                        Map.put(inner_acc, norm, pair_id)
+                      else
+                        inner_acc
+                      end
+
+                    act when act in ["block", "bypass"] ->
+                      Map.delete(inner_acc, norm)
+
+                    _ ->
+                      inner_acc
+                  end
+                else
+                  inner_acc
+                end
+              end)
+
+            _ ->
+              acc
+          end
+        end)
+      rescue
+        _ -> %{}
+      end
+
+    # 2. Incorporate legacy routing_targets from VpnPairs if any (without overwriting explicit rules)
+    domain_mappings =
+      try do
+        Hermit.Repo.all(Hermit.Vpn.VpnPair)
+        |> Enum.reduce(domain_mappings, fn pair, acc ->
+          inbound_cfg = pair.inbound_config || %{}
+
+          targets =
+            Map.get(inbound_cfg, "routing_targets") || Map.get(inbound_cfg, :routing_targets) || ""
+
+          parsed = Hermit.Vpn.RoutingParser.parse(targets)
+
+          Enum.reduce(parsed.domains, acc, fn d, inner_acc ->
+            norm = String.downcase(String.trim(d))
+            Map.put_new(inner_acc, norm, pair.pair_id)
+          end)
+        end)
+      rescue
+        _ -> domain_mappings
+      end
+
+    # 3. Group by pair_id
+    pair_routes =
+      Enum.reduce(domain_mappings, %{}, fn {domain, pair_id}, acc ->
+        Map.update(acc, pair_id, [domain], &[domain | &1])
+      end)
+
+    # 4. Find existing pair_ids with routes currently in ETS
+    existing_pairs =
+      :ets.select(@table, [{{:"$1", :"$2"}, [], [:"$2"]}])
+      |> Enum.reject(&(&1 in [:ports]))
+      |> Enum.uniq()
+
+    all_pairs = Enum.uniq(existing_pairs ++ Map.keys(pair_routes))
+
+    # 5. Update ETS for each pair
+    Enum.each(all_pairs, fn pair_id ->
+      domains = Map.get(pair_routes, pair_id, []) |> Enum.uniq()
+
+      if domains != [] do
+        register_routes(pair_id, domains)
+      else
+        unregister_pair(pair_id)
+      end
+    end)
+
+    if :erlang.whereis(Hermit.PubSub) != :undefined do
+      Phoenix.PubSub.broadcast(Hermit.PubSub, "smart_routes", {:smart_routes_updated, all_pairs})
+    end
+
     :ok
   end
 

@@ -427,10 +427,6 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     Listen #{listen_ip}
     Timeout 600
     MaxClients 100
-    MinSpareServers 2
-    MaxSpareServers 10
-    StartServers 5
-    MaxRequestsPerChild 0
     Allow 172.29.0.0/16
     Allow 127.0.0.1
     PidFile "#{pid_path}"

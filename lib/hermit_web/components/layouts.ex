@@ -73,10 +73,10 @@ defmodule HermitWeb.Layouts do
               </.sidebar_link>
             </div>
 
-            <!-- Group 2: DNS Protection -->
+            <!-- Group 2: DNS & Smart Routing -->
             <div class="space-y-1">
               <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
-                DNS Protection
+                DNS & Smart Routing
               </div>
               <.sidebar_link
                 navigate={~p"/dns/endpoints"}
@@ -86,11 +86,25 @@ defmodule HermitWeb.Layouts do
                 Endpoints
               </.sidebar_link>
               <.sidebar_link
+                navigate={~p"/dns/services"}
+                active={@active == :dns_services}
+                icon="hero-sparkles"
+              >
+                Services
+              </.sidebar_link>
+              <.sidebar_link
+                navigate={~p"/dns/rules"}
+                active={@active == :dns_rules}
+                icon="hero-list-bullet"
+              >
+                Custom Rules
+              </.sidebar_link>
+              <.sidebar_link
                 navigate={~p"/dns"}
                 active={@active == :dns_profiles}
                 icon="hero-globe-alt"
               >
-                DNS Profiles
+                Profiles
               </.sidebar_link>
               <.sidebar_link
                 navigate={~p"/dns/blocklists"}
@@ -192,6 +206,24 @@ defmodule HermitWeb.Layouts do
                 <.icon name="hero-arrow-up-right" class="size-5 shrink-0" />
               </.link>
               <.link
+                navigate={~p"/dns/services"}
+                class={
+                  if @active == :dns_services, do: "text-emerald-500", else: "text-base-content/60"
+                }
+                title="Services"
+              >
+                <.icon name="hero-sparkles" class="size-5 shrink-0" />
+              </.link>
+              <.link
+                navigate={~p"/dns/rules"}
+                class={
+                  if @active == :dns_rules, do: "text-emerald-500", else: "text-base-content/60"
+                }
+                title="Custom Rules"
+              >
+                <.icon name="hero-list-bullet" class="size-5 shrink-0" />
+              </.link>
+              <.link
                 navigate={~p"/dns"}
                 class={
                   if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"
@@ -279,6 +311,8 @@ defmodule HermitWeb.Layouts do
           HermitWeb.InboundLive -> :inbounds
           HermitWeb.InboundDetailLive -> :inbounds
           HermitWeb.OutboundLive -> :outbounds
+          HermitWeb.DnsServicesLive -> :dns_services
+          HermitWeb.DnsRulesLive -> :dns_rules
           HermitWeb.DnsProfileLive -> :dns_profiles
           HermitWeb.BlocklistLive -> :dns_blocklists
           HermitWeb.SystemLive -> :settings

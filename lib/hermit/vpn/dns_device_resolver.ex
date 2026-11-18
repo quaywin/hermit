@@ -81,8 +81,8 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
   @impl true
   def init(_opts) do
     :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
-    # Pre-populate and set periodic update timer
-    Process.send_after(self(), :periodic_update, 2000)
+    # Pre-populate and set periodic update timer (wait 10s for Tailscale sockets to initialize)
+    Process.send_after(self(), :periodic_update, 10_000)
     {:ok, %{updating_profiles: MapSet.new()}}
   end
 
@@ -218,8 +218,8 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
             end
 
           _ ->
-            Logger.warning(
-              "DnsDeviceResolver: Failed to query Tailscale status on any candidate sockets for profile #{profile_id}"
+            Logger.debug(
+              "DnsDeviceResolver: Candidate sockets for profile #{profile_id} not ready yet."
             )
         end
       end

@@ -1,0 +1,353 @@
+<div class="space-y-6">
+  <!-- Header Section -->
+  <header class="flex flex-col md:flex-row md:items-center justify-between border-b border-base-300 pb-6 gap-4">
+    <div>
+      <h1 class="text-xl sm:text-2xl font-medium tracking-display-lg text-base-content uppercase">
+        Custom Domain Rules
+      </h1>
+      <p class="text-base-content/60 mt-1 text-xs sm:text-sm">
+        Route individual domains (FQDN or wildcards) through specific VPN tunnels, block threats, bypass filters, or override IP records.
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      <.link
+        navigate={~p"/dns/services"}
+        class="btn btn-primary btn-sm rounded-[6px] text-xs font-semibold uppercase tracking-wider px-3 flex items-center gap-1.5"
+      >
+        <.icon name="hero-sparkles" class="size-4" /> Smart DNS Services Catalog
+      </.link>
+    </div>
+  </header>
+
+  <!-- Horizontal Profile Selector -->
+  <%= if @dns_profiles != [] do %>
+    <div class="flex flex-wrap items-center gap-2 border-b border-base-300 pb-4">
+      <span class="text-xs font-semibold uppercase tracking-wider text-base-content/40 mr-2">
+        Profile:
+      </span>
+      <div class="flex flex-wrap gap-1.5">
+        <button
+          :for={profile <- @dns_profiles}
+          phx-click="select_profile"
+          phx-value-id={profile.id}
+          class={[
+            "px-4 py-2 text-xs font-medium uppercase tracking-wider rounded-[6px] transition-all flex items-center gap-2 cursor-pointer border",
+            if(@selected_profile && @selected_profile.id == profile.id,
+              do:
+                "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 font-semibold shadow-sm",
+              else:
+                "text-base-content/65 hover:bg-base-200/50 hover:text-base-content border-transparent"
+            )
+          ]}
+        >
+          <span>{profile.name}</span>
+          <span class="size-1.5 rounded-full bg-emerald-500" />
+        </button>
+      </div>
+    </div>
+  <% end %>
+
+  <%= if is_nil(@selected_profile) do %>
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-12 text-center shadow-sm">
+      <p class="text-base-content/40 italic">
+        No DNS Profiles found. Please create a DNS profile first.
+      </p>
+    </div>
+  <% else %>
+    <!-- Add Rule Card -->
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+        Add Custom Domain Rule
+      </h2>
+
+      <form
+        id="add-custom-rule-form"
+        phx-change="custom_rule_form_changed"
+        phx-submit="add_custom_rule"
+        class="flex flex-col lg:flex-row gap-3 items-end"
+      >
+        <!-- Domain Input -->
+        <div class="flex-1 w-full">
+          <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
+            Domain (FQDN or Wildcard)
+          </label>
+          <input
+            type="text"
+            name="domain"
+            value={@custom_rule_domain}
+            placeholder="e.g. *.internal.corp.com, tracker.ad.net"
+            required
+            class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono focus:outline-none focus:border-primary"
+          />
+        </div>
+
+        <!-- Action Selector -->
+        <div class="w-full lg:w-48">
+          <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
+            Action
+          </label>
+          <select
+            name="action"
+            class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs focus:outline-none focus:border-primary cursor-pointer"
+          >
+            <option value="route_tunnel" selected={@custom_rule_action == "route_tunnel"}>
+              Route via Tunnel (Smart DNS)
+            </option>
+            <option value="block" selected={@custom_rule_action == "block"}>
+              Block Domain
+            </option>
+            <option value="bypass" selected={@custom_rule_action == "bypass"}>
+              Bypass Filter (Direct)
+            </option>
+            <option value="redirect" selected={@custom_rule_action == "redirect"}>
+              Redirect IP (A/AAAA)
+            </option>
+            <option value="forward_dns" selected={@custom_rule_action == "forward_dns"}>
+              Forward DNS
+            </option>
+          </select>
+        </div>
+
+        <!-- Target Tunnel (when route_tunnel) -->
+        <%= if @custom_rule_action == "route_tunnel" do %>
+          <div class="w-full lg:w-64">
+            <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
+              Target Tunnel
+            </label>
+            <select
+              name="value"
+              required
+              class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs focus:outline-none focus:border-primary cursor-pointer"
+            >
+              <%= if @vpn_pairs == [] do %>
+                <option value="">No Tunnels Available</option>
+              <% else %>
+                <%= for pair <- @vpn_pairs do %>
+                  <option value={pair.pair_id} selected={@custom_rule_value == pair.pair_id}>
+                    {format_tunnel_label(pair)}
+                  </option>
+                <% end %>
+              <% end %>
+            </select>
+          </div>
+        <% end %>
+
+        <!-- Target IP (when redirect) -->
+        <%= if @custom_rule_action == "redirect" do %>
+          <div class="w-full lg:w-48">
+            <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
+              Target IP Address
+            </label>
+            <input
+              type="text"
+              name="value"
+              value={@custom_rule_value}
+              placeholder="e.g. 192.168.1.10"
+              required
+              class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono focus:outline-none focus:border-primary"
+            />
+          </div>
+        <% end %>
+
+        <!-- Upstream DNS (when forward_dns) -->
+        <%= if @custom_rule_action == "forward_dns" do %>
+          <div class="w-full lg:w-48">
+            <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
+              DNS Server IP or URL
+            </label>
+            <input
+              type="text"
+              name="value"
+              value={@custom_rule_value}
+              placeholder="e.g. 8.8.8.8"
+              required
+              class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono focus:outline-none focus:border-primary"
+            />
+          </div>
+          <div class="w-full lg:w-48">
+            <label class="text-[10px] font-semibold uppercase text-base-content/40 block mb-1">
+              Proxy Tunnel (Optional)
+            </label>
+            <select
+              name="proxy_pair_id"
+              class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs focus:outline-none focus:border-primary cursor-pointer"
+            >
+              <option value="" selected={@custom_rule_proxy_pair_id in ["", nil]}>
+                Direct (No Proxy)
+              </option>
+              <%= for pair <- @vpn_pairs do %>
+                <option
+                  value={pair.pair_id}
+                  selected={@custom_rule_proxy_pair_id == pair.pair_id}
+                >
+                  {format_tunnel_label(pair)}
+                </option>
+              <% end %>
+            </select>
+          </div>
+        <% end %>
+
+        <!-- Submit Button -->
+        <button
+          type="submit"
+          class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer w-full lg:w-auto h-[34px] flex items-center justify-center gap-1.5"
+        >
+          <.icon name="hero-plus" class="size-4" /> Add Rule
+        </button>
+      </form>
+    </div>
+
+    <!-- Rules List Section -->
+    <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm space-y-4">
+      <!-- Toolbar: Filter Tabs & Search -->
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-base-300/50 pb-4">
+        <!-- Action Filter Tabs -->
+        <div class="flex flex-wrap gap-1.5">
+          <button
+            :for={
+              {action_id, label} <- [
+                {"all", "All Rules"},
+                {"route_tunnel", "Route Tunnel"},
+                {"block", "Blocked"},
+                {"bypass", "Bypass"},
+                {"redirect", "Redirect"},
+                {"forward_dns", "Forward DNS"}
+              ]
+            }
+            phx-click="filter_action"
+            phx-value-action={action_id}
+            class={[
+              "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider px-2.5 transition-all",
+              if(@filter_action == action_id,
+                do: "btn-primary",
+                else: "btn-outline border-base-300 text-base-content/70 hover:bg-base-200"
+              )
+            ]}
+          >
+            {label}
+          </button>
+        </div>
+
+        <!-- Search Input -->
+        <div class="w-full lg:w-64">
+          <form id="rules-search-form" phx-change="search" phx-submit="search" onsubmit="return false;">
+            <div class="relative">
+              <.icon
+                name="hero-magnifying-glass"
+                class="size-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
+              />
+              <input
+                type="text"
+                name="query"
+                value={@search_query}
+                placeholder="Search rules..."
+                class="w-full bg-base-200 border border-base-300 rounded-[6px] pl-8 pr-3 py-1 text-xs placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+              />
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Rules Table -->
+      <% filtered_rules =
+        filter_rules(@selected_profile.custom_rules, @filter_action, @search_query) %>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="border-b border-base-300 text-base-content/40 font-semibold uppercase tracking-wider">
+              <th class="pb-3 min-w-[200px]">Domain Pattern</th>
+              <th class="pb-3 min-w-[120px]">Action</th>
+              <th class="pb-3 min-w-[180px]">Target / Tunnel</th>
+              <th class="pb-3 text-right w-16">Delete</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-base-300/40 text-base-content/80 font-mono">
+            <%= if filtered_rules == [] do %>
+              <tr>
+                <td colspan="4" class="py-8 text-center text-base-content/35 font-sans italic">
+                  No domain rules found.
+                </td>
+              </tr>
+            <% else %>
+              <%= for rule <- filtered_rules do %>
+                <% action = rule["action"] || rule[:action] %>
+                <% domain = rule["domain"] || rule[:domain] %>
+                <% value = rule["value"] || rule[:value] %>
+                <% proxy_pair = rule["proxy_pair_id"] || rule[:proxy_pair_id] %>
+                <tr class="hover:bg-base-200/30 transition-colors">
+                  <td class="py-3 font-semibold text-base-content">
+                    {domain}
+                  </td>
+                  <td class="py-3">
+                    <span class={[
+                      "px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase font-sans border",
+                      case action do
+                        "route_tunnel" ->
+                          "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+
+                        "block" ->
+                          "bg-red-500/10 text-red-500 border-red-500/20"
+
+                        "bypass" ->
+                          "bg-blue-500/10 text-blue-500 border-blue-500/20"
+
+                        "redirect" ->
+                          "bg-purple-500/10 text-purple-500 border-purple-500/20"
+
+                        "forward_dns" ->
+                          "bg-orange-500/10 text-orange-500 border-orange-500/20"
+
+                        _ ->
+                          "bg-base-200 text-base-content/50 border-base-300"
+                      end
+                    ]}>
+                      <%= case action do %>
+                        <% "route_tunnel" -> %>
+                          Route Tunnel
+                        <% other -> %>
+                          {other}
+                      <% end %>
+                    </span>
+                  </td>
+                  <td class="py-3 text-base-content/75">
+                    <%= case action do %>
+                      <% "route_tunnel" -> %>
+                        <span class="text-emerald-500 font-semibold flex items-center gap-1.5">
+                          <.icon name="hero-arrows-right-left" class="size-3.5" />
+                          {value}
+                        </span>
+                      <% "redirect" -> %>
+                        <span class="text-purple-400 font-semibold">{value}</span>
+                      <% "forward_dns" -> %>
+                        <span>
+                          {value}
+                          <%= if proxy_pair do %>
+                            <span class="text-[10px] text-purple-500 font-semibold bg-purple-500/10 px-1 py-0.5 rounded ml-1">
+                              via {proxy_pair}
+                            </span>
+                          <% end %>
+                        </span>
+                      <% _ -> %>
+                        <span class="text-base-content/30">-</span>
+                    <% end %>
+                  </td>
+                  <td class="py-3 text-right">
+                    <button
+                      phx-click="delete_custom_rule"
+                      phx-value-domain={domain}
+                      data-confirm={"Delete custom rule for #{domain}?"}
+                      class="text-red-500/70 hover:text-red-500 cursor-pointer transition-colors p-1"
+                      title="Delete rule"
+                    >
+                      <.icon name="hero-trash" class="size-4" />
+                    </button>
+                  </td>
+                </tr>
+              <% end %>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  <% end %>
+</div>

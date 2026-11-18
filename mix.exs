@@ -5,7 +5,7 @@ defmodule Hermit.MixProject do
     [
       app: :hermit,
       version: "0.2.59",
-      elixir: "~> 1.20",
+      elixir: ">= 1.18.0",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),

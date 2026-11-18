@@ -433,18 +433,63 @@
                       </div>
 
                       <!-- Routing Configuration Section -->
-                      <div class="space-y-3">
+                      <div class="space-y-4">
                         <div class="text-[11px] font-semibold uppercase tracking-wider text-base-content/40 border-b border-base-300/40 pb-1">
-                          Routing & Split-Tunnel Settings
+                          Network & Routing Configuration
+                        </div>
+
+                        <!-- Routed Smart DNS Services & Domains Summary (Control D Style) -->
+                        <div class="p-3 bg-base-200/40 rounded-[8px] border border-base-300/60 space-y-2">
+                          <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/70 flex items-center gap-1.5">
+                              <.icon name="hero-sparkles" class="size-4 text-emerald-500" />
+                              Routed Smart DNS Services & Domains:
+                            </span>
+                            <div class="flex items-center gap-2">
+                              <.link
+                                navigate={~p"/dns/services"}
+                                class="text-[11px] text-emerald-500 hover:text-emerald-600 font-semibold underline"
+                              >
+                                Services
+                              </.link>
+                              <span class="text-base-content/30">•</span>
+                              <.link
+                                navigate={~p"/dns/rules"}
+                                class="text-[11px] text-emerald-500 hover:text-emerald-600 font-semibold underline"
+                              >
+                                Custom Rules
+                              </.link>
+                            </div>
+                          </div>
+
+                          <%= if @routed_summary.services == [] and @routed_summary.custom_domains == [] do %>
+                            <p class="text-[11px] text-base-content/40 italic">
+                              No services or custom domains are currently routed through this tunnel.
+                            </p>
+                          <% else %>
+                            <div class="flex flex-wrap items-center gap-1.5 pt-1">
+                              <%= for svc <- @routed_summary.services do %>
+                                <span class="px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase tracking-wider bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 flex items-center gap-1">
+                                  <.icon name={svc.icon} class="size-3" />
+                                  {svc.name}
+                                </span>
+                              <% end %>
+                              <%= for domain <- @routed_summary.custom_domains do %>
+                                <span class="px-2 py-0.5 rounded-[4px] font-mono text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                                  {domain}
+                                </span>
+                              <% end %>
+                            </div>
+                          <% end %>
                         </div>
 
                         <div>
                           <div class="flex items-center justify-between">
                             <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                              Routing Targets (Split-Tunnel):
+                              Advertised Subnets (Tailscale Subnet Router):
                             </label>
                             <span class="text-[10px] text-base-content/40 font-mono">
-                              Domains (Smart DNS) &amp; Subnets (Tailscale)
+                              CIDR Subnets (e.g. 192.168.1.0/24)
                             </span>
                           </div>
                           <input
@@ -455,13 +500,10 @@
                                 @pair.inbound_config["advertise_routes"] || ""
                             }
                             class="w-full bg-base-200 border border-base-300 text-base-content focus:border-[#3ecf8e] text-xs rounded-[4px] p-2 mt-1 font-mono"
-                            placeholder="e.g. netflix.com, *.openai.com, 192.168.1.0/24"
+                            placeholder="e.g. 192.168.1.0/24, 10.0.0.0/8"
                           />
                           <p class="text-[11px] text-base-content/40 mt-1">
-                            Tự động định tuyến: Nhập <strong>Tên miền</strong>
-                            để điều hướng qua Smart DNS &amp; SNI Proxy (chỉ cần đổi DNS, không cần bật VPN); nhập
-                            <strong>Dải IP/CIDR</strong>
-                            để định tuyến qua Tailscale Subnet Router.
+                            Nhập <strong>Dải IP/CIDR nội bộ (LAN / VPC)</strong> để quảng bá qua Tailscale Subnet Router. Cấu hình định tuyến domain và dịch vụ (Netflix, OpenAI...) đã được chuyển sang trang riêng <.link navigate={~p"/dns/services"} class="text-emerald-500 underline font-semibold">Services</.link> và <.link navigate={~p"/dns/rules"} class="text-emerald-500 underline font-semibold">Custom Rules</.link>.
                           </p>
                         </div>
                       </div>

@@ -9,6 +9,7 @@ defmodule HermitWeb.TunnelDetailLive do
   def mount(%{"id" => id}, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
+      Phoenix.PubSub.subscribe(Hermit.PubSub, "smart_routes")
       Registry.register(Hermit.Vpn.Registry, {:ui_session, self()}, :active)
       :timer.send_interval(1000, self(), :tick)
     end
@@ -412,6 +413,12 @@ defmodule HermitWeb.TunnelDetailLive do
     end
   end
 
+  @impl true
+  def handle_info({:smart_routes_updated, _all_pairs}, socket) do
+    summary = Hermit.Vpn.SniProxy.routed_summary_for_pair(socket.assigns.id)
+    {:noreply, assign(socket, routed_summary: summary)}
+  end
+
   # --- Local Formatting Helpers ---
   defp get_system_dns do
     case File.read("/etc/resolv.conf") do
@@ -467,8 +474,16 @@ defmodule HermitWeb.TunnelDetailLive do
         (is_map(pair.outbound_config) &&
            (pair.outbound_config["wg_config"] || pair.outbound_config[:wg_config]))
 
+    pair_id = Map.get(pair, :pair_id) || Map.get(pair, :id) || socket.assigns[:id]
+
+    routed_summary =
+      if is_binary(pair_id),
+        do: Hermit.Vpn.SniProxy.routed_summary_for_pair(pair_id),
+        else: %{services: [], custom_domains: []}
+
     socket
     |> assign(pair: pair)
+    |> assign(routed_summary: routed_summary)
     |> assign(use_tailscale_dns: use_tailscale_dns)
     |> assign(system_dns: get_system_dns())
     |> assign(wg_info: parse_wg_config(wg_content))

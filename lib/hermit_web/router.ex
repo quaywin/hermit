@@ -29,6 +29,8 @@ defmodule HermitWeb.Router do
     live "/tunnels/:id", TunnelDetailLive
     live "/inbounds/:id", InboundDetailLive
     live "/dns", DnsProfileLive
+    live "/dns/services", DnsServicesLive
+    live "/dns/rules", DnsRulesLive
     live "/dns/blocklists", BlocklistLive
     live "/settings", SystemLive
   end

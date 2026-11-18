@@ -17,7 +17,7 @@ defmodule Hermit.Vpn.Outbound.Local do
       true ->
         Logger.info("Creating local netns: #{wg_name}")
 
-        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
+        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true"]
         netns_dns_dir = "/etc/netns/#{wg_name}"
 
         result =

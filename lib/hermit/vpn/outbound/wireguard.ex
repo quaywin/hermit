@@ -59,7 +59,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         dns_servers = parse_dns_servers(config_content, config)
         mtu = parse_mtu(config_content)
 
-        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true", nil]
+        block_ipv6 = Map.get(config, "block_ipv6") in [true, "true"]
 
         # Create unique interface names on the host (max 15 chars)
         unique_suffix =

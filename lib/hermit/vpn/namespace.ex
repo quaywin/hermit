@@ -155,7 +155,7 @@ defmodule Hermit.Vpn.Namespace do
     endpoint_int =
       if is_binary(endpoint_id), do: String.to_integer(endpoint_id), else: endpoint_id
 
-    octet = div(endpoint_int, 250) |> rem(250)
+    octet = (max(endpoint_int, 1) - 1) |> rem(250)
 
     if mock?() do
       Logger.info("Mock: Created endpoint namespace #{ns}")

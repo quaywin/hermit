@@ -147,7 +147,7 @@ defmodule Hermit.Dns.Server do
   end
 
   defp do_try_bind_socket(%{profile_id: profile_id, port: port} = state) do
-    octet = div(profile_id, 250) |> rem(250)
+    octet = (max(profile_id, 1) - 1) |> rem(250)
 
     udp_opts =
       if mock?() do

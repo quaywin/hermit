@@ -301,34 +301,43 @@ defmodule Hermit.Application do
   end
 
   def setup_iptables_host do
+    interfaces = ["dns_h+", "loc+", "vh+", "wg+"]
+
     if System.find_executable("iptables") do
       try do
-        interfaces = ["dns_h+", "loc+", "vh+", "wg+"]
-
         Enum.each(interfaces, fn iface ->
-          ensure_iptables_rule(["INPUT", "-i", iface, "-j", "ACCEPT"])
-          ensure_iptables_rule(["FORWARD", "-i", iface, "-j", "ACCEPT"])
-          ensure_iptables_rule(["FORWARD", "-o", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule("iptables", ["INPUT", "-i", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule("iptables", ["FORWARD", "-i", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule("iptables", ["FORWARD", "-o", iface, "-j", "ACCEPT"])
         end)
-
-        :ok
       rescue
         e ->
           IO.inspect(e, label: "Warning: Failed to setup iptables host rules")
-          {:error, e}
       end
-    else
-      :ok
     end
+
+    if System.find_executable("ip6tables") do
+      try do
+        Enum.each(interfaces, fn iface ->
+          ensure_iptables_rule("ip6tables", ["INPUT", "-i", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule("ip6tables", ["FORWARD", "-i", iface, "-j", "ACCEPT"])
+          ensure_iptables_rule("ip6tables", ["FORWARD", "-o", iface, "-j", "ACCEPT"])
+        end)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    :ok
   end
 
-  defp ensure_iptables_rule([chain | rest]) do
-    case System.cmd("iptables", ["-C", chain | rest], stderr_to_stdout: true) do
+  defp ensure_iptables_rule(binary, [chain | rest]) do
+    case System.cmd(binary, ["-C", chain | rest], stderr_to_stdout: true) do
       {_, 0} ->
         :ok
 
       _ ->
-        System.cmd("iptables", ["-I", chain, "1" | rest], stderr_to_stdout: true)
+        System.cmd(binary, ["-I", chain, "1" | rest], stderr_to_stdout: true)
         :ok
     end
   end

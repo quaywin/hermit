@@ -139,7 +139,9 @@ defmodule Hermit.Vpn.DnsWorker do
           {:noreply, new_state}
 
         {:error, reason} ->
-          {:noreply, %{state | status: :error, error_reason: inspect(reason)}}
+          new_state = %{state | status: :error, error_reason: inspect(reason)}
+          maybe_schedule_recovery(new_state)
+          {:noreply, new_state}
       end
     else
       # If status is not :starting (e.g. stopped while bootstrap was in progress), clean up
@@ -151,6 +153,19 @@ defmodule Hermit.Vpn.DnsWorker do
         {:error, _reason} ->
           {:noreply, state}
       end
+    end
+  end
+
+  @impl true
+  def handle_info(:retry_start_dns_node, state) do
+    endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, state.endpoint_id)
+
+    if endpoint && endpoint.enabled and state.status in [:error, :stopped] do
+      Logger.info("Attempting auto-recovery for DNS node (endpoint #{state.endpoint_id})...")
+      {_res, new_state} = do_sync_state(state)
+      {:noreply, new_state}
+    else
+      {:noreply, state}
     end
   end
 
@@ -171,8 +186,9 @@ defmodule Hermit.Vpn.DnsWorker do
     if port == state.ts_port do
       Logger.error("DNS Tailscale daemon process exited: #{inspect(reason)}")
 
-      {:noreply,
-       %{state | status: :error, error_reason: "Daemon exited: #{inspect(reason)}", ts_port: nil}}
+      new_state = %{state | status: :error, error_reason: "Daemon exited: #{inspect(reason)}", ts_port: nil}
+      maybe_schedule_recovery(new_state)
+      {:noreply, new_state}
     else
       {:noreply, state}
     end
@@ -269,6 +285,15 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
+  defp maybe_schedule_recovery(state) do
+    endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, state.endpoint_id)
+
+    if endpoint && endpoint.enabled and not mock?() do
+      Logger.info("Scheduling DNS node recovery for endpoint #{state.endpoint_id} in 5 seconds...")
+      Process.send_after(self(), :retry_start_dns_node, 5000)
+    end
+  end
+
   defp get_dns_credentials(profile) do
     profile_config = (profile && profile.config) || %{}
 
@@ -356,7 +381,7 @@ defmodule Hermit.Vpn.DnsWorker do
     ns = "hermit_dns_endpoint_#{endpoint_id}"
     host_if = "dns_h_#{endpoint_id}"
     table_id = 1000 + endpoint_id
-    octet = div(endpoint_id, 250) |> rem(250)
+    octet = (max(endpoint_id, 1) - 1) |> rem(250)
     host_ip = "10.251.#{octet}.1"
     subnet = "10.251.#{octet}.0/30"
     port = 5400 + endpoint_id
@@ -795,7 +820,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp cleanup_namespace(endpoint_id) do
     table_id = 1000 + endpoint_id
-    octet = div(endpoint_id, 250) |> rem(250)
+    octet = (max(endpoint_id, 1) - 1) |> rem(250)
     host_ip = "10.251.#{octet}.1"
 
     try do

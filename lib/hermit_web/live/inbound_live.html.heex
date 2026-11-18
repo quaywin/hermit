@@ -200,36 +200,47 @@
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>
-                <div class="space-y-1.5">
-                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Login Server (Optional, Headscale)</label>
-                  <input
-                    type="text"
-                    name="inbound_profile[config][login_server]"
-                    value={Phoenix.HTML.Form.input_value(f, :config)["login_server"]}
-                    placeholder="e.g., https://controlplane.tailscale.com"
-                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
-                  />
-                </div>
-                <div class="space-y-1.5">
-                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Port Range (Optional, default: 41642-41700)</label>
-                  <input
-                    type="text"
-                    name="inbound_profile[config][ts_port_range]"
-                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_port_range"]}
-                    placeholder="e.g., 41642-41700"
-                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
-                  />
-                </div>
-                <div class="space-y-1.5">
-                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Fixed Port (Optional)</label>
-                  <input
-                    type="number"
-                    name="inbound_profile[config][ts_port]"
-                    value={Phoenix.HTML.Form.input_value(f, :config)["ts_port"]}
-                    placeholder="e.g., 41645"
-                    class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
-                  />
-                </div>
+                <details class="group border border-base-300 rounded-[6px] bg-base-100/60 transition-colors">
+                  <summary class="flex items-center justify-between p-3 text-xs font-semibold cursor-pointer text-base-content/70 hover:text-base-content select-none">
+                    <span class="flex items-center gap-1.5">
+                      <.icon name="hero-adjustments-vertical" class="size-3.5" />
+                      Advanced Network Settings (Port & Headscale)
+                    </span>
+                    <.icon name="hero-chevron-down" class="size-3.5 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div class="p-3 pt-1 space-y-3 border-t border-base-300/60">
+                    <div class="space-y-1.5">
+                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Login Server (Optional, Headscale)</label>
+                      <input
+                        type="text"
+                        name="inbound_profile[config][login_server]"
+                        value={Phoenix.HTML.Form.input_value(f, :config)["login_server"]}
+                        placeholder="e.g., https://controlplane.tailscale.com"
+                        class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                      />
+                    </div>
+                    <div class="space-y-1.5">
+                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Port Range (Optional, default: 41642-41700)</label>
+                      <input
+                        type="text"
+                        name="inbound_profile[config][ts_port_range]"
+                        value={Phoenix.HTML.Form.input_value(f, :config)["ts_port_range"]}
+                        placeholder="e.g., 41642-41700"
+                        class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                      />
+                    </div>
+                    <div class="space-y-1.5">
+                      <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Fixed Port (Optional)</label>
+                      <input
+                        type="number"
+                        name="inbound_profile[config][ts_port]"
+                        value={Phoenix.HTML.Form.input_value(f, :config)["ts_port"]}
+                        placeholder="e.g., 41645"
+                        class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
+                      />
+                    </div>
+                  </div>
+                </details>
               </div>
             <% "proxy" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">

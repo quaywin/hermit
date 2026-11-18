@@ -48,52 +48,72 @@ defmodule HermitWeb.Layouts do
           </div>
 
           <!-- Navigation Links -->
-          <nav class="p-4 space-y-1">
-            <.sidebar_link navigate={~p"/"} active={@active == :tunnels} icon="hero-server-stack">
-              Tunnels
-            </.sidebar_link>
-            <.sidebar_link
-              navigate={~p"/dns/endpoints"}
-              active={@active == :dns_endpoints}
-              icon="hero-adjustments-horizontal"
-            >
-              Endpoints
-            </.sidebar_link>
-            <.sidebar_link
-              navigate={~p"/inbounds"}
-              active={@active == :inbounds}
-              icon="hero-arrow-down-left"
-            >
-              Inbound Profiles
-            </.sidebar_link>
-            <.sidebar_link
-              navigate={~p"/outbounds"}
-              active={@active == :outbounds}
-              icon="hero-arrow-up-right"
-            >
-              Outbound Profiles
-            </.sidebar_link>
-            <.sidebar_link
-              navigate={~p"/dns"}
-              active={@active == :dns_profiles}
-              icon="hero-globe-alt"
-            >
-              DNS Profiles
-            </.sidebar_link>
-            <.sidebar_link
-              navigate={~p"/dns/blocklists"}
-              active={@active == :dns_blocklists}
-              icon="hero-shield-check"
-            >
-              Filters
-            </.sidebar_link>
-            <.sidebar_link
-              navigate={~p"/settings"}
-              active={@active == :settings}
-              icon="hero-cog-6-tooth"
-            >
-              Settings
-            </.sidebar_link>
+          <nav class="p-4 space-y-4">
+            <!-- Group 1: Routing & VPN -->
+            <div class="space-y-1">
+              <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+                Routing & VPN
+              </div>
+              <.sidebar_link navigate={~p"/"} active={@active == :dashboard} icon="hero-squares-2x2">
+                Dashboard
+              </.sidebar_link>
+              <.sidebar_link
+                navigate={~p"/inbounds"}
+                active={@active == :inbounds}
+                icon="hero-arrow-down-left"
+              >
+                Inbound Profiles
+              </.sidebar_link>
+              <.sidebar_link
+                navigate={~p"/outbounds"}
+                active={@active == :outbounds}
+                icon="hero-arrow-up-right"
+              >
+                Outbound Profiles
+              </.sidebar_link>
+            </div>
+
+            <!-- Group 2: DNS Protection -->
+            <div class="space-y-1">
+              <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+                DNS Protection
+              </div>
+              <.sidebar_link
+                navigate={~p"/dns/endpoints"}
+                active={@active == :dns_endpoints}
+                icon="hero-adjustments-horizontal"
+              >
+                Endpoints
+              </.sidebar_link>
+              <.sidebar_link
+                navigate={~p"/dns"}
+                active={@active == :dns_profiles}
+                icon="hero-globe-alt"
+              >
+                DNS Profiles
+              </.sidebar_link>
+              <.sidebar_link
+                navigate={~p"/dns/blocklists"}
+                active={@active == :dns_blocklists}
+                icon="hero-shield-check"
+              >
+                Filters
+              </.sidebar_link>
+            </div>
+
+            <!-- Group 3: System -->
+            <div class="space-y-1">
+              <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+                Configuration
+              </div>
+              <.sidebar_link
+                navigate={~p"/settings"}
+                active={@active == :settings}
+                icon="hero-cog-6-tooth"
+              >
+                Settings
+              </.sidebar_link>
+            </div>
           </nav>
         </div>
 
@@ -143,10 +163,10 @@ defmodule HermitWeb.Layouts do
             <nav class="flex items-center gap-4 flex-1 justify-end py-1">
               <.link
                 navigate={~p"/"}
-                class={if @active == :tunnels, do: "text-emerald-500", else: "text-base-content/60"}
-                title="Tunnels"
+                class={if @active == :dashboard, do: "text-emerald-500", else: "text-base-content/60"}
+                title="Dashboard"
               >
-                <.icon name="hero-server-stack" class="size-5 shrink-0" />
+                <.icon name="hero-squares-2x2" class="size-5 shrink-0" />
               </.link>
               <.link
                 navigate={~p"/dns/endpoints"}
@@ -249,12 +269,12 @@ defmodule HermitWeb.Layouts do
   defp active_route(assigns) do
     case assigns[:socket] do
       nil ->
-        :tunnels
+        :dashboard
 
       socket ->
         case socket.view do
-          HermitWeb.DashboardLive -> :tunnels
-          HermitWeb.TunnelDetailLive -> :tunnels
+          HermitWeb.DashboardLive -> :dashboard
+          HermitWeb.TunnelDetailLive -> :dashboard
           HermitWeb.DnsEndpointLive -> :dns_endpoints
           HermitWeb.InboundLive -> :inbounds
           HermitWeb.InboundDetailLive -> :inbounds
@@ -262,7 +282,7 @@ defmodule HermitWeb.Layouts do
           HermitWeb.DnsProfileLive -> :dns_profiles
           HermitWeb.BlocklistLive -> :dns_blocklists
           HermitWeb.SystemLive -> :settings
-          _ -> :tunnels
+          _ -> :dashboard
         end
     end
   end

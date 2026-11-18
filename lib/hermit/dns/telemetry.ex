@@ -26,6 +26,75 @@ defmodule Hermit.Dns.Telemetry do
     GenServer.cast(__MODULE__, :restore_metrics)
   end
 
+  @doc """
+  Returns a 24-hour summary of DNS metrics (total queries, blocked queries, block rate, and hourly series).
+  Fast and memory-efficient: reads directly from the RAM ETS metrics table with SQLite fallback.
+  """
+  def get_24h_summary do
+    now = System.system_time(:second)
+    current_hour = div(now, 3600) * 3600
+    cutoff = current_hour - 23 * 3600
+
+    ets_stats =
+      if :ets.info(@dns_metrics_table) != :undefined do
+        :ets.tab2list(@dns_metrics_table)
+        |> Enum.reduce(%{}, fn
+          {{config_id, hour_ts}, total, blocked, _ipv6, _adg, _goodbye, _adult, _custom}, acc
+          when is_integer(config_id) and hour_ts >= cutoff ->
+            Map.update(acc, hour_ts, {total, blocked}, fn {cur_tot, cur_blk} ->
+              {cur_tot + total, cur_blk + blocked}
+            end)
+
+          _, acc ->
+            acc
+        end)
+      else
+        %{}
+      end
+
+    stats_map =
+      if map_size(ets_stats) > 0 do
+        ets_stats
+      else
+        try do
+          from(s in HourlyStat,
+            where: s.hour_timestamp >= ^cutoff,
+            select: {s.hour_timestamp, s.total_queries, s.blocked_queries}
+          )
+          |> Repo.all()
+          |> Enum.reduce(%{}, fn {hour_ts, total, blocked}, acc ->
+            Map.update(acc, hour_ts, {total, blocked}, fn {cur_tot, cur_blk} ->
+              {cur_tot + total, cur_blk + blocked}
+            end)
+          end)
+        rescue
+          _ -> %{}
+        catch
+          _, _ -> %{}
+        end
+      end
+
+    hourly_series =
+      for i <- 23..0//-1 do
+        hour_ts = current_hour - i * 3600
+        {tot, blk} = Map.get(stats_map, hour_ts, {0, 0})
+        dt = DateTime.from_unix!(hour_ts)
+        label = Calendar.strftime(dt, "%H:00")
+        %{hour_label: label, hour_ts: hour_ts, total: tot, blocked: blk}
+      end
+
+    total_queries = Enum.reduce(hourly_series, 0, fn h, acc -> acc + h.total end)
+    blocked_queries = Enum.reduce(hourly_series, 0, fn h, acc -> acc + h.blocked end)
+    block_rate = if total_queries > 0, do: round((blocked_queries / total_queries) * 100), else: 0
+
+    %{
+      total_queries: total_queries,
+      blocked_queries: blocked_queries,
+      block_rate: block_rate,
+      hourly_series: hourly_series
+    }
+  end
+
   # --- GenServer Callbacks ---
 
   @impl true

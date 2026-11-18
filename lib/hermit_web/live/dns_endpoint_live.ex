@@ -36,6 +36,9 @@ defmodule HermitWeb.DnsEndpointLive do
      |> assign(edit_connection_type: "doh")
      |> assign(show_new_modal: false)
      |> assign(show_edit_modal: false)
+     |> assign(show_guide_modal: false)
+     |> assign(guide_endpoint: nil)
+     |> assign(guide_tab: "android")
      |> assign(ddns_map: Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map())
      # Lưu trữ status của các Tailscale Node
      |> assign(dns_statuses: %{})
@@ -89,6 +92,23 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("close_new_modal", _params, socket) do
     {:noreply, assign(socket, show_new_modal: false)}
+  end
+
+  @impl true
+  def handle_event("open_guide_modal", %{"id" => id_str}, socket) do
+    id = String.to_integer(id_str)
+    endpoint = Enum.find(socket.assigns.endpoints, &(&1.id == id))
+    {:noreply, assign(socket, show_guide_modal: true, guide_endpoint: endpoint, guide_tab: "android")}
+  end
+
+  @impl true
+  def handle_event("close_guide_modal", _params, socket) do
+    {:noreply, assign(socket, show_guide_modal: false, guide_endpoint: nil)}
+  end
+
+  @impl true
+  def handle_event("switch_guide_tab", %{"tab" => tab}, socket) do
+    {:noreply, assign(socket, guide_tab: tab)}
   end
 
   @impl true

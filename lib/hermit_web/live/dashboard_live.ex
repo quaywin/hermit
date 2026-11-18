@@ -1,5 +1,6 @@
 defmodule HermitWeb.DashboardLive do
   use HermitWeb, :live_view
+  import Ecto.Query
   alias Hermit.Vpn.Form
   alias Hermit.Vpn.PairWorker
   alias Hermit.Vpn.DynamicSupervisor
@@ -11,6 +12,7 @@ defmodule HermitWeb.DashboardLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Hermit.PubSub, @topic)
       Registry.register(Hermit.Vpn.Registry, {:ui_session, self()}, :active)
+      :timer.send_interval(5000, self(), :refresh_metrics)
     end
 
     pairs = PairWorker.list_pairs()
@@ -18,12 +20,21 @@ defmodule HermitWeb.DashboardLive do
     inbound_profiles = Hermit.Repo.all(Hermit.Vpn.InboundProfile)
     outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
 
+    total_endpoints = Hermit.Repo.aggregate(Hermit.Vpn.DnsEndpoint, :count) || 0
+    active_endpoints = Hermit.Repo.aggregate(from(e in Hermit.Vpn.DnsEndpoint, where: e.enabled == true), :count) || 0
+    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+    dns_summary = Hermit.Dns.Telemetry.get_24h_summary()
+
     {:ok,
      socket
      |> stream(:vpn_pairs, pairs)
      |> assign(error_tunnels: error_tunnels)
      |> assign(inbound_profiles: inbound_profiles)
      |> assign(outbound_profiles: outbound_profiles)
+     |> assign(total_endpoints: total_endpoints)
+     |> assign(active_endpoints: active_endpoints)
+     |> assign(active_tunnels: active_tunnels)
+     |> assign(dns_summary: dns_summary)
      |> assign(show_create_modal: false)
      |> assign_form()}
   end
@@ -179,6 +190,23 @@ defmodule HermitWeb.DashboardLive do
     end
   end
 
+  @impl true
+  def handle_info(:refresh_metrics, socket) do
+    dns_summary = Hermit.Dns.Telemetry.get_24h_summary()
+    total_endpoints = Hermit.Repo.aggregate(Hermit.Vpn.DnsEndpoint, :count) || 0
+    active_endpoints = Hermit.Repo.aggregate(from(e in Hermit.Vpn.DnsEndpoint, where: e.enabled == true), :count) || 0
+
+    pairs = PairWorker.list_pairs()
+    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
+    {:noreply,
+     socket
+     |> assign(dns_summary: dns_summary)
+     |> assign(total_endpoints: total_endpoints)
+     |> assign(active_endpoints: active_endpoints)
+     |> assign(active_tunnels: active_tunnels)}
+  end
+
   # --- PubSub Handling ---
 
   @impl true
@@ -229,6 +257,8 @@ defmodule HermitWeb.DashboardLive do
   end
 
   def summarize_error(reason), do: inspect(reason) |> String.slice(0, 45)
+
+  def format_number(n), do: Hermit.format_number(n)
 
   defp assign_form(socket) do
     changeset = Form.changeset(%Form{}, %{})

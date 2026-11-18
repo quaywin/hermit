@@ -39,4 +39,24 @@ defmodule Hermit do
   end
 
   def format_bytes(_), do: "0 B"
+
+  @doc """
+  Formats an integer with comma separators (e.g., 1,234,567).
+  """
+  def format_number(nil), do: "0"
+
+  def format_number(num) when is_integer(num) and num < 0 do
+    "-" <> format_number(-num)
+  end
+
+  def format_number(num) when is_integer(num) do
+    num
+    |> Integer.to_charlist()
+    |> Enum.reverse()
+    |> Enum.chunk_every(3)
+    |> Enum.join(",")
+    |> String.reverse()
+  end
+
+  def format_number(num), do: to_string(num)
 end

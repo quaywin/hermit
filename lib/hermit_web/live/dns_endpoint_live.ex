@@ -96,9 +96,17 @@ defmodule HermitWeb.DnsEndpointLive do
 
   @impl true
   def handle_event("open_guide_modal", %{"id" => id_str}, socket) do
-    id = String.to_integer(id_str)
-    endpoint = Enum.find(socket.assigns.endpoints, &(&1.id == id))
-    {:noreply, assign(socket, show_guide_modal: true, guide_endpoint: endpoint, guide_tab: "android")}
+    endpoint =
+      case Integer.parse(to_string(id_str)) do
+        {id, ""} -> Enum.find(socket.assigns.endpoints, &(&1.id == id))
+        _ -> nil
+      end
+
+    if endpoint do
+      {:noreply, assign(socket, show_guide_modal: true, guide_endpoint: endpoint, guide_tab: "android")}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true

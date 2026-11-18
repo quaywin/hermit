@@ -39,8 +39,8 @@ defmodule Hermit.Dns.Telemetry do
       if :ets.info(@dns_metrics_table) != :undefined do
         :ets.tab2list(@dns_metrics_table)
         |> Enum.reduce(%{}, fn
-          {{config_id, hour_ts}, total, blocked, _ipv6, _adg, _goodbye, _adult, _custom}, acc
-          when is_integer(config_id) and hour_ts >= cutoff ->
+          {{_config_id, hour_ts}, total, blocked, _ipv6, _adg, _goodbye, _adult, _custom}, acc
+          when hour_ts >= cutoff ->
             Map.update(acc, hour_ts, {total, blocked}, fn {cur_tot, cur_blk} ->
               {cur_tot + total, cur_blk + blocked}
             end)

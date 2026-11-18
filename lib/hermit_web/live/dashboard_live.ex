@@ -192,19 +192,7 @@ defmodule HermitWeb.DashboardLive do
 
   @impl true
   def handle_info(:refresh_metrics, socket) do
-    dns_summary = Hermit.Dns.Telemetry.get_24h_summary()
-    total_endpoints = Hermit.Repo.aggregate(Hermit.Vpn.DnsEndpoint, :count) || 0
-    active_endpoints = Hermit.Repo.aggregate(from(e in Hermit.Vpn.DnsEndpoint, where: e.enabled == true), :count) || 0
-
-    pairs = PairWorker.list_pairs()
-    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
-
-    {:noreply,
-     socket
-     |> assign(dns_summary: dns_summary)
-     |> assign(total_endpoints: total_endpoints)
-     |> assign(active_endpoints: active_endpoints)
-     |> assign(active_tunnels: active_tunnels)}
+    {:noreply, assign(socket, dns_summary: Hermit.Dns.Telemetry.get_24h_summary())}
   end
 
   # --- PubSub Handling ---
@@ -224,9 +212,13 @@ defmodule HermitWeb.DashboardLive do
         end
       end)
 
+    pairs = PairWorker.list_pairs()
+    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
     {:noreply,
      socket
      |> assign(error_tunnels: updated_errors)
+     |> assign(active_tunnels: active_tunnels)
      |> stream_insert(:vpn_pairs, state)}
   end
 
@@ -235,9 +227,13 @@ defmodule HermitWeb.DashboardLive do
     current_errors = socket.assigns[:error_tunnels] || []
     updated_errors = Enum.reject(current_errors, &(&1.id == id))
 
+    pairs = PairWorker.list_pairs()
+    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
     {:noreply,
      socket
      |> assign(error_tunnels: updated_errors)
+     |> assign(active_tunnels: active_tunnels)
      |> stream_delete(:vpn_pairs, %{id: id})}
   end
 

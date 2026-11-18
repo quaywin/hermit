@@ -3,6 +3,8 @@ defmodule Hermit.Vpn.SniProxyTest do
   alias Hermit.Vpn.SniProxy
 
   setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Hermit.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Hermit.Repo, {:shared, self()})
     SniProxy.init_table()
     # Clean up before each test
     :ets.delete_all_objects(:hermit_smart_routes)
@@ -48,6 +50,48 @@ defmodule Hermit.Vpn.SniProxyTest do
       assert SniProxy.match("netflix.com") == {:ok, "test_pair"}
       assert SniProxy.match("NETFLIX.COM") == {:ok, "test_pair"}
       assert SniProxy.match("API.OPENAI.COM") == {:ok, "test_pair"}
+    end
+
+    test "all_routes filters out cache entries and returns only registered domains" do
+      SniProxy.register_routes("test_pair", ["example.com"])
+      # Manually insert an internal cache entry
+      :ets.insert(:hermit_smart_routes, {{:__cache__, :internal_ips}, MapSet.new(), 999_999_999})
+      :ets.insert(:hermit_smart_routes, {{:ports, "test_pair"}, 1080})
+
+      routes = SniProxy.all_routes()
+      assert {"example.com", "test_pair"} in routes
+      # Ensure no internal cache tuples leaked
+      for {k, v} <- routes do
+        assert is_binary(k)
+        assert is_binary(v)
+      end
+    end
+  end
+
+  describe "IpResolver caching and loop prevention" do
+    alias Hermit.Vpn.SniProxy.IpResolver
+
+    test "identifies netns veth IPs as internal" do
+      assert IpResolver.internal_ip?({10, 200, 1, 2})
+      assert IpResolver.internal_ip?("10.200.1.2")
+      refute IpResolver.internal_ip?("8.8.8.8")
+      refute IpResolver.internal_ip?({8, 8, 8, 8})
+    end
+
+    test "caches internal IP resolution in ETS table" do
+      IpResolver.clear_cache()
+      # Trigger lookup which warms cache
+      _ = IpResolver.internal_ip?({192, 168, 1, 100})
+
+      # Assert cache entry exists in ETS
+      assert [{{:__cache__, :internal_ips}, set, _exp}] =
+               :ets.lookup(:hermit_smart_routes, {:__cache__, :internal_ips})
+
+      assert is_struct(set, MapSet)
+
+      # Calling clear_cache invalidates it
+      IpResolver.clear_cache()
+      assert [] = :ets.lookup(:hermit_smart_routes, {:__cache__, :internal_ips})
     end
   end
 end

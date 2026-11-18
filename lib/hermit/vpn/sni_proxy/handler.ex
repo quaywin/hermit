@@ -98,7 +98,18 @@ defmodule Hermit.Vpn.SniProxy.Handler do
   end
 
   defp connect_and_relay(client_socket, host, target_port, initial_packet, socks5_port, pair_id) do
-    connect_opts = [:binary, packet: :raw, active: false, nodelay: true]
+    connect_opts = [
+      :binary,
+      packet: :raw,
+      active: false,
+      nodelay: true,
+      buffer: 65_536,
+      recbuf: 65_536,
+      sndbuf: 65_536,
+      keepalive: true,
+      send_timeout: 10_000,
+      send_timeout_close: true
+    ]
 
     case :gen_tcp.connect({127, 0, 0, 1}, socks5_port, connect_opts, 5000) do
       {:ok, target_socket} ->
@@ -107,8 +118,19 @@ defmodule Hermit.Vpn.SniProxy.Handler do
             # Send initial packet (ClientHello or HTTP request) to target
             case :gen_tcp.send(target_socket, initial_packet) do
               :ok ->
-                # Start bi-directional streaming loop
-                :inet.setopts(client_socket, active: :once)
+                # Configure client socket buffer and start bi-directional streaming loop
+                :inet.setopts(
+                  client_socket,
+                  buffer: 65_536,
+                  recbuf: 65_536,
+                  sndbuf: 65_536,
+                  nodelay: true,
+                  keepalive: true,
+                  send_timeout: 10_000,
+                  send_timeout_close: true,
+                  active: :once
+                )
+
                 :inet.setopts(target_socket, active: :once)
                 relay_loop(client_socket, target_socket)
 

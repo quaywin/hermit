@@ -46,6 +46,7 @@ defmodule Hermit.Vpn.SniProxy do
       end
     end)
 
+    Hermit.Vpn.SniProxy.IpResolver.clear_cache()
     :ok
   end
 
@@ -62,6 +63,8 @@ defmodule Hermit.Vpn.SniProxy do
       ])
 
     Enum.each(matches, &:ets.delete(@table, &1))
+    :ets.delete(@table, {:ports, pair_id})
+    Hermit.Vpn.SniProxy.IpResolver.clear_cache()
     :ok
   end
 
@@ -112,7 +115,12 @@ defmodule Hermit.Vpn.SniProxy do
   @spec all_routes() :: [{String.t(), String.t()}]
   def all_routes do
     init_table()
+
     :ets.tab2list(@table)
+    |> Enum.filter(fn
+      {domain, pair_id} when is_binary(domain) and is_binary(pair_id) -> true
+      _ -> false
+    end)
   end
 
   @doc """
@@ -120,18 +128,29 @@ defmodule Hermit.Vpn.SniProxy do
   """
   @spec get_socks5_port(String.t()) :: {:ok, pos_integer()} | {:error, term()}
   def get_socks5_port(pair_id) when is_binary(pair_id) do
-    # 1. Check :dns_proxy_cache ETS table first
-    case :ets.info(:dns_proxy_cache) do
-      :undefined ->
-        read_socks5_port_from_file(pair_id)
+    init_table()
+
+    # 1. Check local @table cache first
+    case :ets.lookup(@table, {:ports, pair_id}) do
+      [{{:ports, ^pair_id}, socks5_port}] when is_integer(socks5_port) and socks5_port > 0 ->
+        {:ok, socks5_port}
 
       _ ->
-        case :ets.lookup(:dns_proxy_cache, {:ports, pair_id}) do
-          [{_, {_http_port, socks5_port}}] when is_integer(socks5_port) and socks5_port > 0 ->
-            {:ok, socks5_port}
+        # 2. Check :dns_proxy_cache ETS table
+        case :ets.info(:dns_proxy_cache) do
+          :undefined ->
+            read_socks5_port_from_file(pair_id)
 
           _ ->
-            read_socks5_port_from_file(pair_id)
+            case :ets.lookup(:dns_proxy_cache, {:ports, pair_id}) do
+              [{_, {_http_port, socks5_port}}]
+              when is_integer(socks5_port) and socks5_port > 0 ->
+                :ets.insert(@table, {{:ports, pair_id}, socks5_port})
+                {:ok, socks5_port}
+
+              _ ->
+                read_socks5_port_from_file(pair_id)
+            end
         end
     end
   end
@@ -146,7 +165,16 @@ defmodule Hermit.Vpn.SniProxy do
     case File.read(info_path) do
       {:ok, content} ->
         case Jason.decode(content) do
-          {:ok, %{"socks5_port" => port}} when is_integer(port) and port > 0 ->
+          {:ok, %{"socks5_port" => port} = data} when is_integer(port) and port > 0 ->
+            http_port = Map.get(data, "http_port")
+
+            # Cache in both tables for zero disk reads on future connections
+            :ets.insert(@table, {{:ports, pair_id}, port})
+
+            if :ets.info(:dns_proxy_cache) != :undefined do
+              :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, port}})
+            end
+
             {:ok, port}
 
           _ ->

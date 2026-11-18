@@ -4,13 +4,16 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   for Smart Routed domains, depending on the client's network.
   """
 
+  @cache_ttl_ms 5_000
+  @routes_table :hermit_smart_routes
+
   @doc """
   Determines the best IP to return to the client for Smart DNS.
   """
   @spec resolve_ip(tuple() | String.t() | nil) :: String.t()
   def resolve_ip(client_ip) do
     # 1. Check explicit setting or env override
-    case get_override_ip() do
+    case get_cached_override_ip() do
       {:ok, ip_str} ->
         ip_str
 
@@ -30,11 +33,28 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
         true
 
       parsed when is_tuple(parsed) ->
-        parsed in get_ipv4_interfaces() or parsed in get_all_node_ips()
+        internal_set = get_cached_internal_ips()
+        MapSet.member?(internal_set, parsed)
 
       _ ->
         false
     end
+  end
+
+  @doc """
+  Clears in-memory ETS caches for IP resolution.
+  """
+  @spec clear_cache() :: :ok
+  def clear_cache do
+    if :ets.info(@routes_table) != :undefined do
+      :ets.delete(@routes_table, {:__cache__, :internal_ips})
+      :ets.delete(@routes_table, {:__cache__, :override_ip})
+      :ets.delete(@routes_table, {:__cache__, :interfaces})
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   @doc """
@@ -58,7 +78,79 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
       end
     rescue
       _ -> []
+    catch
+      :exit, _ -> []
+      _kind, _reason -> []
     end
+  end
+
+  defp get_cached_internal_ips do
+    now = System.monotonic_time(:millisecond)
+
+    case lookup_cache(:internal_ips, now) do
+      {:ok, set} ->
+        set
+
+      :miss ->
+        set =
+          (get_cached_ipv4_interfaces(now) ++ get_all_node_ips())
+          |> MapSet.new()
+
+        store_cache(:internal_ips, set, now + @cache_ttl_ms)
+        set
+    end
+  end
+
+  defp get_cached_override_ip do
+    now = System.monotonic_time(:millisecond)
+
+    case lookup_cache(:override_ip, now) do
+      {:ok, val} ->
+        val
+
+      :miss ->
+        val = get_override_ip()
+        store_cache(:override_ip, val, now + @cache_ttl_ms)
+        val
+    end
+  end
+
+  defp get_cached_ipv4_interfaces(now \\ System.monotonic_time(:millisecond)) do
+    case lookup_cache(:interfaces, now) do
+      {:ok, ifaces} ->
+        ifaces
+
+      :miss ->
+        ifaces = get_ipv4_interfaces()
+        store_cache(:interfaces, ifaces, now + @cache_ttl_ms)
+        ifaces
+    end
+  end
+
+  defp lookup_cache(key, now) do
+    case :ets.info(@routes_table) do
+      :undefined ->
+        :miss
+
+      _ ->
+        case :ets.lookup(@routes_table, {:__cache__, key}) do
+          [{{:__cache__, ^key}, val, expires_at}] when expires_at > now ->
+            {:ok, val}
+
+          _ ->
+            :miss
+        end
+    end
+  rescue
+    _ -> :miss
+  end
+
+  defp store_cache(key, val, expires_at) do
+    if :ets.info(@routes_table) != :undefined do
+      :ets.insert(@routes_table, {{:__cache__, key}, val, expires_at})
+    end
+  rescue
+    _ -> :ok
   end
 
   defp get_override_ip do
@@ -88,7 +180,7 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
 
   defp auto_detect_ip(client_ip) do
     parsed_client = parse_ip(client_ip)
-    all_ifaces = get_ipv4_interfaces()
+    all_ifaces = get_cached_ipv4_interfaces()
 
     cond do
       # If client is connecting from Tailscale (100.64.0.0/10)

@@ -140,8 +140,20 @@ defmodule Hermit.Vpn.SniProxy.Handler do
                 :ok
             end
 
+          {:error, {:socks5_rep_error, rep}} ->
+            # Network unreachable (3), Host unreachable (4), Connection refused (5) are remote network conditions (e.g. IPv6-only host)
+            log_fn = if rep in [3, 4, 5], do: &Logger.warning/1, else: &Logger.error/1
+
+            log_fn.(
+              "SNI Proxy: SOCKS5 connection to #{host}:#{target_port} via tunnel #{pair_id} failed: #{socks5_rep_description(rep)} (code #{rep})"
+            )
+
+            :gen_tcp.close(client_socket)
+            :gen_tcp.close(target_socket)
+            :ok
+
           {:error, handshake_err} ->
-            Logger.error(
+            Logger.warning(
               "SNI Proxy: SOCKS5 handshake to #{host}:#{target_port} via tunnel #{pair_id} failed: #{inspect(handshake_err)}"
             )
 
@@ -236,6 +248,16 @@ defmodule Hermit.Vpn.SniProxy.Handler do
   end
 
   defp consume_bind_addr(_socket, _atyp), do: {:error, :unknown_atyp}
+
+  defp socks5_rep_description(1), do: "general SOCKS server failure"
+  defp socks5_rep_description(2), do: "connection not allowed by ruleset"
+  defp socks5_rep_description(3), do: "network unreachable (destination may lack IPv4/IPv6 route in tunnel)"
+  defp socks5_rep_description(4), do: "host unreachable"
+  defp socks5_rep_description(5), do: "connection refused by destination"
+  defp socks5_rep_description(6), do: "TTL expired"
+  defp socks5_rep_description(7), do: "command not supported"
+  defp socks5_rep_description(8), do: "address type not supported"
+  defp socks5_rep_description(code), do: "error code #{code}"
 
   # Bi-directional TCP relay loop
   defp relay_loop(client, target) do

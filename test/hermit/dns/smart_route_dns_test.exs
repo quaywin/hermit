@@ -103,12 +103,12 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
   test "IpResolver.internal_ip? correctly identifies loopback, veth, and external IPs" do
     assert IpResolver.internal_ip?({10, 200, 1, 2}) == true
     assert IpResolver.internal_ip?("10.200.5.2") == true
-    assert IpResolver.internal_ip?({:doh, "10.200.1.2", "internal_client"}) == true
-    assert IpResolver.internal_ip?({:doh, {10, 200, 1, 2}, "internal_client"}) == true
+    assert IpResolver.internal_ip?({:tcp, {10, 200, 1, 2}, 53333}) == true
+    assert IpResolver.internal_ip?({:tcp, "10.200.1.2", 53333}) == true
     assert IpResolver.internal_ip?({1, 1, 1, 1}) == false
     assert IpResolver.internal_ip?("8.8.8.8") == false
     assert IpResolver.internal_ip?("100.120.1.5") == false
-    assert IpResolver.internal_ip?({:doh, "100.120.1.5", "tailscale_client"}) == false
+    assert IpResolver.internal_ip?({:tcp, "100.120.1.5", 53333}) == false
   end
 
   test "route_tunnel does not hijack internal client queries (loop prevention)" do
@@ -154,6 +154,6 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
 
     # 2. Internal client (netns veth 10.200.x.x) is NOT hijacked, returns :miss so it resolves upstream
     assert Server.resolve_fast_path(endpoint.id, packet, {10, 200, 0, 2}) == :miss
-    assert Server.resolve_fast_path(endpoint.id, packet, {:doh, "10.200.0.2", "dev"}) == :miss
+    assert Server.resolve_fast_path(endpoint.id, packet, {:tcp, {10, 200, 0, 2}, 54321}) == :miss
   end
 end

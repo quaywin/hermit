@@ -100,7 +100,7 @@ defmodule HermitWeb.InboundLive do
 
         Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
 
-        # Cập nhật endpoint thành DoH Only (inbound_profile_id = nil) thay vì xóa
+        # Tắt và gỡ liên kết inbound_profile_id của endpoint
         endpoint
         |> DnsEndpoint.changeset(%{inbound_profile_id: nil, enabled: false})
         |> Hermit.Repo.update!()
@@ -114,7 +114,7 @@ defmodule HermitWeb.InboundLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Inbound Profile deleted. Linked DNS endpoints reverted to DoH.")
+           |> put_flash(:info, "Inbound Profile deleted. Linked DNS endpoints were disabled.")
            |> assign(inbound_profiles: inbound_profiles)}
 
         {:error, _} ->

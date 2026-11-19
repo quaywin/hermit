@@ -57,16 +57,16 @@ defmodule HermitWeb.SystemLive do
          |> assign(show_upgrade_modal: false)
          |> put_flash(
            :info,
-           "Upgrade initiated. The container is pulling the latest image and restarting..."
+           "Upgrade initiated. Downloading latest release and restarting hermit.service..."
          )}
 
-      {:error, :docker_socket_not_available} ->
+      {:error, :native_upgrade_not_available} ->
         {:noreply,
          socket
          |> assign(show_upgrade_modal: false)
          |> put_flash(
            :error,
-           "Docker socket (/var/run/docker.sock) is not mounted. Please upgrade via terminal using install.sh."
+           "Native systemd installation (/opt/hermit) not detected. Please upgrade via terminal using `hermit update`."
          )}
 
       {:error, reason} ->
@@ -99,7 +99,9 @@ defmodule HermitWeb.SystemLive do
         _ -> schedulers_total
       end
 
-    erl_flags = System.get_env("ERL_FLAGS", "+S #{schedulers_online}:#{schedulers_total}")
+    erl_flags =
+      System.get_env("ERL_AFLAGS") ||
+        System.get_env("ERL_FLAGS", "+S #{schedulers_online}:#{schedulers_total}")
 
     %{
       elixir_version: System.version(),
@@ -107,7 +109,7 @@ defmodule HermitWeb.SystemLive do
       memory_usage: total_mem,
       uptime: uptime_str,
       storage_base_path: storage_base,
-      docker_socket: Updater.docker_socket_available?(),
+      native_upgrade_available?: Updater.native_upgrade_available?(),
       schedulers_online: schedulers_online,
       schedulers_total: schedulers_total,
       logical_cores: logical_cores,
@@ -145,7 +147,7 @@ defmodule HermitWeb.SystemLive do
             <.icon name="hero-cog-6-tooth" class="size-7 text-emerald-500" /> System & Updates
           </h1>
           <p class="text-xs text-base-content/60 mt-1">
-            Manage application updates, container lifecycle, and system diagnostics.
+            Manage native systemd service updates and runtime diagnostics.
           </p>
         </div>
 
@@ -177,7 +179,7 @@ defmodule HermitWeb.SystemLive do
             </div>
 
             <div class="flex items-center gap-3 shrink-0">
-              <%= if @updater_status.docker_socket_available? do %>
+              <%= if @updater_status.native_upgrade_available? do %>
                 <button
                   type="button"
                   phx-click="open_upgrade_modal"
@@ -224,7 +226,7 @@ defmodule HermitWeb.SystemLive do
             <h3 class="font-bold text-sm">Self-Upgrade in progress</h3>
             <div class="text-xs opacity-80">
               {@updater_status.upgrade_status ||
-                "Pulling latest Docker image and restarting container..."} The dashboard will automatically reconnect once rebooted.
+                "Downloading latest release archive and restarting hermit.service..."} The dashboard will automatically reconnect once rebooted.
             </div>
           </div>
         </div>
@@ -258,14 +260,14 @@ defmodule HermitWeb.SystemLive do
             </div>
 
             <div class="flex justify-between items-center py-2 border-b border-base-200 text-xs">
-              <span class="text-base-content/60">Docker Engine Socket</span>
-              <%= if @system_info.docker_socket do %>
+              <span class="text-base-content/60">Native Auto-Upgrade</span>
+              <%= if @system_info.native_upgrade_available? do %>
                 <span class="badge badge-success badge-sm font-mono text-[10px] gap-1">
-                  <.icon name="hero-check-circle" class="size-3" /> Mounted
+                  <.icon name="hero-check-circle" class="size-3" /> Ready (systemd)
                 </span>
               <% else %>
                 <span class="badge badge-ghost badge-sm font-mono text-[10px] gap-1">
-                  <.icon name="hero-x-circle" class="size-3 text-warning" /> Unmounted
+                  <.icon name="hero-x-circle" class="size-3 text-warning" /> Unavailable
                 </span>
               <% end %>
             </div>
@@ -338,10 +340,10 @@ defmodule HermitWeb.SystemLive do
           <.icon name="hero-command-line" class="size-4 text-emerald-500" /> Terminal Upgrade Command
         </h2>
         <p class="text-xs text-base-content/60">
-          Alternatively, you can always upgrade or redeploy Hermit at any time by executing the installer on your host machine:
+          Alternatively, you can upgrade Hermit from your server terminal at any time:
         </p>
         <div class="bg-base-200/60 rounded-lg p-3 font-mono text-xs text-emerald-500 select-all border border-base-300">
-          curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
+          hermit update
         </div>
       </div>
 
@@ -355,17 +357,17 @@ defmodule HermitWeb.SystemLive do
 
             <div class="py-4 space-y-3 text-xs text-base-content/80">
               <p>
-                Hermit will now pull image
-                <span class="font-mono font-bold text-emerald-500">ghcr.io/quaywin/hermit:latest</span>
-                and safely recreate this container.
+                Hermit will download the latest native release archive, switch
+                <span class="font-mono font-bold text-emerald-500">/opt/hermit/current</span>,
+                and restart <span class="font-mono font-bold">hermit.service</span>.
               </p>
               <ul class="list-disc list-inside space-y-1 text-base-content/70">
                 <li>
-                  Database and configuration files in <span class="font-mono">/app/storage</span>
-                  remain preserved.
+                  Database and configuration files in <span class="font-mono">/var/lib/hermit</span>
+                  and <span class="font-mono">/etc/hermit/env</span> remain preserved.
                 </li>
-                <li>Active VPN tunnels will cleanly re-establish after reboot.</li>
-                <li>The web interface will automatically reconnect in ~10 seconds.</li>
+                <li>Active VPN tunnels and DNS nodes will cleanly re-establish after restart.</li>
+                <li>The web interface will automatically reconnect in ~5–10 seconds.</li>
               </ul>
             </div>
 

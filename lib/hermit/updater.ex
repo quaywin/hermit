@@ -1,12 +1,15 @@
 defmodule Hermit.Updater do
   @moduledoc """
-  Manages version checking via GitHub Releases and 1-click container self-upgrades
-  via the Docker Engine API socket.
+  Manages version checking via GitHub Releases and 1-click Native self-upgrades
+  using atomic symlink swaps under `/opt/hermit/releases` and `systemd`.
   """
   use GenServer
   require Logger
 
-  @github_releases_url "https://api.github.com/repos/quaywin/hermit/releases/latest"
+  @repo "quaywin/hermit"
+  @github_releases_url "https://api.github.com/repos/#{@repo}/releases/latest"
+  @install_root "/opt/hermit"
+  @service_name "hermit.service"
   @check_interval_ms 6 * 60 * 60 * 1000
   @pubsub_topic "hermit:updates"
 
@@ -14,21 +17,12 @@ defmodule Hermit.Updater do
   # Public Client API
   # ============================================================================
 
-  @doc """
-  Starts the Updater GenServer.
-  """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc """
-  Returns the PubSub topic used for update notifications.
-  """
   def topic, do: @pubsub_topic
 
-  @doc """
-  Returns the current running version of Hermit.
-  """
   def current_version do
     case Application.spec(:hermit, :vsn) do
       nil -> "0.2.1"
@@ -37,15 +31,16 @@ defmodule Hermit.Updater do
   end
 
   @doc """
-  Checks if the Docker Unix domain socket is available for self-upgrading.
+  Checks if the host is running a Native systemd installation under `/opt/hermit`
+  capable of 1-click self-upgrading.
   """
-  def docker_socket_available? do
-    File.exists?("/var/run/docker.sock")
+  def native_upgrade_available? do
+    :os.type() == {:unix, :linux} and
+      File.dir?(Path.join(@install_root, "releases")) and
+      not is_nil(System.find_executable("systemctl")) and
+      not is_nil(System.find_executable("tar"))
   end
 
-  @doc """
-  Retrieves the current update status map.
-  """
   def status do
     GenServer.call(__MODULE__, :get_status)
   rescue
@@ -58,23 +53,17 @@ defmodule Hermit.Updater do
         release_notes: nil,
         published_at: nil,
         checked_at: nil,
-        docker_socket_available?: docker_socket_available?(),
+        native_upgrade_available?: native_upgrade_available?(),
         is_upgrading?: false,
         upgrade_status: nil,
         error: nil
       }
   end
 
-  @doc """
-  Forces an immediate check for updates from GitHub.
-  """
   def check_updates(force \\ true) do
     GenServer.call(__MODULE__, {:check_updates, force}, 15_000)
   end
 
-  @doc """
-  Triggers 1-Click container self-upgrade.
-  """
   def start_upgrade do
     GenServer.call(__MODULE__, :start_upgrade, 60_000)
   end
@@ -93,15 +82,13 @@ defmodule Hermit.Updater do
       release_notes: nil,
       published_at: nil,
       checked_at: nil,
-      docker_socket_available?: docker_socket_available?(),
+      native_upgrade_available?: native_upgrade_available?(),
       is_upgrading?: false,
       upgrade_status: nil,
       error: nil
     }
 
-    # Perform initial check after short boot delay (5s)
     Process.send_after(self(), :initial_check, 5_000)
-    # Schedule periodic checks every 6 hours
     :timer.send_interval(@check_interval_ms, :periodic_check)
 
     {:ok, initial_state}
@@ -109,7 +96,7 @@ defmodule Hermit.Updater do
 
   @impl true
   def handle_call(:get_status, _from, state) do
-    state = Map.put(state, :docker_socket_available?, docker_socket_available?())
+    state = Map.put(state, :native_upgrade_available?, native_upgrade_available?())
     {:reply, state, state}
   end
 
@@ -132,13 +119,13 @@ defmodule Hermit.Updater do
   end
 
   def handle_call(:start_upgrade, _from, state) do
-    if not docker_socket_available?() do
-      {:reply, {:error, :docker_socket_not_available}, state}
+    if not native_upgrade_available?() do
+      {:reply, {:error, :native_upgrade_not_available}, state}
     else
       upgrading_state = %{
         state
         | is_upgrading?: true,
-          upgrade_status: "Pulling latest Docker image...",
+          upgrade_status: "Downloading latest release archive...",
           error: nil
       }
 
@@ -147,10 +134,10 @@ defmodule Hermit.Updater do
       Task.start(fn ->
         case perform_upgrade_steps() do
           {:ok, _} ->
-            Logger.info("[Updater] Upgrade triggered successfully. Container recreating...")
+            Logger.info("[Updater] Native upgrade prepared. Restarting #{@service_name}...")
 
           {:error, reason} ->
-            Logger.error("[Updater] Upgrade failed: #{inspect(reason)}")
+            Logger.error("[Updater] Native upgrade failed: #{inspect(reason)}")
             GenServer.cast(__MODULE__, {:upgrade_failed, to_string(reason)})
         end
       end)
@@ -273,9 +260,6 @@ defmodule Hermit.Updater do
       }
   end
 
-  @doc """
-  Compares two semantic version strings. Returns true if latest > current.
-  """
   def is_newer_version?(current_str, latest_str)
       when is_binary(current_str) and is_binary(latest_str) do
     with {:ok, v_curr} <- parse_version(current_str),
@@ -297,149 +281,123 @@ defmodule Hermit.Updater do
   end
 
   @doc """
-  Executes Docker Engine API calls to pull the latest image and recreate the container.
+  Downloads the latest Native release tarball matching the host CPU architecture,
+  extracts it into `/opt/hermit/releases/<timestamp>`, atomically updates the
+  `/opt/hermit/current` symlink, prunes old releases, and restarts `hermit.service`.
   """
   def perform_upgrade_steps do
-    socket_path = "/var/run/docker.sock"
+    with {:ok, arch} <- detect_arch(),
+         {:ok, tmp_tar} <- download_release_tarball(arch),
+         {:ok, release_dir} <- extract_release(tmp_tar),
+         :ok <- switch_current_symlink(release_dir),
+         :ok <- prune_old_releases(),
+         :ok <- restart_systemd_service() do
+      {:ok, :upgrading}
+    end
+  end
 
-    if not File.exists?(socket_path) do
-      {:error, "Docker socket /var/run/docker.sock not found. Please ensure it is mounted."}
-    else
-      image_name = "ghcr.io/quaywin/hermit:latest"
+  defp detect_arch do
+    case System.cmd("uname", ["-m"], stderr_to_stdout: true) do
+      {out, 0} ->
+        case String.trim(out) do
+          arch when arch in ["x86_64", "amd64"] -> {:ok, "amd64"}
+          arch when arch in ["aarch64", "arm64"] -> {:ok, "arm64"}
+          other -> {:error, "Unsupported architecture: #{other}"}
+        end
 
-      # 1. Pull newest image from GHCR
-      Logger.info("[Updater] Pulling #{image_name} via Docker API...")
-      pull_url = "http://localhost/images/create?fromImage=ghcr.io/quaywin/hermit&tag=latest"
+      {err, _} ->
+        {:error, "Failed to detect architecture: #{err}"}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
 
-      case docker_curl_post(socket_path, pull_url) do
-        {:ok, _} ->
-          Logger.info("[Updater] Image pulled successfully. Inspecting existing container...")
+  defp download_release_tarball(arch) do
+    url = "https://github.com/#{@repo}/releases/latest/download/hermit-linux-#{arch}.tar.gz"
+    tmp_tar = Path.join(System.tmp_dir!(), "hermit-upgrade-#{System.unique_integer([:positive])}.tar.gz")
 
-          # 2. Inspect current running container to duplicate port/env configuration
-          inspect_url = "http://localhost/containers/hermit_orchestrator/json"
+    Logger.info("[Updater] Downloading #{url}...")
 
-          case docker_curl_get_json(socket_path, inspect_url) do
-            {:ok, container_info} ->
-              # 3. Create next container with newly pulled image
-              create_url = "http://localhost/containers/create?name=hermit_orchestrator_next"
+    case Req.get(url,
+           headers: [{"user-agent", "Hermit-Orchestrator"}],
+           into: File.stream!(tmp_tar),
+           receive_timeout: 120_000
+         ) do
+      {:ok, %{status: 200}} ->
+        {:ok, tmp_tar}
 
-              create_payload = %{
-                "Image" => image_name,
-                "Env" => get_in(container_info, ["Config", "Env"]) || [],
-                "Cmd" => get_in(container_info, ["Config", "Cmd"]),
-                "HostConfig" => get_in(container_info, ["HostConfig"]) || %{}
-              }
+      {:ok, %{status: status}} ->
+        File.rm(tmp_tar)
+        {:error, "Failed to download release archive (HTTP #{status})"}
 
-              case docker_curl_post_json(socket_path, create_url, create_payload) do
-                {:ok, _} ->
-                  Logger.info("[Updater] Next container created. Spawning swap helper...")
+      {:error, reason} ->
+        File.rm(tmp_tar)
+        {:error, "Download failed: #{inspect(reason)}"}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
 
-                  # 4. Spawn a lightweight transient runner to swap containers
-                  swap_script =
-                    "sleep 1 && " <>
-                      "curl -s -X POST --unix-socket /var/run/docker.sock http://localhost/containers/hermit_orchestrator/stop && " <>
-                      "curl -s -X DELETE --unix-socket /var/run/docker.sock 'http://localhost/containers/hermit_orchestrator?v=1' && " <>
-                      "curl -s -X POST --unix-socket /var/run/docker.sock http://localhost/containers/hermit_orchestrator_next/rename?name=hermit_orchestrator && " <>
-                      "curl -s -X POST --unix-socket /var/run/docker.sock http://localhost/containers/hermit_orchestrator/start"
+  defp extract_release(tmp_tar) do
+    release_id =
+      DateTime.utc_now()
+      |> Calendar.strftime("%Y%m%d%H%M%S")
 
-                  runner_payload = %{
-                    "Image" => image_name,
-                    "Cmd" => ["sh", "-c", swap_script],
-                    "HostConfig" => %{
-                      "Binds" => ["/var/run/docker.sock:/var/run/docker.sock"],
-                      "AutoRemove" => true
-                    }
-                  }
+    release_dir = Path.join([@install_root, "releases", release_id])
+    File.mkdir_p!(release_dir)
 
-                  runner_create_url =
-                    "http://localhost/containers/create?name=hermit_upgrade_runner"
+    try do
+      case System.cmd("tar", ["-xzf", tmp_tar, "-C", release_dir], stderr_to_stdout: true) do
+        {_, 0} ->
+          _ = File.chmod(Path.join([release_dir, "bin", "server"]), 0o755)
+          _ = File.chmod(Path.join([release_dir, "bin", "hermit"]), 0o755)
+          {:ok, release_dir}
 
-                  case docker_curl_post_json(socket_path, runner_create_url, runner_payload) do
-                    {:ok, runner_res} ->
-                      runner_id = runner_res["Id"] || "hermit_upgrade_runner"
-
-                      docker_curl_post(
-                        socket_path,
-                        "http://localhost/containers/#{runner_id}/start"
-                      )
-
-                      {:ok, :upgrading}
-
-                    {:error, reason} ->
-                      {:error, "Failed to create swap runner: #{reason}"}
-                  end
-
-                {:error, reason} ->
-                  {:error, "Failed to create upgraded container: #{reason}"}
-              end
-
-            {:error, reason} ->
-              {:error, "Failed to inspect current container: #{reason}"}
-          end
-
-        {:error, reason} ->
-          {:error, "Failed to pull newest image: #{reason}"}
+        {err, code} ->
+          File.rm_rf(release_dir)
+          {:error, "Failed to extract release tarball (code #{code}): #{err}"}
       end
-    end
-  end
-
-  # ============================================================================
-  # Low-level Docker Socket HTTP helpers via curl
-  # ============================================================================
-
-  defp docker_curl_post(socket_path, url) do
-    case System.cmd("curl", ["-s", "-X", "POST", "--unix-socket", socket_path, url],
-           stderr_to_stdout: true
-         ) do
-      {output, 0} -> {:ok, output}
-      {err, _code} -> {:error, err}
+    after
+      File.rm(tmp_tar)
     end
   rescue
     e -> {:error, Exception.message(e)}
   end
 
-  defp docker_curl_get_json(socket_path, url) do
-    case System.cmd("curl", ["-s", "--unix-socket", socket_path, url], stderr_to_stdout: true) do
-      {output, 0} ->
-        case Jason.decode(output) do
-          {:ok, json} -> {:ok, json}
-          {:error, err} -> {:error, "JSON decode error: #{inspect(err)} (Output: #{output})"}
-        end
+  defp switch_current_symlink(release_dir) do
+    current_link = Path.join(@install_root, "current")
 
-      {err, _code} ->
-        {:error, err}
+    case System.cmd("ln", ["-sfn", release_dir, current_link], stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {err, code} -> {:error, "Failed to update symlink (code #{code}): #{err}"}
     end
   rescue
     e -> {:error, Exception.message(e)}
   end
 
-  defp docker_curl_post_json(socket_path, url, data_map) do
-    json_payload = Jason.encode!(data_map)
+  defp prune_old_releases do
+    releases_dir = Path.join(@install_root, "releases")
 
-    case System.cmd(
-           "curl",
-           [
-             "-s",
-             "-X",
-             "POST",
-             "-H",
-             "Content-Type: application/json",
-             "-d",
-             json_payload,
-             "--unix-socket",
-             socket_path,
-             url
-           ],
-           stderr_to_stdout: true
-         ) do
-      {output, 0} ->
-        case Jason.decode(output) do
-          {:ok, json} -> {:ok, json}
-          {:error, _} -> {:ok, output}
-        end
+    case File.ls(releases_dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort(:desc)
+        |> Enum.drop(2)
+        |> Enum.each(fn old ->
+          File.rm_rf(Path.join(releases_dir, old))
+        end)
 
-      {err, _code} ->
-        {:error, err}
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp restart_systemd_service do
+    case System.cmd("systemctl", ["restart", "--no-block", @service_name], stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {err, code} -> {:error, "Failed to restart #{@service_name} (code #{code}): #{err}"}
     end
   rescue
     e -> {:error, Exception.message(e)}

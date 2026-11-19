@@ -56,20 +56,6 @@ primary_region = 'sin'
     grace_period = '10s'
     method = 'get'
     path = '/up'
-# Standalone Port 53 DNS (UDP)
-[[services]]
-  internal_port = 53
-  protocol = "udp"
-  [[services.ports]]
-    port = 53
-
-# Standalone Port 53 DNS (TCP)
-[[services]]
-  internal_port = 53
-  protocol = "tcp"
-  [[services.ports]]
-    port = 53
-
 # Tailscale UDP Port Range (41642 - 41650)
 [[services]]
   internal_port = 41642

@@ -11,8 +11,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     :ok
   end
 
-  test "renders endpoints list, creates, and deletes DoH endpoint", %{conn: conn} do
-    # Create a DNS Profile first
+  test "renders endpoints list, creates, and deletes Tailscale DNS endpoint", %{conn: conn} do
     {:ok, config} =
       Hermit.Repo.insert(%DnsConfig{
         name: "Test DNS Profile",
@@ -21,49 +20,51 @@ defmodule HermitWeb.DnsEndpointLiveTest do
         custom_rules: []
       })
 
+    {:ok, inbound} =
+      Hermit.Repo.insert(%InboundProfile{
+        name: "Home Tailnet",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-test-create"}
+      })
+
     {:ok, view, html} = live(conn, ~p"/dns/endpoints")
 
     assert html =~ "DNS Endpoints"
     assert html =~ "No DNS Endpoints yet"
 
-    # Click create button to open modal
     html = view |> element("button#create-endpoint-btn") |> render_click()
     assert html =~ "Create DNS Endpoint"
 
-    # Submit the form to create a DoH endpoint
     html =
       view
       |> form("form[phx-submit=save_new]", %{
         "dns_endpoint" => %{
-          "name" => "My Personal iPhone",
+          "name" => "My Home Tailnet DNS",
           "dns_profile_id" => to_string(config.id),
-          "inbound_profile_id" => ""
+          "inbound_profile_id" => to_string(inbound.id)
         }
       })
       |> render_submit()
 
     assert html =~ "DNS Endpoint created successfully"
-    assert html =~ "My Personal iPhone"
-    assert html =~ "DoH Only"
-    assert html =~ "dns-query"
+    assert html =~ "My Home Tailnet DNS"
+    assert html =~ "Tailscale Connection"
+    assert html =~ "Home Tailnet"
 
-    # Verify endpoint exists in DB
-    endpoint = Hermit.Repo.get_by(DnsEndpoint, name: "My Personal iPhone")
+    endpoint = Hermit.Repo.get_by(DnsEndpoint, name: "My Home Tailnet DNS")
     assert endpoint != nil
-    assert endpoint.inbound_profile_id == nil
+    assert endpoint.inbound_profile_id == inbound.id
 
-    # Delete the endpoint
     html =
       view
       |> element("button[phx-click=\"delete_endpoint\"][phx-value-id=\"#{endpoint.id}\"]")
       |> render_click()
 
     assert html =~ "DNS Endpoint deleted successfully"
-    refute html =~ "My Personal iPhone"
+    refute html =~ "My Home Tailnet DNS"
   end
 
   test "toggles Tailscale connection and override dns on endpoint", %{conn: conn} do
-    # Create DNS Config
     {:ok, config} =
       Hermit.Repo.insert(%DnsConfig{
         name: "Tailscale DNS Profile",
@@ -72,7 +73,6 @@ defmodule HermitWeb.DnsEndpointLiveTest do
         custom_rules: []
       })
 
-    # Create Inbound Profile
     {:ok, inbound} =
       Hermit.Repo.insert(%InboundProfile{
         name: "Inbound_TS",
@@ -80,7 +80,6 @@ defmodule HermitWeb.DnsEndpointLiveTest do
         config: %{"ts_auth_key" => "tskey-endpoint-test"}
       })
 
-    # Create Endpoint linked to Tailscale Inbound
     {:ok, endpoint} =
       Hermit.Repo.insert(%DnsEndpoint{
         name: "TS Endpoint",
@@ -94,10 +93,8 @@ defmodule HermitWeb.DnsEndpointLiveTest do
 
     assert html =~ "TS Endpoint"
     assert html =~ "Tailscale Connection"
-    # Status is initially stopped
     assert html =~ "stopped"
 
-    # 1. Toggle connection to enabled (Status becomes starting -> running in mock)
     view
     |> element("button[phx-click=\"toggle_endpoint_enabled\"][phx-value-id=\"#{endpoint.id}\"]")
     |> render_click()
@@ -107,7 +104,6 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     assert html =~ "running"
     assert html =~ "100.64.0.100"
 
-    # 2. Toggle Override DNS
     html =
       view
       |> element("button[phx-click=\"toggle_override_dns\"][phx-value-id=\"#{endpoint.id}\"]")
@@ -115,11 +111,9 @@ defmodule HermitWeb.DnsEndpointLiveTest do
 
     assert html =~ "Tailscale DNS Override enabled"
 
-    # Verify db update
     updated_config = DnsConfig.get_for_endpoint(endpoint.id)
     assert updated_config.tailscale_override_dns == true
 
-    # Cleanup
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
   end
 
@@ -141,19 +135,24 @@ defmodule HermitWeb.DnsEndpointLiveTest do
         custom_rules: []
       })
 
-    {:ok, endpoint} =
-      Hermit.Repo.insert(%DnsEndpoint{
-        name: "DoH Test EP",
-        dns_profile_id: p1.id,
-        inbound_profile_id: nil,
-        enabled: true,
-        doh_token: "doh_test_token_live"
+    {:ok, inbound} =
+      Hermit.Repo.insert(%InboundProfile{
+        name: "Switch Test TS",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-switch-test"}
       })
 
-    # Start DNS server for endpoint (DoH in-memory mode)
-    {:ok, {_, _server_pid}} = Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, nil)
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%DnsEndpoint{
+        name: "TS Switch EP",
+        dns_profile_id: p1.id,
+        inbound_profile_id: inbound.id,
+        enabled: true,
+        doh_token: "ts_switch_token_live"
+      })
 
-    # Initial ETS config check
+    {:ok, {_, _server_pid}} = Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, inbound.id)
+
     [{_, {initial_config, _, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
@@ -162,7 +161,6 @@ defmodule HermitWeb.DnsEndpointLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/dns/endpoints")
 
-    # 1. Change profile to p2 using quick_select_dns_profile
     view
     |> form("#quick-select-dns-form-#{endpoint.id}")
     |> render_change(%{
@@ -170,14 +168,12 @@ defmodule HermitWeb.DnsEndpointLiveTest do
       "dns_profile_id" => to_string(p2.id)
     })
 
-    # Verify server config was updated to p2 in ETS cache
     [{_, {updated_config, _, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert updated_config.id == p2.id
     assert updated_config.upstream_dns == "8.8.8.8"
 
-    # 2. Change profile back to p1 using edit modal (save_edit)
     view
     |> element("button[phx-click=\"edit_endpoint\"][phx-value-id=\"#{endpoint.id}\"]")
     |> render_click()
@@ -185,21 +181,52 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     view
     |> form("#edit-endpoint-form", %{
       "dns_endpoint" => %{
-        "name" => "DoH Test EP Renamed",
-        "dns_profile_id" => to_string(p1.id)
+        "name" => "TS Switch EP Renamed",
+        "dns_profile_id" => to_string(p1.id),
+        "inbound_profile_id" => to_string(inbound.id)
       }
     })
     |> render_submit()
 
-    # Verify server config was updated back to p1
     [{_, {final_config, _, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert final_config.id == p1.id
     assert final_config.upstream_dns == "1.1.1.1"
 
-    # Cleanup
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
+  end
+
+  test "prevents activating an endpoint without an inbound profile", %{conn: conn} do
+    {:ok, config} =
+      Hermit.Repo.insert(%DnsConfig{
+        name: "No Inbound Profile",
+        enabled: true,
+        upstream_dns: "1.1.1.1",
+        custom_rules: []
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%DnsEndpoint{
+        name: "Unassigned Endpoint",
+        dns_profile_id: config.id,
+        inbound_profile_id: nil,
+        enabled: false,
+        doh_token: "orphan_token"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/dns/endpoints")
+
+    # 1. UI renders button as disabled
+    assert has_element?(
+             view,
+             "button[phx-click=\"toggle_endpoint_enabled\"][phx-value-id=\"#{endpoint.id}\"][disabled]"
+           )
+
+    # 2. Server-side event guard blocks direct activation attempt
+    html = render_hook(view, "toggle_endpoint_enabled", %{"id" => to_string(endpoint.id)})
+    assert html =~ "Cannot activate endpoint"
+    refute Hermit.Repo.get!(DnsEndpoint, endpoint.id).enabled
   end
 
   defp wait_until_running(view, retries \\ 30) do

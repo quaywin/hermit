@@ -2,7 +2,7 @@
 set -eu
 
 # Prevent rapid crash loops from consuming 100% CPU
-STORAGE_DIR="/app/storage"
+STORAGE_DIR="${STORAGE_BASE_PATH:-/var/lib/hermit}"
 LAST_START_FILE="$STORAGE_DIR/.last_startup"
 RESTART_COUNT_FILE="$STORAGE_DIR/.rapid_restarts"
 

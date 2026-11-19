@@ -27,8 +27,11 @@ config :hermit, HermitWeb.Endpoint, http: [port: String.to_integer(web_port)]
 if config_env() in [:dev, :prod] do
   database_name = if config_env() == :dev, do: "hermit_dev.db", else: "hermit_prod.db"
 
+  default_prod_storage =
+    if match?({:unix, :linux}, :os.type()), do: "/var/lib/hermit", else: Path.expand("storage", File.cwd!())
+
   storage_default =
-    if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: "/app/storage"
+    if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: default_prod_storage
 
   database_path =
     System.get_env("DATABASE_PATH") ||
@@ -52,7 +55,7 @@ if config_env() in [:dev, :prod] do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
       (
-        storage_base = System.get_env("STORAGE_BASE_PATH") || "/app/storage"
+        storage_base = System.get_env("STORAGE_BASE_PATH", storage_default)
         key_file_path = Path.join(storage_base, ".secret_key_base")
 
         case File.read(key_file_path) do
@@ -118,10 +121,6 @@ if config_env() in [:dev, :prod] do
       # for details about using IPv6 vs IPv4 and loopback vs public addresses.
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
-    https: [
-      port: String.to_integer(System.get_env("HTTPS_PORT", "3443")),
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
-    ],
     secret_key_base: secret_key_base
 
   # ## SSL Support
@@ -176,10 +175,11 @@ if config_env() in [:dev, :prod] do
 end
 
 if config_env() != :test do
-  storage_default =
-    if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: "/app/storage"
+  default_prod_storage =
+    if match?({:unix, :linux}, :os.type()), do: "/var/lib/hermit", else: Path.expand("storage", File.cwd!())
 
-  config :hermit, :docker, tailscale_auth_key: System.get_env("TAILSCALE_AUTH_KEY")
+  storage_default =
+    if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: default_prod_storage
 
   config :hermit, :storage, base_path: System.get_env("STORAGE_BASE_PATH", storage_default)
 end

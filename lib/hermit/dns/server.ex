@@ -129,8 +129,8 @@ defmodule Hermit.Dns.Server do
     if mock?() do
       do_try_bind_socket(state)
     else
-      Logger.info(
-        "DNS Server for endpoint #{state.endpoint_id} running in memory (DoH-only mode)"
+      Logger.warning(
+        "DNS Server for endpoint #{state.endpoint_id} has no linked inbound profile. Skipping socket bind."
       )
 
       {:ok, state}

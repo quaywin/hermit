@@ -23,9 +23,7 @@ defmodule Hermit.Application do
              {Task.Supervisor, name: Hermit.Dns.TaskSupervisor},
              {Hermit.Dns.BlocklistLoader, []},
              {Hermit.Dns.Telemetry, []},
-             {Hermit.Vpn.DnsDeviceResolver, []},
-             {Hermit.Vpn.DnsDdnsResolver, []},
-             {Hermit.Dns.Port53Server, []}
+             {Hermit.Vpn.DnsDeviceResolver, []}
            ],
            [strategy: :one_for_one, name: Hermit.Dns.Supervisor]
          ]}
@@ -119,7 +117,7 @@ defmodule Hermit.Application do
           endpoints = Hermit.Repo.all(Hermit.Vpn.DnsEndpoint)
 
           Enum.each(endpoints, fn endpoint ->
-            if endpoint.enabled do
+            if endpoint.enabled and not is_nil(endpoint.inbound_profile_id) do
               case Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, endpoint.inbound_profile_id) do
                 {:ok, _} ->
                   :ok
@@ -234,9 +232,23 @@ defmodule Hermit.Application do
     end
   end
 
+  defp sni_host_redirect_enabled? do
+    System.get_env("SNI_PROXY_HOST_REDIRECT") == "true"
+  end
+
   defp setup_nftables_host do
     http_port = Hermit.Vpn.SniProxy.Server.http_port()
     https_port = Hermit.Vpn.SniProxy.Server.https_port()
+
+    redirect_rules =
+      if sni_host_redirect_enabled?() do
+        """
+        add rule inet hermit_host prerouting ip daddr 100.64.0.0/10 tcp dport 80 redirect to :#{http_port}
+        add rule inet hermit_host prerouting ip daddr 100.64.0.0/10 tcp dport 443 redirect to :#{https_port}
+        """
+      else
+        ""
+      end
 
     try do
       script = """
@@ -246,8 +258,7 @@ defmodule Hermit.Application do
       add chain inet hermit_host input { type filter hook input priority filter ; }
       add chain inet hermit_host forward { type filter hook forward priority filter ; }
       add chain inet hermit_host postrouting { type nat hook postrouting priority srcnat ; }
-      add rule inet hermit_host prerouting ip daddr 100.64.0.0/10 tcp dport 80 redirect to :#{http_port}
-      add rule inet hermit_host prerouting ip daddr 100.64.0.0/10 tcp dport 443 redirect to :#{https_port}
+      #{redirect_rules}
       add rule inet hermit_host input iifname "dns_h*" accept
       add rule inet hermit_host input iifname "loc*" accept
       add rule inet hermit_host input iifname "vh*" accept
@@ -302,40 +313,7 @@ defmodule Hermit.Application do
              "prerouting",
              "{ type nat hook prerouting priority dstnat ; }"
            ]),
-         {:ok, _} <-
-           run_nft([
-             "add",
-             "rule",
-             "inet",
-             "hermit_host",
-             "prerouting",
-             "ip",
-             "daddr",
-             "100.64.0.0/10",
-             "tcp",
-             "dport",
-             "80",
-             "redirect",
-             "to",
-             ":#{http_port}"
-           ]),
-         {:ok, _} <-
-           run_nft([
-             "add",
-             "rule",
-             "inet",
-             "hermit_host",
-             "prerouting",
-             "ip",
-             "daddr",
-             "100.64.0.0/10",
-             "tcp",
-             "dport",
-             "443",
-             "redirect",
-             "to",
-             ":#{https_port}"
-           ]),
+         {:ok, _} <- maybe_add_nft_host_redirect(http_port, https_port),
          {:ok, _} <-
            run_nft([
              "add",
@@ -427,6 +405,49 @@ defmodule Hermit.Application do
     end
   end
 
+  defp maybe_add_nft_host_redirect(http_port, https_port) do
+    if sni_host_redirect_enabled?() do
+      with {:ok, _} <-
+             run_nft([
+               "add",
+               "rule",
+               "inet",
+               "hermit_host",
+               "prerouting",
+               "ip",
+               "daddr",
+               "100.64.0.0/10",
+               "tcp",
+               "dport",
+               "80",
+               "redirect",
+               "to",
+               ":#{http_port}"
+             ]),
+           {:ok, _} <-
+             run_nft([
+               "add",
+               "rule",
+               "inet",
+               "hermit_host",
+               "prerouting",
+               "ip",
+               "daddr",
+               "100.64.0.0/10",
+               "tcp",
+               "dport",
+               "443",
+               "redirect",
+               "to",
+               ":#{https_port}"
+             ]) do
+        {:ok, :redirect_enabled}
+      end
+    else
+      {:ok, :skipped}
+    end
+  end
+
   defp run_nft(args) do
     case System.cmd("nft", args) do
       {output, 0} -> {:ok, output}
@@ -447,33 +468,35 @@ defmodule Hermit.Application do
           ensure_iptables_rule("iptables", ["FORWARD", "-o", iface, "-j", "ACCEPT"])
         end)
 
-        ensure_iptables_nat_rule("iptables", [
-          "PREROUTING",
-          "-d",
-          "100.64.0.0/10",
-          "-p",
-          "tcp",
-          "--dport",
-          "80",
-          "-j",
-          "REDIRECT",
-          "--to-ports",
-          to_string(http_port)
-        ])
+        if sni_host_redirect_enabled?() do
+          ensure_iptables_nat_rule("iptables", [
+            "PREROUTING",
+            "-d",
+            "100.64.0.0/10",
+            "-p",
+            "tcp",
+            "--dport",
+            "80",
+            "-j",
+            "REDIRECT",
+            "--to-ports",
+            to_string(http_port)
+          ])
 
-        ensure_iptables_nat_rule("iptables", [
-          "PREROUTING",
-          "-d",
-          "100.64.0.0/10",
-          "-p",
-          "tcp",
-          "--dport",
-          "443",
-          "-j",
-          "REDIRECT",
-          "--to-ports",
-          to_string(https_port)
-        ])
+          ensure_iptables_nat_rule("iptables", [
+            "PREROUTING",
+            "-d",
+            "100.64.0.0/10",
+            "-p",
+            "tcp",
+            "--dport",
+            "443",
+            "-j",
+            "REDIRECT",
+            "--to-ports",
+            to_string(https_port)
+          ])
+        end
       rescue
         e ->
           Logger.warning("Failed to setup iptables host rules: #{inspect(e)}")

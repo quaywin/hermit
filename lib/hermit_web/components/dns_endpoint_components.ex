@@ -1,18 +1,16 @@
 defmodule HermitWeb.DnsEndpointComponents do
   @moduledoc """
-  Functional components for the DNS Endpoints LiveView.
+  Functional components for the Tailscale DNS Endpoints LiveView.
   """
   use HermitWeb, :html
 
   attr :endpoint, :map, required: true
   attr :dns_status, :any, required: true
   attr :dns_profiles, :list, required: true
-  attr :base_url, :string, required: true
 
   def endpoint_row(assigns) do
     {status, ip, err} = assigns.dns_status
     config = assigns.endpoint.dns_profile
-    doh_url = "#{assigns.base_url}/dns-query/#{assigns.endpoint.doh_token}"
 
     assigns =
       assigns
@@ -20,56 +18,35 @@ defmodule HermitWeb.DnsEndpointComponents do
       |> assign(:ip, ip)
       |> assign(:err, err)
       |> assign(:config, config)
-      |> assign(:doh_url, doh_url)
 
     ~H"""
     <tr class="hover:bg-base-200/50 transition-colors">
       <!-- 1. Endpoint Name -->
       <td class="py-4 px-4 font-medium text-base-content">
         <div class="flex items-center gap-2">
-          <span class="text-base">
-            <%= cond do %>
-              <% @endpoint.inbound_profile_id -> %>
-                🌐
-              <% @endpoint.ddns_hostname && @endpoint.ddns_hostname != "" -> %>
-                ⚡
-              <% true -> %>
-                🛡️
-            <% end %>
-          </span>
+          <span class="text-base">🌐</span>
           <span class="font-bold text-base-content">{@endpoint.name}</span>
         </div>
         <span class="block text-[10px] font-mono text-base-content/50 mt-0.5">
-          Token: {@endpoint.doh_token}
+          hermit-dns-{@endpoint.id}
         </span>
       </td>
 
-      <!-- 2. Network Type -->
+      <!-- 2. Tailscale Inbound -->
       <td class="py-4 px-4">
-        <%= cond do %>
-          <% @endpoint.inbound_profile_id -> %>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#ff7e47]/10 text-[#ff7e47] border border-[#ff7e47]/20">
-              Tailscale Connection
-            </span>
-            <span class="block text-[10px] text-base-content/50 font-mono mt-0.5">
-              {if @endpoint.inbound_profile,
-                do: @endpoint.inbound_profile.name,
-                else: "Profile ##{@endpoint.inbound_profile_id}"}
-            </span>
-          <% @endpoint.ddns_hostname && @endpoint.ddns_hostname != "" -> %>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-              ⚡ Port 53 DDNS
-            </span>
-            <span
-              class="block text-[10px] text-base-content/50 font-mono mt-0.5 truncate max-w-[140px]"
-              title={@endpoint.ddns_hostname}
-            >
-              {@endpoint.ddns_hostname}
-            </span>
-          <% true -> %>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-500 border border-blue-500/20">
-              DoH Only
-            </span>
+        <%= if @endpoint.inbound_profile_id do %>
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#ff7e47]/10 text-[#ff7e47] border border-[#ff7e47]/20">
+            Tailscale Connection
+          </span>
+          <span class="block text-[10px] text-base-content/50 font-mono mt-0.5">
+            {if @endpoint.inbound_profile,
+              do: @endpoint.inbound_profile.name,
+              else: "Profile ##{@endpoint.inbound_profile_id}"}
+          </span>
+        <% else %>
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+            Unassigned
+          </span>
         <% end %>
       </td>
 
@@ -107,115 +84,51 @@ defmodule HermitWeb.DnsEndpointComponents do
 
       <!-- 4. Node State -->
       <td class="py-4 px-4">
-        <%= if @endpoint.inbound_profile_id do %>
-          <div class="space-y-1">
-            <div>
-              <%= case @status do %>
-                <% :running -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    running
-                  </span>
-                <% :starting -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                    starting
-                  </span>
-                <% :error -> %>
-                  <span
-                    class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
-                    title={@err}
-                  >
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> error
-                  </span>
-                <% :stopped -> %>
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> stopped
-                  </span>
-              <% end %>
-            </div>
-            <%= if @ip do %>
-              <span class="block text-[11px] font-mono text-base-content/70">{@ip}</span>
-            <% end %>
-            <%= if @config && @config.tailscale_override_dns do %>
-              <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
-                HA Global DNS
-              </span>
+        <div class="space-y-1">
+          <div>
+            <%= case @status do %>
+              <% :running -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  running
+                </span>
+              <% :starting -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
+                  starting
+                </span>
+              <% :error -> %>
+                <span
+                  class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-500 border border-red-500/20 cursor-help"
+                  title={@err}
+                >
+                  <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> error
+                </span>
+              <% :stopped -> %>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
+                  <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> stopped
+                </span>
             <% end %>
           </div>
-        <% else %>
-          <%= if @endpoint.enabled do %>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Active
-            </span>
-          <% else %>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-base-200 text-base-content/60 border border-base-300">
-              <span class="w-1.5 h-1.5 rounded-full bg-base-content/40"></span> Inactive
+          <%= if @ip do %>
+            <div class="flex items-center gap-1">
+              <span class="text-[11px] font-mono text-base-content/70 select-all">{@ip}</span>
+              <.copy_button
+                text={@ip}
+                title="Copy Tailscale DNS IP"
+                class="border-0 !p-0.5 !bg-transparent text-base-content/40 hover:text-emerald-500"
+              />
+            </div>
+          <% end %>
+          <%= if @config && @config.tailscale_override_dns do %>
+            <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
+              HA Global DNS
             </span>
           <% end %>
-        <% end %>
-      </td>
-
-      <!-- 5. Client Connect (DoH & Apple Config) -->
-      <td class="py-4 px-4 font-mono text-xs">
-        <div class="flex items-center gap-1.5">
-          <div class="flex items-center gap-1 bg-base-200/60 border border-base-300 rounded-[6px] px-2 py-1 max-w-[150px] sm:max-w-[180px]">
-            <code class="text-[11px] text-emerald-500 truncate flex-1 select-all">{@doh_url}</code>
-            <.copy_button
-              text={@doh_url}
-              title="Copy DoH URL"
-              class="border-0 !p-0.5 !bg-transparent text-base-content/40 hover:text-emerald-500"
-            />
-          </div>
-
-          <button
-            type="button"
-            phx-click="open_guide_modal"
-            phx-value-id={@endpoint.id}
-            class="btn btn-ghost btn-xs text-base-content/60 hover:text-emerald-500 px-1.5"
-            title="Device Setup Guide (Android, Chrome, Firefox, Apple)"
-          >
-            <.icon name="hero-book-open" class="size-4" />
-          </button>
-
-          <a
-            href={"#{@doh_url}/mobileconfig"}
-            class="btn btn-ghost btn-xs text-base-content/60 hover:text-primary px-1.5"
-            title="Download Apple Profile (.mobileconfig)"
-          >
-            <.icon name="hero-arrow-down-tray" class="size-4" />
-          </a>
-
-          <div class="dropdown dropdown-top dropdown-end">
-            <label
-              tabindex="0"
-              class="btn btn-ghost btn-xs text-base-content/60 hover:text-primary px-1 cursor-pointer"
-              title="Scan QR Code"
-            >
-              <.icon name="hero-qr-code" class="size-4" />
-            </label>
-            <div
-              tabindex="0"
-              class="dropdown-content z-50 p-3 bg-base-100 border border-base-300 rounded-[12px] shadow-xl mb-2 text-center w-40"
-            >
-              <div class="bg-white p-2 rounded-[6px] border border-base-300 shadow-inner inline-block">
-                <canvas
-                  id={"qr-canvas-#{@endpoint.id}"}
-                  phx-hook="QRCode"
-                  data-qr-content={@doh_url}
-                  data-qr-size="110"
-                  class="size-[110px] block"
-                ></canvas>
-              </div>
-              <span class="text-[9px] uppercase tracking-wider text-base-content/50 font-semibold block mt-1">
-                Scan for DoH
-              </span>
-            </div>
-          </div>
         </div>
       </td>
 
-      <!-- 6. Actions -->
+      <!-- 5. Actions -->
       <td class="py-4 px-4 text-right">
         <div class="flex items-center justify-end gap-2">
           <%= if @endpoint.inbound_profile_id do %>
@@ -244,12 +157,20 @@ defmodule HermitWeb.DnsEndpointComponents do
             type="button"
             phx-click="toggle_endpoint_enabled"
             phx-value-id={@endpoint.id}
+            disabled={is_nil(@endpoint.inbound_profile_id)}
             class={[
               "btn btn-xs rounded-[4px] cursor-pointer font-medium text-xs px-2.5",
               @endpoint.enabled && "btn-success btn-outline",
-              !@endpoint.enabled && "btn-ghost border border-base-300 text-base-content/60"
+              !@endpoint.enabled && "btn-ghost border border-base-300 text-base-content/60",
+              is_nil(@endpoint.inbound_profile_id) && "opacity-40 cursor-not-allowed"
             ]}
-            title={if @endpoint.enabled, do: "Click to Deactivate", else: "Click to Activate"}
+            title={
+              cond do
+                is_nil(@endpoint.inbound_profile_id) -> "Assign a Tailscale Inbound Profile to activate"
+                @endpoint.enabled -> "Click to Deactivate"
+                true -> "Click to Activate"
+              end
+            }
           >
             {if @endpoint.enabled, do: "Active", else: "Disabled"}
           </button>
@@ -280,7 +201,6 @@ defmodule HermitWeb.DnsEndpointComponents do
 
   attr :mode, :atom, values: [:create, :edit], required: true
   attr :form, :any, required: true
-  attr :connection_type, :string, required: true
   attr :dns_profiles, :list, required: true
   attr :inbound_profiles, :list, required: true
 
@@ -298,14 +218,10 @@ defmodule HermitWeb.DnsEndpointComponents do
       |> assign(:close_event, if(is_create, do: "close_new_modal", else: "close_edit_modal"))
       |> assign(:validate_event, if(is_create, do: "validate_new", else: "validate_edit"))
       |> assign(:submit_event, if(is_create, do: "save_new", else: "save_edit"))
-      |> assign(
-        :select_type_event,
-        if(is_create, do: "select_new_type", else: "select_edit_type")
-      )
       |> assign(:submit_label, if(is_create, do: "Create Endpoint", else: "Save Changes"))
       |> assign(
         :name_placeholder,
-        if(is_create, do: "e.g., Personal iPhone, Office Tailnet", else: nil)
+        if(is_create, do: "e.g., Home Tailnet DNS, Office Tailnet", else: nil)
       )
 
     ~H"""
@@ -359,102 +275,17 @@ defmodule HermitWeb.DnsEndpointComponents do
 
           <div class="space-y-1.5">
             <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-              Connection Network
+              Tailscale Inbound Profile <span class="text-error">*</span>
             </label>
-            <div class="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                phx-click={@select_type_event}
-                phx-value-type="doh"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold text-[11px]",
-                  @connection_type == "doh" && "btn-primary text-white",
-                  @connection_type != "doh" &&
-                    "btn-ghost border border-base-300 text-base-content/70"
-                ]}
-              >
-                🛡️ DoH Only
-              </button>
-              <button
-                type="button"
-                phx-click={@select_type_event}
-                phx-value-type="tailscale"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold text-[11px]",
-                  @connection_type == "tailscale" && "btn-primary text-white",
-                  @connection_type != "tailscale" &&
-                    "btn-ghost border border-base-300 text-base-content/70"
-                ]}
-              >
-                🌐 Tailscale
-              </button>
-              <button
-                type="button"
-                phx-click={@select_type_event}
-                phx-value-type="ddns"
-                class={[
-                  "btn btn-xs rounded-[4px] font-semibold text-[11px]",
-                  @connection_type == "ddns" && "btn-primary text-white",
-                  @connection_type != "ddns" &&
-                    "btn-ghost border border-base-300 text-base-content/70"
-                ]}
-              >
-                ⚡ Port 53 DDNS
-              </button>
-            </div>
+            <.input
+              field={f[:inbound_profile_id]}
+              type="select"
+              prompt="-- Select Tailscale Inbound --"
+              options={Enum.map(@inbound_profiles, &{&1.name, &1.id})}
+              required
+              class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+            />
           </div>
-
-          <%= if @connection_type == "tailscale" do %>
-            <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
-              <div class="space-y-1.5">
-                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                  Tailscale Inbound Profile
-                </label>
-                <.input
-                  field={f[:inbound_profile_id]}
-                  type="select"
-                  prompt="-- Select Tailscale Inbound --"
-                  options={Enum.map(@inbound_profiles, &{&1.name, &1.id})}
-                  class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
-                />
-              </div>
-            </div>
-          <% else %>
-            <input type="hidden" name="dns_endpoint[inbound_profile_id]" value="" />
-          <% end %>
-
-          <%= if @connection_type == "ddns" do %>
-            <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
-              <div class="space-y-1.5">
-                <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
-                  DDNS Hostname
-                </label>
-                <.input
-                  field={f[:ddns_hostname]}
-                  type="text"
-                  placeholder="e.g., myhome.duckdns.org"
-                  class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
-                />
-              </div>
-              <div class="flex items-center justify-between pt-2 border-t border-base-300">
-                <div>
-                  <span class="text-xs font-medium text-base-content block">
-                    Strict DDNS IP Filter
-                  </span>
-                  <span class="text-[10px] text-base-content/50 block">
-                    Only respond to requests matching WAN IP.
-                  </span>
-                </div>
-                <.input
-                  field={f[:enable_ddns_filter]}
-                  type="checkbox"
-                  class="checkbox checkbox-primary checkbox-sm rounded-[4px]"
-                />
-              </div>
-            </div>
-          <% else %>
-            <input type="hidden" name="dns_endpoint[ddns_hostname]" value="" />
-          <% end %>
 
           <div class="flex items-center justify-end gap-2 pt-4 border-t border-base-300">
             <button
@@ -473,246 +304,6 @@ defmodule HermitWeb.DnsEndpointComponents do
           </div>
         </.form>
       </div>
-    </dialog>
-    """
-  end
-
-  attr :endpoint, :map, required: true
-  attr :base_url, :string, required: true
-  attr :guide_tab, :string, required: true
-
-  def device_setup_guide_modal(assigns) do
-    guide_doh_url = "#{assigns.base_url}/dns-query/#{assigns.endpoint.doh_token}"
-
-    guide_host =
-      case URI.parse(assigns.base_url) do
-        %URI{host: h} when is_binary(h) -> h
-        _ -> "hermit.local"
-      end
-
-    assigns =
-      assigns
-      |> assign(:guide_doh_url, guide_doh_url)
-      |> assign(:guide_host, guide_host)
-
-    ~H"""
-    <dialog class="modal modal-open">
-      <div class="modal-box bg-base-100 border border-base-300 max-w-2xl rounded-[12px] p-6 shadow-xl space-y-5">
-        <div class="flex items-center justify-between border-b border-base-300 pb-4">
-          <div class="space-y-0.5">
-            <h3 class="text-base font-semibold uppercase tracking-wider text-base-content flex items-center gap-2">
-              <.icon name="hero-book-open" class="size-5 text-emerald-500" />
-              <span>Connect Devices: {@endpoint.name}</span>
-            </h3>
-            <p class="text-xs text-base-content/60">
-              Configure encrypted DNS over HTTPS (DoH) or Private DNS on your devices.
-            </p>
-          </div>
-          <button
-            type="button"
-            phx-click="close_guide_modal"
-            class="btn btn-sm btn-circle btn-ghost text-base-content/60 hover:text-base-content"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div class="flex border-b border-base-300 gap-1 overflow-x-auto text-xs font-semibold uppercase tracking-wider">
-          <button
-            type="button"
-            phx-click="switch_guide_tab"
-            phx-value-tab="android"
-            class={[
-              "px-3 py-2 border-b-2 transition-colors cursor-pointer",
-              if(@guide_tab == "android",
-                do: "border-emerald-500 text-emerald-500",
-                else: "border-transparent text-base-content/60 hover:text-base-content"
-              )
-            ]}
-          >
-            Android
-          </button>
-          <button
-            type="button"
-            phx-click="switch_guide_tab"
-            phx-value-tab="chrome"
-            class={[
-              "px-3 py-2 border-b-2 transition-colors cursor-pointer",
-              if(@guide_tab == "chrome",
-                do: "border-emerald-500 text-emerald-500",
-                else: "border-transparent text-base-content/60 hover:text-base-content"
-              )
-            ]}
-          >
-            Chrome / Brave / Edge
-          </button>
-          <button
-            type="button"
-            phx-click="switch_guide_tab"
-            phx-value-tab="firefox"
-            class={[
-              "px-3 py-2 border-b-2 transition-colors cursor-pointer",
-              if(@guide_tab == "firefox",
-                do: "border-emerald-500 text-emerald-500",
-                else: "border-transparent text-base-content/60 hover:text-base-content"
-              )
-            ]}
-          >
-            Firefox
-          </button>
-          <button
-            type="button"
-            phx-click="switch_guide_tab"
-            phx-value-tab="apple"
-            class={[
-              "px-3 py-2 border-b-2 transition-colors cursor-pointer",
-              if(@guide_tab == "apple",
-                do: "border-emerald-500 text-emerald-500",
-                else: "border-transparent text-base-content/60 hover:text-base-content"
-              )
-            ]}
-          >
-            Apple (iOS / macOS)
-          </button>
-        </div>
-
-        <div class="space-y-4 text-xs text-base-content/80 leading-relaxed">
-          <%= case @guide_tab do %>
-            <% "android" -> %>
-              <div class="space-y-3">
-                <p class="font-medium text-base-content">
-                  Android supports system-wide encrypted DNS via Private DNS (TLS/HTTPS):
-                </p>
-                <ol class="list-decimal list-inside space-y-2 pl-1 text-base-content/70">
-                  <li>
-                    Open <strong>Settings</strong>
-                    &gt; <strong>Network &amp; internet</strong>
-                    (or <strong>Connections</strong>).
-                  </li>
-                  <li>
-                    Tap <strong>Private DNS</strong> (often located under More connection settings).
-                  </li>
-                  <li>Select <strong>Private DNS provider hostname</strong>.</li>
-                  <li>
-                    Enter your server hostname or DoH domain:
-                    <div class="mt-1.5 flex items-center gap-2 bg-base-200/80 border border-base-300 rounded-[6px] px-3 py-2 max-w-md font-mono text-emerald-500">
-                      <span class="flex-1 select-all font-semibold">{@guide_host}</span>
-                      <.copy_button
-                        text={@guide_host}
-                        title="Copy Hostname"
-                        class="border-0 !p-1 !bg-transparent text-base-content/40 hover:text-emerald-500"
-                      />
-                    </div>
-                  </li>
-                  <li>
-                    Tap <strong>Save</strong>. All apps on your device now query Hermit with full ad & threat protection.
-                  </li>
-                </ol>
-                <div class="p-3 bg-base-200/50 rounded-[8px] border border-base-300 text-[11px] text-base-content/60">
-                  💡 <em>Note:</em>
-                  For DoH-specific apps (e.g., Nebulo or Intra), use the complete DoH URL: <code class="text-emerald-500 font-mono">{@guide_doh_url}</code>.
-                </div>
-              </div>
-            <% "chrome" -> %>
-              <div class="space-y-3">
-                <p class="font-medium text-base-content">
-                  Configure Chromium-based browsers (Google Chrome, Brave, Microsoft Edge, Arc):
-                </p>
-                <ol class="list-decimal list-inside space-y-2 pl-1 text-base-content/70">
-                  <li>
-                    Go to <strong>Settings</strong>
-                    &gt; <strong>Privacy and security</strong>
-                    &gt; <strong>Security</strong>.
-                  </li>
-                  <li>Scroll down and enable <strong>Use secure DNS</strong>.</li>
-                  <li>Choose <strong>With: Custom</strong> from the provider options.</li>
-                  <li>
-                    Paste your personal DoH URL:
-                    <div class="mt-1.5 flex items-center gap-2 bg-base-200/80 border border-base-300 rounded-[6px] px-3 py-2 max-w-xl font-mono text-emerald-500">
-                      <span class="flex-1 select-all truncate font-semibold">{@guide_doh_url}</span>
-                      <.copy_button
-                        text={@guide_doh_url}
-                        title="Copy DoH URL"
-                        class="border-0 !p-1 !bg-transparent text-base-content/40 hover:text-emerald-500"
-                      />
-                    </div>
-                  </li>
-                </ol>
-              </div>
-            <% "firefox" -> %>
-              <div class="space-y-3">
-                <p class="font-medium text-base-content">
-                  Configure Mozilla Firefox DNS over HTTPS:
-                </p>
-                <ol class="list-decimal list-inside space-y-2 pl-1 text-base-content/70">
-                  <li>
-                    Go to <strong>Settings</strong> &gt; <strong>Privacy &amp; Security</strong>.
-                  </li>
-                  <li>Scroll to the <strong>DNS over HTTPS</strong> section at the bottom.</li>
-                  <li>
-                    Select <strong>Increased Protection</strong> or <strong>Max Protection</strong>.
-                  </li>
-                  <li>Select <strong>Custom</strong> provider from the dropdown.</li>
-                  <li>
-                    Paste your DoH URL:
-                    <div class="mt-1.5 flex items-center gap-2 bg-base-200/80 border border-base-300 rounded-[6px] px-3 py-2 max-w-xl font-mono text-emerald-500">
-                      <span class="flex-1 select-all truncate font-semibold">{@guide_doh_url}</span>
-                      <.copy_button
-                        text={@guide_doh_url}
-                        title="Copy DoH URL"
-                        class="border-0 !p-1 !bg-transparent text-base-content/40 hover:text-emerald-500"
-                      />
-                    </div>
-                  </li>
-                </ol>
-              </div>
-            <% "apple" -> %>
-              <div class="space-y-3">
-                <p class="font-medium text-base-content">
-                  Install a native Apple Configuration Profile for iOS, iPadOS, and macOS:
-                </p>
-                <ol class="list-decimal list-inside space-y-2 pl-1 text-base-content/70">
-                  <li>
-                    Click the button below to download the encrypted DNS configuration profile.
-                  </li>
-                  <li>
-                    On iOS: Go to <strong>Settings</strong>
-                    &gt; <strong>Profile Downloaded</strong>
-                    &gt; tap <strong>Install</strong>.
-                  </li>
-                  <li>
-                    On macOS: Open <strong>System Settings</strong>
-                    &gt; <strong>Privacy &amp; Security</strong>
-                    &gt; <strong>Profiles</strong>
-                    &gt; double-click the profile to install.
-                  </li>
-                </ol>
-                <div class="pt-2">
-                  <a
-                    href={"#{@guide_doh_url}/mobileconfig"}
-                    class="btn btn-primary btn-sm rounded-[6px] text-xs uppercase tracking-wider font-semibold text-white inline-flex items-center gap-2"
-                  >
-                    <.icon name="hero-arrow-down-tray" class="size-4" />
-                    Download Apple Profile (.mobileconfig)
-                  </a>
-                </div>
-              </div>
-          <% end %>
-        </div>
-
-        <div class="flex justify-end pt-4 border-t border-base-300">
-          <button
-            type="button"
-            phx-click="close_guide_modal"
-            class="btn btn-outline-custom rounded-[6px] text-xs uppercase tracking-wider px-4 py-2 cursor-pointer"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-      <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="close_guide_modal">close</button>
-      </form>
     </dialog>
     """
   end

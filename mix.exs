@@ -57,8 +57,6 @@ defmodule Hermit.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:bandit, "~> 1.5"},
-      {:site_encrypt, "~> 0.6.0"},
-      {:x509, "~> 0.9.2", override: true},
       {:ecto, "~> 3.12"},
       {:phoenix_ecto, "~> 4.6"},
       {:ecto_sqlite3, "~> 0.24"},

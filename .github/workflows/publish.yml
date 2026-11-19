@@ -1,4 +1,4 @@
-name: Build and Publish Production Docker Image
+name: Build and Publish Native Releases
 
 on:
   push:
@@ -6,110 +6,96 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
 
 jobs:
   build:
+    name: Build Native Release (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            platform: linux/amd64
-            platform_id: amd64
+          - os: ubuntu-24.04
+            arch: amd64
           - os: ubuntu-24.04-arm
-            platform: linux/arm64
-            platform_id: arm64
+            arch: arm64
 
     runs-on: ${{ matrix.os }}
+
+    env:
+      MIX_ENV: prod
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          target: final
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=build-${{ matrix.platform_id }}
-          cache-to: type=gha,scope=build-${{ matrix.platform_id }},mode=max
-
-      - name: Export digest
+      - name: Install build tools
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential
 
-      - name: Upload digest artifact
+      - name: Set up Elixir & Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+
+      - name: Cache Mix dependencies and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: release-${{ matrix.arch }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            release-${{ matrix.arch }}-mix-
+
+      - name: Install production dependencies
+        run: mix deps.get --only prod
+
+      - name: Compile dependencies and assets
+        run: |
+          mix deps.compile
+          mix assets.setup
+          mix compile
+          mix assets.deploy
+
+      - name: Build Elixir release tarball
+        run: |
+          mix release --overwrite
+          mkdir -p dist
+          tar -czf "dist/hermit-linux-${{ matrix.arch }}.tar.gz" -C _build/prod/rel/hermit .
+
+      - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.platform_id }}
-          path: ${{ runner.temp }}/digests/*
+          name: hermit-linux-${{ matrix.arch }}
+          path: dist/hermit-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
           retention-days: 1
 
-  merge:
-    runs-on: ubuntu-latest
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-24.04
     needs: build
+
     steps:
-      - name: Download digests
+      - name: Download release archives
         uses: actions/download-artifact@v4
         with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          path: dist
+          pattern: hermit-linux-*
           merge-multiple: true
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: sha256sum hermit-linux-*.tar.gz > SHA256SUMS
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - name: Create manifest list and push
-        working-directory: ${{ runner.temp }}/digests
-        env:
-          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
-        run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
-
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ghcr.io/${{ github.repository }}:latest
+          generate_release_notes: true
+          files: |
+            dist/hermit-linux-amd64.tar.gz
+            dist/hermit-linux-arm64.tar.gz
+            dist/SHA256SUMS

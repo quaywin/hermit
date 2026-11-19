@@ -220,15 +220,15 @@ defmodule Hermit.Dns.PacketTest do
     assert [ecs_fb] = Enum.filter(opts_fb, &Record.is_record(&1, :dns_opt_ecs))
     assert dns_opt_ecs(ecs_fb, :address) == <<113, 160, 20>>
 
-    # 4. Inject DoH 3-tuple format public IP
-    doh_client_ip = {:doh, {14, 162, 50, 99}, "my-ios-device"}
-    assert {:ok, injected_doh} = Packet.inject_ecs(query_packet, doh_client_ip, nil)
+    # 4. Inject public IP string format
+    str_client_ip = "14.162.50.99"
+    assert {:ok, injected_str} = Packet.inject_ecs(query_packet, str_client_ip, nil)
 
-    assert msg_doh = :dns.decode_message(injected_doh)
-    additional_doh = dns_message(msg_doh, :additional)
-    assert [opt_doh] = Enum.filter(additional_doh, &Record.is_record(&1, :dns_optrr))
-    opts_doh = dns_optrr(opt_doh, :data)
-    assert [ecs_doh] = Enum.filter(opts_doh, &Record.is_record(&1, :dns_opt_ecs))
-    assert dns_opt_ecs(ecs_doh, :address) == <<14, 162, 50>>
+    assert msg_str = :dns.decode_message(injected_str)
+    additional_str = dns_message(msg_str, :additional)
+    assert [opt_str] = Enum.filter(additional_str, &Record.is_record(&1, :dns_optrr))
+    opts_str = dns_optrr(opt_str, :data)
+    assert [ecs_str] = Enum.filter(opts_str, &Record.is_record(&1, :dns_opt_ecs))
+    assert dns_opt_ecs(ecs_str, :address) == <<14, 162, 50>>
   end
 end

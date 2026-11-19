@@ -520,7 +520,6 @@ defmodule Hermit.Dns.Packet do
   def private_ip?({0xFD00, _, _, _, _, _, _, _}), do: true
   def private_ip?(_), do: false
 
-  defp to_ip_tuple({:doh, ip_tuple, _device_name}), do: to_ip_tuple(ip_tuple)
   defp to_ip_tuple(ip) when is_tuple(ip) and tuple_size(ip) in [4, 8], do: {:ok, ip}
 
   defp to_ip_tuple(ip) when is_binary(ip) do

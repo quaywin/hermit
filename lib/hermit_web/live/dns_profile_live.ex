@@ -709,9 +709,7 @@ defmodule HermitWeb.DnsProfileLive do
 
     Enum.any?(endpoints, fn endpoint ->
       match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_server, endpoint.id})) or
-        match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint.id})) or
-        (is_binary(endpoint.ddns_hostname) and endpoint.ddns_hostname != "") or
-        (is_binary(endpoint.doh_token) and endpoint.doh_token != "")
+        match?([_ | _], Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint.id}))
     end)
   end
 

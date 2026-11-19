@@ -368,14 +368,7 @@ defmodule Hermit.Dns.Telemetry do
       duration = Map.get(measurements, :duration)
       profile_id = Map.get(metadata, :profile_id)
       config_id = Map.get(metadata, :config_id)
-      client_ip_raw = Map.get(metadata, :client_ip)
-
-      {client_ip, _is_doh, doh_device_name} =
-        case client_ip_raw do
-          {:doh, ip, dev_name} -> {ip, true, dev_name}
-          {:doh, ip} -> {ip, true, nil}
-          ip -> {ip, false, nil}
-        end
+      client_ip = Map.get(metadata, :client_ip)
 
       domain = Map.get(metadata, :domain)
       qtype = Map.get(metadata, :qtype)
@@ -418,17 +411,10 @@ defmodule Hermit.Dns.Telemetry do
             end
 
           true ->
-            "Port 53 Fallback"
+            "Unknown Endpoint"
         end
 
-      client_name =
-        cond do
-          doh_device_name && doh_device_name != "" ->
-            doh_device_name
-
-          true ->
-            Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
-        end
+      client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
 
       log_data = %{
         "pair_id" => pair_id,

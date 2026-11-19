@@ -11,7 +11,6 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      # Đăng ký nhận tin nhắn status polling
       :timer.send_interval(1000, self(), :tick)
     end
 
@@ -21,7 +20,6 @@ defmodule HermitWeb.DnsEndpointLive do
     inbound_profiles =
       Hermit.Repo.all(from(i in InboundProfile, where: i.type == "tailscale", order_by: i.name))
 
-    # Form tạo Endpoint mới
     new_changeset = DnsEndpoint.changeset(%DnsEndpoint{}, %{})
 
     {:ok,
@@ -29,48 +27,18 @@ defmodule HermitWeb.DnsEndpointLive do
      |> assign(endpoints: endpoints)
      |> assign(dns_profiles: dns_profiles)
      |> assign(inbound_profiles: inbound_profiles)
-     |> assign(selected_endpoint: nil)
      |> assign(editing_endpoint: nil)
      |> assign(new_form: to_form(new_changeset))
      |> assign(edit_form: nil)
-     |> assign(new_connection_type: "doh")
-     |> assign(edit_connection_type: "doh")
      |> assign(show_new_modal: false)
      |> assign(show_edit_modal: false)
-     |> assign(show_guide_modal: false)
-     |> assign(guide_endpoint: nil)
-     |> assign(guide_tab: "android")
-     |> assign(ddns_map: Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map())
-     # Lưu trữ status của các Tailscale Node
      |> assign(dns_statuses: %{})
      |> update_all_dns_statuses()}
   end
 
   @impl true
-  def handle_params(_params, uri, socket) do
-    %URI{scheme: scheme, host: host, port: port} = URI.parse(uri)
-
-    port_suffix =
-      if port in [80, 443, nil] do
-        ""
-      else
-        ":#{port}"
-      end
-
-    base_url = "#{scheme}://#{host}#{port_suffix}"
-
-    {:noreply, assign(socket, base_url: base_url)}
-  end
-
-  @impl true
   def handle_info(:tick, socket) do
-    # Cập nhật trạng thái của các DNS node định kỳ mỗi giây
-    ddns_map = Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map()
-
-    {:noreply,
-     socket
-     |> assign(ddns_map: ddns_map)
-     |> update_all_dns_statuses()}
+    {:noreply, update_all_dns_statuses(socket)}
   end
 
   @impl true
@@ -85,7 +53,6 @@ defmodule HermitWeb.DnsEndpointLive do
     {:noreply,
      assign(socket,
        show_new_modal: true,
-       new_connection_type: "doh",
        new_form: to_form(new_changeset)
      )}
   end
@@ -93,42 +60,6 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("close_new_modal", _params, socket) do
     {:noreply, assign(socket, show_new_modal: false)}
-  end
-
-  @impl true
-  def handle_event("open_guide_modal", %{"id" => id_str}, socket) do
-    endpoint =
-      case Integer.parse(to_string(id_str)) do
-        {id, ""} -> Enum.find(socket.assigns.endpoints, &(&1.id == id))
-        _ -> nil
-      end
-
-    if endpoint do
-      {:noreply,
-       assign(socket, show_guide_modal: true, guide_endpoint: endpoint, guide_tab: "android")}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("close_guide_modal", _params, socket) do
-    {:noreply, assign(socket, show_guide_modal: false, guide_endpoint: nil)}
-  end
-
-  @impl true
-  def handle_event("switch_guide_tab", %{"tab" => tab}, socket) do
-    {:noreply, assign(socket, guide_tab: tab)}
-  end
-
-  @impl true
-  def handle_event("select_new_type", %{"type" => type}, socket) do
-    {:noreply, assign(socket, new_connection_type: type)}
-  end
-
-  @impl true
-  def handle_event("select_edit_type", %{"type" => type}, socket) do
-    {:noreply, assign(socket, edit_connection_type: type)}
   end
 
   @impl true
@@ -143,22 +74,11 @@ defmodule HermitWeb.DnsEndpointLive do
 
   @impl true
   def handle_event("save_new", %{"dns_endpoint" => params}, socket) do
-    type = socket.assigns.new_connection_type
-
-    sanitized_params =
-      case type do
-        "doh" -> Map.merge(params, %{"inbound_profile_id" => nil, "ddns_hostname" => nil})
-        "tailscale" -> Map.put(params, "ddns_hostname", nil)
-        "ddns" -> Map.put(params, "inbound_profile_id", nil)
-        _ -> params
-      end
-
-    changeset = DnsEndpoint.changeset(%DnsEndpoint{}, sanitized_params)
+    changeset = DnsEndpoint.changeset(%DnsEndpoint{}, params)
 
     case Hermit.Repo.insert(changeset) do
       {:ok, _endpoint} ->
         DnsEndpoint.clear_cache()
-        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
         {:noreply,
          socket
@@ -177,17 +97,9 @@ defmodule HermitWeb.DnsEndpointLive do
     endpoint = Hermit.Repo.get!(DnsEndpoint, String.to_integer(id_str))
     changeset = DnsEndpoint.changeset(endpoint, %{})
 
-    type =
-      cond do
-        endpoint.inbound_profile_id -> "tailscale"
-        endpoint.ddns_hostname && endpoint.ddns_hostname != "" -> "ddns"
-        true -> "doh"
-      end
-
     {:noreply,
      socket
      |> assign(editing_endpoint: endpoint)
-     |> assign(edit_connection_type: type)
      |> assign(edit_form: to_form(changeset))
      |> assign(show_edit_modal: true)}
   end
@@ -212,33 +124,17 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def handle_event("save_edit", %{"dns_endpoint" => params}, socket) do
     endpoint = socket.assigns.editing_endpoint
-    type = socket.assigns.edit_connection_type
-
-    sanitized_params =
-      case type do
-        "doh" -> Map.merge(params, %{"inbound_profile_id" => nil, "ddns_hostname" => nil})
-        "tailscale" -> Map.put(params, "ddns_hostname", nil)
-        "ddns" -> Map.put(params, "inbound_profile_id", nil)
-        _ -> params
-      end
-
-    changeset = DnsEndpoint.changeset(endpoint, sanitized_params)
+    changeset = DnsEndpoint.changeset(endpoint, params)
 
     case Hermit.Repo.update(changeset) do
       {:ok, updated_endpoint} ->
         DnsEndpoint.clear_cache()
-        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
 
-        # Check if network connection type / inbound profile changed
-        network_changed? =
-          endpoint.inbound_profile_id != updated_endpoint.inbound_profile_id or
-            endpoint.ddns_hostname != updated_endpoint.ddns_hostname
-
+        network_changed? = endpoint.inbound_profile_id != updated_endpoint.inbound_profile_id
         {worker_status, _, _} = DnsWorker.get_status(updated_endpoint.id)
         worker_running? = worker_status in [:running, :starting, :error]
 
         cond do
-          # If network changed or worker was running, full restart of worker + server
           network_changed? or worker_running? ->
             Hermit.Vpn.DnsSupervisor.stop_dns(updated_endpoint.id)
 
@@ -249,7 +145,6 @@ defmodule HermitWeb.DnsEndpointLive do
               )
             end
 
-          # If DNS profile or settings changed and endpoint is enabled / server was running
           true ->
             Hermit.Vpn.DnsSupervisor.restart_dns_server(updated_endpoint.id)
         end
@@ -283,7 +178,6 @@ defmodule HermitWeb.DnsEndpointLive do
     endpoint_id = String.to_integer(id_str)
     endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id) |> Hermit.Repo.preload(:inbound_profile)
 
-    # Dừng DNS node và giải phóng cấu hình Tailscale DNS trước khi xóa
     config = DnsConfig.get_for_endpoint(endpoint_id)
     {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
 
@@ -314,35 +208,20 @@ defmodule HermitWeb.DnsEndpointLive do
   end
 
   @impl true
-  def handle_event("toggle_ddns_filter", %{"id" => id_str}, socket) do
-    endpoint_id = String.to_integer(id_str)
-    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
-    new_val = not (endpoint.enable_ddns_filter != false)
-
-    case DnsEndpoint.changeset(endpoint, %{enable_ddns_filter: new_val})
-         |> Hermit.Repo.update() do
-      {:ok, _updated} ->
-        DnsEndpoint.clear_cache()
-        Hermit.Vpn.DnsDdnsResolver.trigger_sync()
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "DDNS IP Filter #{if new_val, do: "enabled", else: "disabled"}.")
-         |> assign(endpoints: get_endpoints())
-         |> assign(ddns_map: Hermit.Vpn.DnsDdnsResolver.get_resolved_ddns_map())}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to toggle DDNS IP filter.")}
-    end
-  end
-
-  @impl true
   def handle_event("toggle_endpoint_enabled", %{"id" => id_str}, socket) do
     endpoint_id = String.to_integer(id_str)
     endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id) |> Hermit.Repo.preload(:inbound_profile)
     enabled = not endpoint.enabled
 
-    case endpoint |> DnsEndpoint.changeset(%{enabled: enabled}) |> Hermit.Repo.update() do
+    if enabled and is_nil(endpoint.inbound_profile_id) do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "Cannot activate endpoint '#{endpoint.name}' without a linked Tailscale Inbound Profile."
+       )}
+    else
+      case endpoint |> DnsEndpoint.changeset(%{enabled: enabled}) |> Hermit.Repo.update() do
       {:ok, updated} ->
         DnsEndpoint.clear_cache()
 
@@ -363,7 +242,6 @@ defmodule HermitWeb.DnsEndpointLive do
             end)
           end
 
-          # Cập nhật DB config tắt luôn override
           DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
 
           Task.start(fn ->
@@ -381,6 +259,7 @@ defmodule HermitWeb.DnsEndpointLive do
         {:noreply, put_flash(socket, :error, "Failed to toggle Endpoint status.")}
     end
   end
+  end
 
   @impl true
   def handle_event("reconnect_node", %{"id" => id_str}, socket) do
@@ -388,10 +267,8 @@ defmodule HermitWeb.DnsEndpointLive do
     endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
 
     Task.start(fn ->
-      # Stop existing DNS worker to clean up previous run
       Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
 
-      # Start DNS components
       case Hermit.Vpn.DnsSupervisor.start_dns(endpoint_id, endpoint.inbound_profile_id) do
         {:ok, _} -> :ok
         {:error, reason} -> Logger.error("Failed to reconnect DNS Node: #{inspect(reason)}")
@@ -418,7 +295,6 @@ defmodule HermitWeb.DnsEndpointLive do
 
       case DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: override}) do
         {:ok, _} ->
-          # DnsWorker sync_state will automatically trigger configuration update asynchronously
           DnsWorker.sync_state(endpoint_id)
 
           endpoint = Hermit.Repo.get(DnsEndpoint, endpoint_id)
@@ -479,14 +355,9 @@ defmodule HermitWeb.DnsEndpointLive do
            |> Hermit.Repo.update() do
         {:ok, updated_endpoint} ->
           DnsEndpoint.clear_cache()
-
-          # Restart DNS server with new profile if it's currently running or enabled
           Hermit.Vpn.DnsSupervisor.restart_dns_server(endpoint_id)
-
-          # If DnsWorker is running (Tailscale endpoint), sync its state
           DnsWorker.sync_state(endpoint_id)
 
-          # Broadcast config update to notify any listeners
           new_config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
 
           if :erlang.whereis(Hermit.PubSub) != :undefined do
@@ -508,83 +379,6 @@ defmodule HermitWeb.DnsEndpointLive do
     end
   end
 
-  @impl true
-  def handle_event(
-        "quick_select_inbound_profile",
-        %{"endpoint_id" => id_str, "inbound_profile_id" => inbound_profile_id_str},
-        socket
-      ) do
-    endpoint_id = String.to_integer(id_str)
-    endpoint = Hermit.Repo.get!(DnsEndpoint, endpoint_id)
-
-    {inbound_profile_id, ddns_hostname} =
-      case inbound_profile_id_str do
-        "ddns" ->
-          {nil,
-           if(endpoint.ddns_hostname in [nil, ""],
-             do: "myhome.duckdns.org",
-             else: endpoint.ddns_hostname
-           )}
-
-        "doh" ->
-          {nil, nil}
-
-        "" ->
-          {nil, endpoint.ddns_hostname}
-
-        other ->
-          case Integer.parse(other) do
-            {id, ""} -> {id, nil}
-            _ -> {nil, nil}
-          end
-      end
-
-    if inbound_profile_id == endpoint.inbound_profile_id and
-         ddns_hostname == endpoint.ddns_hostname do
-      {:noreply, socket}
-    else
-      # Tự động dừng node cũ và server trước khi chuyển đổi profile mạng
-      {_status, ts_ip, _} = DnsWorker.get_status(endpoint_id)
-      config = DnsConfig.get_for_endpoint(endpoint_id)
-      endpoint = Hermit.Repo.preload(endpoint, :inbound_profile)
-
-      if config.tailscale_override_dns do
-        Task.start(fn ->
-          DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
-        end)
-
-        DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
-      end
-
-      Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
-
-      case endpoint
-           |> DnsEndpoint.changeset(%{
-             inbound_profile_id: inbound_profile_id,
-             ddns_hostname: ddns_hostname,
-             enabled: false
-           })
-           |> Hermit.Repo.update() do
-        {:ok, updated_endpoint} ->
-          DnsEndpoint.clear_cache()
-          Hermit.Vpn.DnsDdnsResolver.trigger_sync()
-
-          {:noreply,
-           socket
-           |> put_flash(
-             :info,
-             "Network Connection for '#{updated_endpoint.name}' updated. Node is currently stopped."
-           )
-           |> assign(endpoints: get_endpoints())
-           |> update_all_dns_statuses()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to update Network Connection.")}
-      end
-    end
-  end
-
-  # Helper functions
   defp get_endpoints do
     DnsEndpoint
     |> Hermit.Repo.all()
@@ -596,7 +390,6 @@ defmodule HermitWeb.DnsEndpointLive do
       Enum.reduce(socket.assigns.endpoints, %{}, fn endpoint, acc ->
         status_info =
           if endpoint.inbound_profile_id do
-            # Chỉ lấy status nếu có liên kết inbound profile (Tailscale)
             DnsWorker.get_status(endpoint.id)
           else
             {:stopped, nil, nil}

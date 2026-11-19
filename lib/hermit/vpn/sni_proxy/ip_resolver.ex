@@ -4,7 +4,7 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   for Smart Routed domains, depending on the client's network.
   """
 
-  @cache_ttl_ms 300_000
+  @cache_ttl_ms 30_000
   @routes_table :hermit_smart_routes
 
   @doc """
@@ -12,7 +12,6 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   """
   @spec resolve_ip(tuple() | String.t() | nil) :: String.t()
   def resolve_ip(client_ip) do
-    # 1. Check explicit setting or env override
     case get_cached_override_ip() do
       {:ok, ip_str} ->
         ip_str
@@ -53,6 +52,7 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
       :ets.delete(@routes_table, {:__cache__, :internal_ips})
       :ets.delete(@routes_table, {:__cache__, :override_ip})
       :ets.delete(@routes_table, {:__cache__, :interfaces})
+      :ets.delete(@routes_table, {:__cache__, :dns_node_ips})
     end
 
     :ok
@@ -61,7 +61,39 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   end
 
   @doc """
-  Retrieves Tailscale IPs belonging to active tunnel nodes to prevent them from routing to themselves.
+  Retrieves Tailscale IPs belonging to active Hermit DNS nodes.
+  """
+  @spec get_dns_node_ips() :: [tuple()]
+  def get_dns_node_ips do
+    try do
+      case Code.ensure_loaded(Hermit.Vpn.DnsWorker) do
+        {:module, _} ->
+          Hermit.Repo.all(Hermit.Vpn.DnsEndpoint)
+          |> Enum.flat_map(fn ep ->
+            case Hermit.Vpn.DnsWorker.get_status(ep.id) do
+              {:running, ts_ip, _} when is_binary(ts_ip) and ts_ip != "" ->
+                [parse_ip(ts_ip)]
+
+              _ ->
+                []
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+
+        _ ->
+          []
+      end
+    rescue
+      _ -> []
+    catch
+      :exit, _ -> []
+      _kind, _reason -> []
+    end
+  end
+
+  @doc """
+  Retrieves Tailscale IPs belonging to active tunnel and DNS nodes to prevent routing loops.
   """
   @spec get_all_node_ips() :: [tuple()]
   def get_all_node_ips do
@@ -87,33 +119,19 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
         _kind, _reason -> []
       end
 
-    dns_worker_ips =
-      try do
-        case Code.ensure_loaded(Hermit.Vpn.DnsWorker) do
-          {:module, _} ->
-            Hermit.Repo.all(Hermit.Vpn.DnsEndpoint)
-            |> Enum.flat_map(fn ep ->
-              case Hermit.Vpn.DnsWorker.get_status(ep.id) do
-                {:running, ts_ip, _} when is_binary(ts_ip) and ts_ip != "" ->
-                  [parse_ip(ts_ip)]
+    Enum.uniq(pair_ips ++ get_dns_node_ips())
+  end
 
-                _ ->
-                  []
-              end
-            end)
-            |> Enum.reject(&is_nil/1)
+  defp get_cached_dns_node_ips(now \\ System.monotonic_time(:millisecond)) do
+    case lookup_cache(:dns_node_ips, now) do
+      {:ok, ips} ->
+        ips
 
-          _ ->
-            []
-        end
-      rescue
-        _ -> []
-      catch
-        :exit, _ -> []
-        _kind, _reason -> []
-      end
-
-    Enum.uniq(pair_ips ++ dns_worker_ips)
+      :miss ->
+        ips = get_dns_node_ips()
+        store_cache(:dns_node_ips, ips, now + @cache_ttl_ms)
+        ips
+    end
   end
 
   defp get_cached_internal_ips do
@@ -215,16 +233,24 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
     all_ifaces = get_cached_ipv4_interfaces()
 
     cond do
-      # If client is connecting from Tailscale (100.64.0.0/10)
+      # For Tailscale clients (100.64.0.0/10), prioritize Hermit's own DNS Node IP
+      # (which has isolated DNAT 80->8080 / 443->8443 inside its namespace) so we
+      # don't hijack ports 80/443 on the host's own tailscale0 interface.
       parsed_client && in_tailscale_range?(parsed_client) ->
-        case find_tailscale_ip(all_ifaces) do
-          {:ok, ts_ip} ->
-            ts_ip
+        case Enum.find(get_cached_dns_node_ips(), &in_tailscale_range?/1) do
+          ts_tuple when is_tuple(ts_tuple) ->
+            ip_to_string(ts_tuple)
 
-          :none ->
-            case Enum.find(get_all_node_ips(), &in_tailscale_range?/1) do
-              nil -> fallback_ip(all_ifaces)
-              ts_tuple -> ip_to_string(ts_tuple)
+          nil ->
+            case find_tailscale_ip(all_ifaces) do
+              {:ok, ts_ip} ->
+                ts_ip
+
+              :none ->
+                case Enum.find(get_all_node_ips(), &in_tailscale_range?/1) do
+                  nil -> fallback_ip(all_ifaces)
+                  ts_tuple -> ip_to_string(ts_tuple)
+                end
             end
         end
 
@@ -240,10 +266,9 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
     end
   end
 
-  defp parse_ip({:doh, ip, _}), do: parse_ip(ip)
-  defp parse_ip({:dot, ip, _}), do: parse_ip(ip)
   defp parse_ip({:tcp, ip, _}), do: parse_ip(ip)
   defp parse_ip({_, _, _, _} = ip), do: ip
+  defp parse_ip({_, _, _, _, _, _, _, _} = ip), do: ip
 
   defp parse_ip(ip_str) when is_binary(ip_str) do
     case :inet.parse_address(String.to_charlist(ip_str)) do

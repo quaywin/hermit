@@ -6,7 +6,7 @@
         DNS Endpoints
       </h1>
       <p class="text-base-content/60 mt-1 text-xs sm:text-sm">
-        Connect devices via secure DoH (iOS, macOS, Android, Browsers) or private Tailscale mesh networks.
+        Deploy dedicated Tailscale DNS Nodes linked to your filtering and Smart DNS profiles.
       </p>
     </div>
     <div class="mt-4 md:mt-0 flex flex-wrap items-center gap-3">
@@ -27,21 +27,20 @@
         <thead>
           <tr class="border-b border-base-300 text-base-content/60 text-xs font-medium uppercase tracking-wider">
             <th class="py-3 px-4 min-w-[170px]">Endpoint Name</th>
-            <th class="py-3 px-4 min-w-[150px]">Network Type</th>
-            <th class="py-3 px-4 min-w-[150px]">DNS Profile</th>
-            <th class="py-3 px-4 min-w-[160px]">Node State</th>
-            <th class="py-3 px-4 min-w-[210px]">Client Connect (DoH)</th>
-            <th class="py-3 px-4 text-right min-w-[180px]">Actions</th>
+            <th class="py-3 px-4 min-w-[170px]">Tailscale Inbound</th>
+            <th class="py-3 px-4 min-w-[160px]">DNS Profile</th>
+            <th class="py-3 px-4 min-w-[180px]">Node State</th>
+            <th class="py-3 px-4 text-right min-w-[200px]">Actions</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300 text-sm">
           <%= if Enum.empty?(@endpoints) do %>
             <tr>
-              <td colspan="6" class="py-12 text-center">
+              <td colspan="5" class="py-12 text-center">
                 <span class="text-3xl block mb-2">🔌</span>
                 <p class="text-sm font-semibold text-base-content">No DNS Endpoints yet</p>
                 <p class="text-xs text-base-content/50 mt-1 max-w-sm mx-auto">
-                  Create a DNS Endpoint to connect your devices or Tailscale network to a secure filtering profile.
+                  Create a Tailscale DNS Endpoint to connect your Tailnet devices to a filtering and Smart DNS profile.
                 </p>
                 <button
                   phx-click="open_new_modal"
@@ -57,7 +56,6 @@
               endpoint={endpoint}
               dns_status={Map.get(@dns_statuses, endpoint.id, {:stopped, nil, nil})}
               dns_profiles={@dns_profiles}
-              base_url={@base_url}
             />
           <% end %>
         </tbody>
@@ -69,7 +67,6 @@
     :if={@show_new_modal}
     mode={:create}
     form={@new_form}
-    connection_type={@new_connection_type}
     dns_profiles={@dns_profiles}
     inbound_profiles={@inbound_profiles}
   />
@@ -78,15 +75,7 @@
     :if={@show_edit_modal}
     mode={:edit}
     form={@edit_form}
-    connection_type={@edit_connection_type}
     dns_profiles={@dns_profiles}
     inbound_profiles={@inbound_profiles}
-  />
-
-  <.device_setup_guide_modal
-    :if={@show_guide_modal and @guide_endpoint}
-    endpoint={@guide_endpoint}
-    base_url={@base_url}
-    guide_tab={@guide_tab}
   />
 </div>

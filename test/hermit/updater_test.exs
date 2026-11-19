@@ -41,7 +41,7 @@ defmodule Hermit.UpdaterTest do
       assert Map.has_key?(status, :current_version)
       assert Map.has_key?(status, :latest_version)
       assert Map.has_key?(status, :update_available?)
-      assert Map.has_key?(status, :docker_socket_available?)
+      assert Map.has_key?(status, :native_upgrade_available?)
       assert Map.has_key?(status, :is_upgrading?)
     end
   end

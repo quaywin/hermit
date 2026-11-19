@@ -583,7 +583,13 @@ defmodule Hermit.Updater do
         ""
       end
 
-    if not File.exists?(proxy_bin) or (current_ver != "" and current_ver != @threeproxy_version) do
+    too_small? =
+      case File.stat(proxy_bin) do
+        {:ok, %{size: size}} -> size < 20_000
+        _ -> true
+      end
+
+    if too_small? or (current_ver != "" and current_ver != @threeproxy_version) do
       if System.find_executable("dpkg-deb") do
         tp_arch = if arch == "amd64", do: "x86_64", else: "arm64"
 
@@ -601,7 +607,8 @@ defmodule Hermit.Updater do
               case System.cmd("dpkg-deb", ["-x", tmp_deb, extract_dir], stderr_to_stdout: true) do
                 {_, 0} ->
                   bin_path =
-                    Path.wildcard(Path.join(extract_dir, "**/3proxy"))
+                    ["**/bin/3proxy", "**/sbin/3proxy"]
+                    |> Enum.flat_map(&Path.wildcard(Path.join(extract_dir, &1)))
                     |> Enum.find(&File.regular?/1)
 
                   if bin_path do

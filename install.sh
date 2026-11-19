@@ -117,7 +117,7 @@ fi
 
 # Ensure isolated 3proxy binary exists under /opt/hermit/bin (replaces microsocks + tinyproxy)
 NEED_3PROXY_INSTALL=false
-if [ ! -x "$HERMIT_BIN_DIR/3proxy" ]; then
+if [ ! -x "$HERMIT_BIN_DIR/3proxy" ] || [ "$(wc -c < "$HERMIT_BIN_DIR/3proxy" 2>/dev/null || echo 0)" -lt 20000 ]; then
   NEED_3PROXY_INSTALL=true
 else
   INSTALLED_3P_VER=$("$HERMIT_BIN_DIR/3proxy" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "")
@@ -137,7 +137,7 @@ if [ "$NEED_3PROXY_INSTALL" = true ]; then
   DEB_3P="$TMP_3P/3proxy.deb"
   curl -fsSL "https://github.com/3proxy/3proxy/releases/download/${THREEPROXY_VERSION}/3proxy-${THREEPROXY_VERSION}.${THREEPROXY_ARCH}.deb" -o "$DEB_3P"
   dpkg-deb -x "$DEB_3P" "$TMP_3P/extracted"
-  THREEPROXY_BIN=$(find "$TMP_3P/extracted" -type f -name 3proxy | head -n1 || true)
+  THREEPROXY_BIN=$(find "$TMP_3P/extracted" -type f \( -path "*/bin/3proxy" -o -path "*/sbin/3proxy" \) | head -n1 || true)
   if [ -z "$THREEPROXY_BIN" ]; then
     rm -rf "$TMP_3P"
     echo "❌ Failed to extract 3proxy binary from package."

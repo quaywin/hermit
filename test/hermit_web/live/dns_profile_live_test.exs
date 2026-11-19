@@ -105,7 +105,10 @@ defmodule HermitWeb.DnsProfileLiveTest do
              "9.9.9.9, 149.112.112.112"
   end
 
-  test "links to services catalog and custom domain rules", %{conn: conn, default_profile: profile} do
+  test "links to services catalog and custom domain rules", %{
+    conn: conn,
+    default_profile: profile
+  } do
     {:ok, _view, html} = live(conn, ~p"/dns?id=#{profile.id}")
 
     assert html =~ "Open Services Catalog"

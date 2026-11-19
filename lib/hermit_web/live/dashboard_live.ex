@@ -1,5 +1,6 @@
 defmodule HermitWeb.DashboardLive do
   use HermitWeb, :live_view
+  import HermitWeb.DashboardComponents
   import Ecto.Query
   alias Hermit.Vpn.Form
   alias Hermit.Vpn.PairWorker
@@ -21,8 +22,14 @@ defmodule HermitWeb.DashboardLive do
     outbound_profiles = Hermit.Repo.all(Hermit.Vpn.OutboundProfile)
 
     total_endpoints = Hermit.Repo.aggregate(Hermit.Vpn.DnsEndpoint, :count) || 0
-    active_endpoints = Hermit.Repo.aggregate(from(e in Hermit.Vpn.DnsEndpoint, where: e.enabled == true), :count) || 0
-    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
+    active_endpoints =
+      Hermit.Repo.aggregate(from(e in Hermit.Vpn.DnsEndpoint, where: e.enabled == true), :count) ||
+        0
+
+    active_tunnels =
+      Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
     dns_summary = Hermit.Dns.Telemetry.get_24h_summary()
 
     {:ok,
@@ -213,7 +220,9 @@ defmodule HermitWeb.DashboardLive do
       end)
 
     pairs = PairWorker.list_pairs()
-    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
+    active_tunnels =
+      Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
 
     {:noreply,
      socket
@@ -228,7 +237,9 @@ defmodule HermitWeb.DashboardLive do
     updated_errors = Enum.reject(current_errors, &(&1.id == id))
 
     pairs = PairWorker.list_pairs()
-    active_tunnels = Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+
+    active_tunnels =
+      Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
 
     {:noreply,
      socket

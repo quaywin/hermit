@@ -1,5 +1,6 @@
 defmodule HermitWeb.TunnelDetailLive do
   use HermitWeb, :live_view
+  import HermitWeb.TunnelComponents
   alias Hermit.Vpn.PairWorker
   alias Hermit.Vpn.DynamicSupervisor
 

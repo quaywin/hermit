@@ -216,9 +216,7 @@ defmodule HermitWeb.Layouts do
               </.link>
               <.link
                 navigate={~p"/dns/rules"}
-                class={
-                  if @active == :dns_rules, do: "text-emerald-500", else: "text-base-content/60"
-                }
+                class={if @active == :dns_rules, do: "text-emerald-500", else: "text-base-content/60"}
                 title="Custom Rules"
               >
                 <.icon name="hero-list-bullet" class="size-5 shrink-0" />

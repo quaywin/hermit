@@ -116,7 +116,10 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
 
     test "resolve_tags normalizes tags and handles defaults" do
       assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "my-tag"}) == "tag:my-tag"
-      assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "tag:my-tag, server"}) == "tag:my-tag,tag:server"
+
+      assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "tag:my-tag, server"}) ==
+               "tag:my-tag,tag:server"
+
       assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "none"}) == nil
       assert Tailscale.resolve_tags("p1", %{"advertise_tags" => "false"}) == nil
       assert Tailscale.resolve_tags("p1", %{"ts_auth_key" => "tskey-client-abc"}) == "tag:hermit"
@@ -135,7 +138,8 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
     end
 
     test "resolves from map with ts_auth_key" do
-      assert {:ok, _token} = Tailscale.get_api_token(%{"ts_auth_key" => "tskey-client-k12345-secret"})
+      assert {:ok, _token} =
+               Tailscale.get_api_token(%{"ts_auth_key" => "tskey-client-k12345-secret"})
     end
 
     test "rejects empty or nil keys" do
@@ -146,6 +150,15 @@ defmodule Hermit.Vpn.Inbound.TailscaleTest do
 
     test "warns and returns error for tskey-auth-" do
       assert {:error, :unsupported_auth_key} = Tailscale.get_api_token("tskey-auth-xyz")
+    end
+  end
+
+  describe "get_host_tailscale_ip/0" do
+    test "returns nil or a valid ipv4 string without crashing" do
+      result = Tailscale.get_host_tailscale_ip()
+
+      assert is_nil(result) or
+               (is_binary(result) and Regex.match?(~r/^\d+\.\d+\.\d+\.\d+$/, result))
     end
   end
 end

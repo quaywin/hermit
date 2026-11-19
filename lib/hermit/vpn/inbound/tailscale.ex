@@ -1413,4 +1413,38 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
   rescue
     _ -> nil
   end
+
+  @doc """
+  Gets the Tailscale IPv4 address of the host machine (from tailscale0 interface or tailscale cli).
+  Returns nil if host is not running Tailscale.
+  """
+  def get_host_tailscale_ip do
+    case System.cmd("ip", ["-o", "-4", "addr", "show", "dev", "tailscale0"],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        case Regex.run(~r/inet\s+(\d+\.\d+\.\d+\.\d+)/, output) do
+          [_, ip] -> ip
+          _ -> get_tailscale_cli_ip()
+        end
+
+      _ ->
+        get_tailscale_cli_ip()
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp get_tailscale_cli_ip do
+    case System.cmd("tailscale", ["ip", "-4"], stderr_to_stdout: true) do
+      {output, 0} ->
+        ip = String.trim(output)
+        if Regex.match?(~r/^\d+\.\d+\.\d+\.\d+$/, ip), do: ip, else: nil
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
 end

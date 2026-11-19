@@ -1,5 +1,6 @@
 defmodule HermitWeb.DnsEndpointLive do
   use HermitWeb, :live_view
+  import HermitWeb.DnsEndpointComponents
   import Ecto.Query
   alias Hermit.Vpn.DnsEndpoint
   alias Hermit.Vpn.DnsConfig
@@ -103,7 +104,8 @@ defmodule HermitWeb.DnsEndpointLive do
       end
 
     if endpoint do
-      {:noreply, assign(socket, show_guide_modal: true, guide_endpoint: endpoint, guide_tab: "android")}
+      {:noreply,
+       assign(socket, show_guide_modal: true, guide_endpoint: endpoint, guide_tab: "android")}
     else
       {:noreply, socket}
     end
@@ -420,8 +422,13 @@ defmodule HermitWeb.DnsEndpointLive do
           DnsWorker.sync_state(endpoint_id)
 
           endpoint = Hermit.Repo.get(DnsEndpoint, endpoint_id)
-          profile = endpoint && endpoint.inbound_profile_id && Hermit.Repo.get(Hermit.Vpn.InboundProfile, endpoint.inbound_profile_id)
+
+          profile =
+            endpoint && endpoint.inbound_profile_id &&
+              Hermit.Repo.get(Hermit.Vpn.InboundProfile, endpoint.inbound_profile_id)
+
           profile_config = (profile && profile.config) || %{}
+
           auth_key =
             Map.get(profile_config, "ts_auth_key") ||
               Map.get(profile_config, :ts_auth_key) ||

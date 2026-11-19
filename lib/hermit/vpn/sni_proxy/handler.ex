@@ -128,10 +128,10 @@ defmodule Hermit.Vpn.SniProxy.Handler do
                   keepalive: true,
                   send_timeout: 10_000,
                   send_timeout_close: true,
-                  active: :once
+                  active: 32
                 )
 
-                :inet.setopts(target_socket, active: :once)
+                :inet.setopts(target_socket, active: 32)
                 relay_loop(client_socket, target_socket)
 
               {:error, _} ->
@@ -193,6 +193,11 @@ defmodule Hermit.Vpn.SniProxy.Handler do
     end
   end
 
+  defp send_connect_command(_socket, host, _port)
+       when byte_size(host) == 0 or byte_size(host) > 255 do
+    {:error, :invalid_host_length}
+  end
+
   defp send_connect_command(socket, host, port) do
     host_len = byte_size(host)
     # CMD = 0x01 (CONNECT), RSV = 0x00, ATYP = 0x03 (Domain name)
@@ -251,7 +256,10 @@ defmodule Hermit.Vpn.SniProxy.Handler do
 
   defp socks5_rep_description(1), do: "general SOCKS server failure"
   defp socks5_rep_description(2), do: "connection not allowed by ruleset"
-  defp socks5_rep_description(3), do: "network unreachable (destination may lack IPv4/IPv6 route in tunnel)"
+
+  defp socks5_rep_description(3),
+    do: "network unreachable (destination may lack IPv4/IPv6 route in tunnel)"
+
   defp socks5_rep_description(4), do: "host unreachable"
   defp socks5_rep_description(5), do: "connection refused by destination"
   defp socks5_rep_description(6), do: "TTL expired"
@@ -259,13 +267,12 @@ defmodule Hermit.Vpn.SniProxy.Handler do
   defp socks5_rep_description(8), do: "address type not supported"
   defp socks5_rep_description(code), do: "error code #{code}"
 
-  # Bi-directional TCP relay loop
+  # Bi-directional TCP relay loop using batched active: N to minimize setopts syscalls
   defp relay_loop(client, target) do
     receive do
       {:tcp, ^client, data} ->
         case :gen_tcp.send(target, data) do
           :ok ->
-            :inet.setopts(client, active: :once)
             relay_loop(client, target)
 
           {:error, _} ->
@@ -275,12 +282,19 @@ defmodule Hermit.Vpn.SniProxy.Handler do
       {:tcp, ^target, data} ->
         case :gen_tcp.send(client, data) do
           :ok ->
-            :inet.setopts(target, active: :once)
             relay_loop(client, target)
 
           {:error, _} ->
             cleanup(client, target)
         end
+
+      {:tcp_passive, ^client} ->
+        :inet.setopts(client, active: 32)
+        relay_loop(client, target)
+
+      {:tcp_passive, ^target} ->
+        :inet.setopts(target, active: 32)
+        relay_loop(client, target)
 
       {:tcp_closed, ^client} ->
         cleanup(client, target)

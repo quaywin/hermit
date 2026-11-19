@@ -3,6 +3,10 @@ defmodule Hermit.Dns.Filter do
   Encapsulates logic for DNS blocklists and domain filtering.
   """
 
+  @filter_cache_table :dns_filter_cache
+  @max_filter_cache_entries 50_000
+  @eviction_batch_size 5_000
+
   @spec match_ets_blocklist?(String.t(), atom() | integer()) :: boolean()
   def match_ets_blocklist?(domain, :adguard_blocklist), do: match_ets_blocklist?(domain, 1)
   def match_ets_blocklist?(domain, :goodbyeads_blocklist), do: match_ets_blocklist?(domain, 2)
@@ -70,10 +74,11 @@ defmodule Hermit.Dns.Filter do
 
   @spec match_any_ets_blocklist_cached?(String.t(), [integer()]) :: integer() | nil
   def match_any_ets_blocklist_cached?(domain, blocklist_ids) do
-    cache_key = {domain, blocklist_ids}
+    norm_domain = String.downcase(domain)
+    cache_key = {norm_domain, blocklist_ids}
 
     try do
-      case :ets.lookup(:dns_filter_cache, cache_key) do
+      case :ets.lookup(@filter_cache_table, cache_key) do
         [{_, matched_id, _}] ->
           matched_id
 
@@ -81,22 +86,56 @@ defmodule Hermit.Dns.Filter do
           matched_id
 
         [] ->
-          matched_id = match_any_ets_blocklist?(domain, blocklist_ids)
+          matched_id = match_any_ets_blocklist_downcased?(norm_domain, blocklist_ids)
           now = System.monotonic_time(:second)
-          :ets.insert(:dns_filter_cache, {cache_key, matched_id, now})
+          maybe_prune_filter_cache(now)
+          :ets.insert(@filter_cache_table, {cache_key, matched_id, now})
           matched_id
       end
     rescue
       ArgumentError ->
         ensure_filter_cache_table_exists()
-        match_any_ets_blocklist?(domain, blocklist_ids)
+        match_any_ets_blocklist_downcased?(norm_domain, blocklist_ids)
+    end
+  end
+
+  defp maybe_prune_filter_cache(now) do
+    case :ets.info(@filter_cache_table, :size) do
+      size when is_integer(size) and size >= @max_filter_cache_entries ->
+        case :ets.lookup(@filter_cache_table, :_last_eviction) do
+          [{_, last_eviction}] when now - last_eviction < 10 ->
+            :ok
+
+          _ ->
+            :ets.insert(@filter_cache_table, {:_last_eviction, now})
+            evict_filter_cache_batch(@eviction_batch_size)
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp evict_filter_cache_batch(count) do
+    case :ets.select(
+           @filter_cache_table,
+           [{{{:"$1", :"$2"}, :_, :_}, [], [{{:"$1", :"$2"}}]}],
+           count
+         ) do
+      {keys, _cont} when is_list(keys) ->
+        Enum.each(keys, &:ets.delete(@filter_cache_table, &1))
+
+      _ ->
+        :ok
     end
   end
 
   defp ensure_filter_cache_table_exists do
-    if :ets.info(:dns_filter_cache) == :undefined do
+    if :ets.info(@filter_cache_table) == :undefined do
       try do
-        :ets.new(:dns_filter_cache, [
+        :ets.new(@filter_cache_table, [
           :set,
           :public,
           :named_table,
@@ -111,8 +150,10 @@ defmodule Hermit.Dns.Filter do
 
   @spec match_any_ets_blocklist?(String.t(), [integer()]) :: integer() | nil
   def match_any_ets_blocklist?(domain, blocklist_ids) do
-    domain = String.downcase(domain)
+    match_any_ets_blocklist_downcased?(String.downcase(domain), blocklist_ids)
+  end
 
+  defp match_any_ets_blocklist_downcased?(domain, blocklist_ids) do
     # Filter blocklist_ids using Bloom Filter
     active_ids =
       if :ets.info(:dns_bloom_filter) != :undefined do

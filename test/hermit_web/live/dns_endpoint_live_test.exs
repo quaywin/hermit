@@ -123,7 +123,8 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
   end
 
-  test "updates running DNS server when switching dns_profile_id via quick_select and edit modal", %{conn: conn} do
+  test "updates running DNS server when switching dns_profile_id via quick_select and edit modal",
+       %{conn: conn} do
     {:ok, p1} =
       Hermit.Repo.insert(%DnsConfig{
         name: "Profile Alpha",
@@ -153,7 +154,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     {:ok, {_, _server_pid}} = Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, nil)
 
     # Initial ETS config check
-    [{_, {initial_config, _}}] =
+    [{_, {initial_config, _, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert initial_config.id == p1.id
@@ -170,7 +171,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     })
 
     # Verify server config was updated to p2 in ETS cache
-    [{_, {updated_config, _}}] =
+    [{_, {updated_config, _, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert updated_config.id == p2.id
@@ -191,7 +192,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     |> render_submit()
 
     # Verify server config was updated back to p1
-    [{_, {final_config, _}}] =
+    [{_, {final_config, _, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert final_config.id == p1.id

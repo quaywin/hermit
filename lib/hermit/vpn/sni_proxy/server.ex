@@ -18,8 +18,26 @@ defmodule Hermit.Vpn.SniProxy.Server do
     :http_acceptor
   ]
 
-  @default_https_port 443
-  @default_http_port 80
+  @default_https_port 8443
+  @default_http_port 8080
+
+  def https_port do
+    config = Application.get_env(:hermit, :sni_proxy, [])
+
+    case System.get_env("SNI_PROXY_HTTPS_PORT") do
+      nil -> Keyword.get(config, :https_port, @default_https_port)
+      str -> String.to_integer(str)
+    end
+  end
+
+  def http_port do
+    config = Application.get_env(:hermit, :sni_proxy, [])
+
+    case System.get_env("SNI_PROXY_HTTP_PORT") do
+      nil -> Keyword.get(config, :http_port, @default_http_port)
+      str -> String.to_integer(str)
+    end
+  end
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -38,8 +56,8 @@ defmodule Hermit.Vpn.SniProxy.Server do
     enabled? = Keyword.get(opts, :enabled, Keyword.get(config, :enabled, true))
 
     if enabled? do
-      https_port = opts[:https_port] || Keyword.get(config, :https_port, @default_https_port)
-      http_port = opts[:http_port] || Keyword.get(config, :http_port, @default_http_port)
+      https_port = opts[:https_port] || https_port()
+      http_port = opts[:http_port] || http_port()
 
       state = %__MODULE__{
         https_port: https_port,
@@ -148,24 +166,37 @@ defmodule Hermit.Vpn.SniProxy.Server do
   defp acceptor_loop(listen_socket, default_port) do
     case :gen_tcp.accept(listen_socket) do
       {:ok, client_socket} ->
-        # Spawn an isolated task to handle the connection
-        {:ok, task_pid} =
-          Task.start(fn ->
-            receive do
-              :start_handling ->
-                Handler.handle(client_socket, default_port)
-            after
-              5000 ->
+        # Spawn a supervised task (falling back to Task.start in standalone tests)
+        task_fn = fn ->
+          receive do
+            :start_handling ->
+              Handler.handle(client_socket, default_port)
+          after
+            5000 ->
+              :gen_tcp.close(client_socket)
+          end
+        end
+
+        task_result =
+          if Process.whereis(Hermit.Vpn.SniProxy.TaskSupervisor) do
+            Task.Supervisor.start_child(Hermit.Vpn.SniProxy.TaskSupervisor, task_fn)
+          else
+            Task.start(task_fn)
+          end
+
+        case task_result do
+          {:ok, task_pid} ->
+            case :gen_tcp.controlling_process(client_socket, task_pid) do
+              :ok ->
+                send(task_pid, :start_handling)
+
+              {:error, reason} ->
+                Logger.debug("SNI Proxy: controlling_process failed: #{inspect(reason)}")
                 :gen_tcp.close(client_socket)
             end
-          end)
-
-        case :gen_tcp.controlling_process(client_socket, task_pid) do
-          :ok ->
-            send(task_pid, :start_handling)
 
           {:error, reason} ->
-            Logger.debug("SNI Proxy: controlling_process failed: #{inspect(reason)}")
+            Logger.warning("SNI Proxy: failed to spawn handler task: #{inspect(reason)}")
             :gen_tcp.close(client_socket)
         end
 

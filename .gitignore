@@ -45,3 +45,8 @@ npm-debug.log
 
 # Sandboxed storage folder for VPN configs/states
 /storage/
+
+# Local certificates, private keys, and scratch scripts
+config/certs/*.key
+*.key
+scratch_*.exs

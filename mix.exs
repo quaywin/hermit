@@ -61,7 +61,7 @@ defmodule Hermit.MixProject do
       {:x509, "~> 0.9.2", override: true},
       {:ecto, "~> 3.12"},
       {:phoenix_ecto, "~> 4.6"},
-      {:ecto_sqlite3, ">= 0.0.0"},
+      {:ecto_sqlite3, "~> 0.24"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:dns_erlang, "~> 5.0"}
     ]

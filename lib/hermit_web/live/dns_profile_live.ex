@@ -1,5 +1,6 @@
 defmodule HermitWeb.DnsProfileLive do
   use HermitWeb, :live_view
+  import HermitWeb.DnsProfileComponents
   import Ecto.Query
   alias Hermit.Vpn.DnsConfig
 
@@ -249,30 +250,30 @@ defmodule HermitWeb.DnsProfileLive do
 
       true ->
         case Hermit.Repo.delete(profile) do
-        {:ok, _} ->
-          dns_profiles =
-            Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-            |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+          {:ok, _} ->
+            dns_profiles =
+              Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
+              |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
 
-          next_profile = List.first(dns_profiles)
+            next_profile = List.first(dns_profiles)
 
-          socket =
-            socket
-            |> put_flash(:info, "DNS Profile deleted successfully.")
-            |> assign(dns_profiles: dns_profiles)
+            socket =
+              socket
+              |> put_flash(:info, "DNS Profile deleted successfully.")
+              |> assign(dns_profiles: dns_profiles)
 
-          if next_profile do
-            {:noreply, push_patch(socket, to: ~p"/dns?id=#{next_profile.id}")}
-          else
-            {:noreply,
-             socket
-             |> assign(selected_profile: nil, has_logs: false)
-             |> stream(:dns_logs, [], reset: true)}
-          end
+            if next_profile do
+              {:noreply, push_patch(socket, to: ~p"/dns?id=#{next_profile.id}")}
+            else
+              {:noreply,
+               socket
+               |> assign(selected_profile: nil, has_logs: false)
+               |> stream(:dns_logs, [], reset: true)}
+            end
 
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to delete DNS Profile.")}
-      end
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Failed to delete DNS Profile.")}
+        end
     end
   end
 

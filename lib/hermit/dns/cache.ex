@@ -5,6 +5,8 @@ defmodule Hermit.Dns.Cache do
 
   @dns_cache_table :dns_cache
   @max_entries 25_000
+  @eviction_batch_size 2_500
+  @delete_chunk_size 1_000
 
   @spec lookup(integer(), String.t(), atom(), boolean()) ::
           {:ok, binary(), String.t(), String.t()}
@@ -74,6 +76,15 @@ defmodule Hermit.Dns.Cache do
           _ ->
             :ets.insert(@dns_cache_table, {:_last_overflow_prune, now})
             prune_expired()
+
+            # Enforce a hard memory ceiling even if all cached entries are still unexpired
+            case :ets.info(@dns_cache_table, :size) do
+              remaining when is_integer(remaining) and remaining >= @max_entries ->
+                evict_batch(@eviction_batch_size)
+
+              _ ->
+                :ok
+            end
         end
 
       _ ->
@@ -81,6 +92,20 @@ defmodule Hermit.Dns.Cache do
     end
   rescue
     _ -> :ok
+  end
+
+  defp evict_batch(count) do
+    case :ets.select(
+           @dns_cache_table,
+           [{{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}],
+           count
+         ) do
+      {keys, _cont} when is_list(keys) ->
+        Enum.each(keys, &:ets.delete(@dns_cache_table, &1))
+
+      _ ->
+        :ok
+    end
   end
 
   @spec clear(integer()) :: :ok
@@ -114,16 +139,7 @@ defmodule Hermit.Dns.Cache do
         {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [{:==, :"$2", base}], [true]}
       ])
 
-      all_keys =
-        :ets.select(@dns_cache_table, [
-          {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}
-        ])
-
-      Enum.each(all_keys, fn {p_id, d, qtype} ->
-        if String.ends_with?(d, suffix) do
-          :ets.delete(@dns_cache_table, {p_id, d, qtype})
-        end
-      end)
+      delete_matching_suffix_chunked(suffix)
     else
       :ets.select_delete(@dns_cache_table, [
         {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [{:==, :"$2", norm}], [true]}
@@ -133,5 +149,32 @@ defmodule Hermit.Dns.Cache do
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp delete_matching_suffix_chunked(suffix) do
+    :ets.safe_fixtable(@dns_cache_table, true)
+
+    try do
+      match_spec = [{{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}]
+
+      do_delete_suffix_chunk(
+        :ets.select(@dns_cache_table, match_spec, @delete_chunk_size),
+        suffix
+      )
+    after
+      :ets.safe_fixtable(@dns_cache_table, false)
+    end
+  end
+
+  defp do_delete_suffix_chunk(:"$end_of_table", _suffix), do: :ok
+
+  defp do_delete_suffix_chunk({keys, cont}, suffix) do
+    Enum.each(keys, fn {p_id, d, qtype} ->
+      if String.ends_with?(d, suffix) do
+        :ets.delete(@dns_cache_table, {p_id, d, qtype})
+      end
+    end)
+
+    do_delete_suffix_chunk(:ets.select(cont), suffix)
   end
 end

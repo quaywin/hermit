@@ -24,19 +24,32 @@ defmodule Hermit.Dns.Port53Server do
   def init(_opts) do
     port = Application.get_env(:hermit, :port53_port, @port)
 
-    # Bind persistent fallback client sockets to avoid socket thrashing on fallback queries
-    fallback_sockets =
+    # Bind persistent fallback client sockets with active: N backpressure
+    fallback_socket_list =
       Enum.map(1..2, fn _ ->
-        case :gen_udp.open(0, [:binary, active: true, recbuf: 65_536]) do
+        case :gen_udp.open(0, [:binary, active: 1000, recbuf: 65_536]) do
           {:ok, sock} -> sock
           {:error, _} -> nil
         end
       end)
       |> Enum.reject(&is_nil/1)
-      |> List.to_tuple()
+
+    fallback_sockets = List.to_tuple(fallback_socket_list)
+    fallback_socket_set = MapSet.new(fallback_socket_list)
 
     if :ets.info(:port53_pending_fallback) == :undefined do
       :ets.new(:port53_pending_fallback, [
+        :set,
+        :public,
+        :named_table,
+        read_concurrency: true,
+        write_concurrency: :auto
+      ])
+    end
+
+    # Own :dns_proxy_cache in this permanent singleton so it survives endpoint restarts
+    if :ets.info(:dns_proxy_cache) == :undefined do
+      :ets.new(:dns_proxy_cache, [
         :set,
         :public,
         :named_table,
@@ -51,6 +64,7 @@ defmodule Hermit.Dns.Port53Server do
       udp_socket: nil,
       tcp_socket: nil,
       fallback_sockets: fallback_sockets,
+      fallback_socket_set: fallback_socket_set,
       port: port
     }
 
@@ -83,6 +97,8 @@ defmodule Hermit.Dns.Port53Server do
 
   @impl true
   def handle_info({:udp, socket, ip, port, packet}, %{udp_socket: socket} = state) do
+    fallback_sockets = state.fallback_sockets
+
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
       client_ip_str = :inet.ntoa(ip) |> to_string()
 
@@ -94,7 +110,7 @@ defmodule Hermit.Dns.Port53Server do
             port,
             packet,
             client_ip_str,
-            state.fallback_sockets
+            fallback_sockets
           )
 
         endpoint_id ->
@@ -108,11 +124,7 @@ defmodule Hermit.Dns.Port53Server do
   # Handle responses arriving from fallback upstream (1.1.1.1) on our fallback client sockets
   @impl true
   def handle_info({:udp, fallback_socket, _u_ip, _u_port, packet}, state) do
-    is_fallback_socket? =
-      is_tuple(state.fallback_sockets) and
-        fallback_socket in Tuple.to_list(state.fallback_sockets)
-
-    if is_fallback_socket? and byte_size(packet) >= 12 do
+    if MapSet.member?(state.fallback_socket_set, fallback_socket) and byte_size(packet) >= 12 do
       <<tx_id::16, rest_packet::binary>> = packet
 
       case :ets.lookup(:port53_pending_fallback, tx_id) do
@@ -226,7 +238,10 @@ defmodule Hermit.Dns.Port53Server do
   defp tcp_accept_loop(tcp_socket, server_pid) do
     case :gen_tcp.accept(tcp_socket) do
       {:ok, client_socket} ->
-        spawn(fn -> handle_tcp_client(client_socket) end)
+        Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
+          handle_tcp_client(client_socket)
+        end)
+
         tcp_accept_loop(tcp_socket, server_pid)
 
       {:error, :closed} ->
@@ -344,7 +359,7 @@ defmodule Hermit.Dns.Port53Server do
   defp process_fallback_udp_query(socket, ip, port, packet, client_ip_str, fallback_sockets) do
     case Packet.parse(packet) do
       {:ok, query} ->
-        Logger.info(
+        Logger.debug(
           "Port53 Server: Query '#{query.domain}' from #{client_ip_str} -> FALLBACK (Resolved via 1.1.1.1)"
         )
 
@@ -366,7 +381,7 @@ defmodule Hermit.Dns.Port53Server do
   defp process_fallback_tcp_query(client_socket, packet, client_ip_str, ip) do
     case Packet.parse(packet) do
       {:ok, query} ->
-        Logger.info(
+        Logger.debug(
           "Port53 Server (TCP): Query '#{query.domain}' from #{client_ip_str} -> FALLBACK (Resolved via 1.1.1.1)"
         )
 
@@ -388,21 +403,36 @@ defmodule Hermit.Dns.Port53Server do
   defp forward_fallback_udp(socket, client_ip, client_port, packet, fallback_sockets) do
     if is_tuple(fallback_sockets) and tuple_size(fallback_sockets) > 0 and byte_size(packet) >= 12 do
       <<orig_tx_id::binary-size(2), rest::binary>> = packet
-      new_tx_id = rem(System.unique_integer([:positive, :monotonic]), 65535) + 1
+      entry = {client_ip, client_port, orig_tx_id, System.monotonic_time(:millisecond)}
+      new_tx_id = register_fallback_tx_id(entry)
       new_packet = <<new_tx_id::16>> <> rest
 
       socket_idx = :erlang.phash2(new_tx_id, tuple_size(fallback_sockets))
       selected_socket = elem(fallback_sockets, socket_idx)
 
-      :ets.insert(
-        :port53_pending_fallback,
-        {new_tx_id, {client_ip, client_port, orig_tx_id, System.monotonic_time(:millisecond)}}
-      )
-
       :gen_udp.send(selected_socket, {1, 1, 1, 1}, 53, new_packet)
     else
       send_udp_error(socket, client_ip, client_port, packet, 2)
     end
+  end
+
+  defp register_fallback_tx_id(entry) do
+    base_id = rem(System.unique_integer([:positive, :monotonic]), 65535) + 1
+    do_register_fallback_tx_id(entry, base_id, 0)
+  end
+
+  defp do_register_fallback_tx_id(entry, candidate_id, retries) when retries < 50 do
+    if :ets.insert_new(:port53_pending_fallback, {candidate_id, entry}) do
+      candidate_id
+    else
+      next_id = if candidate_id >= 65535, do: 1, else: candidate_id + 1
+      do_register_fallback_tx_id(entry, next_id, retries + 1)
+    end
+  end
+
+  defp do_register_fallback_tx_id(entry, candidate_id, _retries) do
+    :ets.insert(:port53_pending_fallback, {candidate_id, entry})
+    candidate_id
   end
 
   defp forward_fallback_tcp(client_socket, packet) do

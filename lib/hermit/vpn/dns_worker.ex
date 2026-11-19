@@ -160,7 +160,7 @@ defmodule Hermit.Vpn.DnsWorker do
   def handle_info(:retry_start_dns_node, state) do
     endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, state.endpoint_id)
 
-    if endpoint && endpoint.enabled and state.status in [:error, :stopped] do
+    if (endpoint && endpoint.enabled) and state.status in [:error, :stopped] do
       Logger.info("Attempting auto-recovery for DNS node (endpoint #{state.endpoint_id})...")
       {_res, new_state} = do_sync_state(state)
       {:noreply, new_state}
@@ -186,7 +186,13 @@ defmodule Hermit.Vpn.DnsWorker do
     if port == state.ts_port do
       Logger.error("DNS Tailscale daemon process exited: #{inspect(reason)}")
 
-      new_state = %{state | status: :error, error_reason: "Daemon exited: #{inspect(reason)}", ts_port: nil}
+      new_state = %{
+        state
+        | status: :error,
+          error_reason: "Daemon exited: #{inspect(reason)}",
+          ts_port: nil
+      }
+
       maybe_schedule_recovery(new_state)
       {:noreply, new_state}
     else
@@ -288,8 +294,11 @@ defmodule Hermit.Vpn.DnsWorker do
   defp maybe_schedule_recovery(state) do
     endpoint = Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, state.endpoint_id)
 
-    if endpoint && endpoint.enabled and not mock?() do
-      Logger.info("Scheduling DNS node recovery for endpoint #{state.endpoint_id} in 5 seconds...")
+    if (endpoint && endpoint.enabled) and not mock?() do
+      Logger.info(
+        "Scheduling DNS node recovery for endpoint #{state.endpoint_id} in 5 seconds..."
+      )
+
       Process.send_after(self(), :retry_start_dns_node, 5000)
     end
   end
@@ -307,7 +316,8 @@ defmodule Hermit.Vpn.DnsWorker do
         System.get_env("TAILSCALE_API_KEY") ||
         System.get_env("TS_API_KEY") ||
         Hermit.Vpn.Setting.get_value("tailscale_api_key", "") ||
-        (Application.get_env(:hermit, :docker) && Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
+        (Application.get_env(:hermit, :docker) &&
+           Application.get_env(:hermit, :docker)[:tailscale_auth_key]) ||
         ""
 
     tailnet =
@@ -386,6 +396,7 @@ defmodule Hermit.Vpn.DnsWorker do
     subnet = "10.251.#{octet}.0/30"
     port = 5400 + endpoint_id
     ts_port = Hermit.Vpn.Inbound.Tailscale.resolve_port("dns_#{endpoint_id}", profile_config)
+    host_ts_ip = Hermit.Vpn.Inbound.Tailscale.get_host_tailscale_ip()
 
     socket_path = "/run/tailscaled.dns_#{endpoint_id}.socket"
     pid_path = Path.join(storage_dir, "tailscaled.pid")
@@ -409,6 +420,45 @@ defmodule Hermit.Vpn.DnsWorker do
 
     setup_result =
       if has_existing_env do
+        if is_binary(host_ts_ip) and host_ts_ip != "" do
+          case run_cmd("ip", [
+                 "netns",
+                 "exec",
+                 ns,
+                 "nft",
+                 "list",
+                 "chain",
+                 "ip",
+                 "hermit_ns",
+                 "postrouting"
+               ]) do
+            {:ok, output} ->
+              unless String.contains?(output, host_ts_ip) do
+                _ =
+                  run_cmd("ip", [
+                    "netns",
+                    "exec",
+                    ns,
+                    "nft",
+                    "add",
+                    "rule",
+                    "ip",
+                    "hermit_ns",
+                    "postrouting",
+                    "ip",
+                    "saddr",
+                    host_ts_ip,
+                    "oifname",
+                    "eth0",
+                    "masquerade"
+                  ])
+              end
+
+            _ ->
+              :ok
+          end
+        end
+
         :ok
       else
         cleanup_namespace(endpoint_id)
@@ -492,7 +542,7 @@ defmodule Hermit.Vpn.DnsWorker do
                ),
              # DNAT port redirection inside namespace using nftables
              {:ok, _} <-
-               setup_dns_nftables(ns, host_ip, port, storage_dir),
+               setup_dns_nftables(ns, host_ip, port, storage_dir, host_ts_ip),
 
              # Source policy routing on host (replacing global route)
              {:ok, _} <-
@@ -1030,7 +1080,17 @@ defmodule Hermit.Vpn.DnsWorker do
     |> Enum.join("\n")
   end
 
-  defp setup_dns_nftables(ns, host_ip, port, storage_dir) do
+  defp setup_dns_nftables(ns, host_ip, port, storage_dir, host_ts_ip) do
+    sni_http_port = Hermit.Vpn.SniProxy.Server.http_port()
+    sni_https_port = Hermit.Vpn.SniProxy.Server.https_port()
+
+    host_ts_masquerade =
+      if is_binary(host_ts_ip) and host_ts_ip != "" do
+        "add rule ip hermit_ns postrouting ip saddr #{host_ts_ip} oifname \"eth0\" masquerade"
+      else
+        ""
+      end
+
     script = """
     add table ip hermit_ns
     flush table ip hermit_ns
@@ -1039,9 +1099,10 @@ defmodule Hermit.Vpn.DnsWorker do
     add chain ip hermit_ns postrouting { type nat hook postrouting priority srcnat - 10 ; }
     add rule ip hermit_ns prerouting udp dport 53 dnat to #{host_ip}:#{port}
     add rule ip hermit_ns prerouting tcp dport 53 dnat to #{host_ip}:#{port}
-    add rule ip hermit_ns prerouting tcp dport 80 dnat to #{host_ip}:80
-    add rule ip hermit_ns prerouting tcp dport 443 dnat to #{host_ip}:443
+    add rule ip hermit_ns prerouting tcp dport 80 dnat to #{host_ip}:#{sni_http_port}
+    add rule ip hermit_ns prerouting tcp dport 443 dnat to #{host_ip}:#{sni_https_port}
     add rule ip hermit_ns forward accept
+    #{host_ts_masquerade}
     """
 
     nft_path = Path.join(storage_dir, "nftables.conf")
@@ -1054,24 +1115,165 @@ defmodule Hermit.Vpn.DnsWorker do
           {:ok, out}
 
         {:error, _} ->
-          fallback_dns_nftables(ns, host_ip, port)
+          fallback_dns_nftables(ns, host_ip, port, host_ts_ip)
       end
     rescue
       _ ->
-        fallback_dns_nftables(ns, host_ip, port)
+        fallback_dns_nftables(ns, host_ip, port, host_ts_ip)
     end
   end
 
-  defp fallback_dns_nftables(ns, host_ip, port) do
-    with {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "table", "ip", "hermit_ns"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "prerouting", "{ type nat hook prerouting priority dstnat ; }"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "forward", "{ type filter hook forward priority filter ; }"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "chain", "ip", "hermit_ns", "postrouting", "{ type nat hook postrouting priority srcnat - 10 ; }"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "udp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "53", "dnat", "to", "#{host_ip}:#{port}"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "80", "dnat", "to", "#{host_ip}:80"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "prerouting", "tcp", "dport", "443", "dnat", "to", "#{host_ip}:443"]) do
-      run_cmd("ip", ["netns", "exec", ns, "nft", "add", "rule", "ip", "hermit_ns", "forward", "accept"])
+  defp fallback_dns_nftables(ns, host_ip, port, host_ts_ip) do
+    sni_http_port = Hermit.Vpn.SniProxy.Server.http_port()
+    sni_https_port = Hermit.Vpn.SniProxy.Server.https_port()
+
+    with {:ok, _} <-
+           run_cmd("ip", ["netns", "exec", ns, "nft", "add", "table", "ip", "hermit_ns"]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "chain",
+             "ip",
+             "hermit_ns",
+             "prerouting",
+             "{ type nat hook prerouting priority dstnat ; }"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "chain",
+             "ip",
+             "hermit_ns",
+             "forward",
+             "{ type filter hook forward priority filter ; }"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "chain",
+             "ip",
+             "hermit_ns",
+             "postrouting",
+             "{ type nat hook postrouting priority srcnat - 10 ; }"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "rule",
+             "ip",
+             "hermit_ns",
+             "prerouting",
+             "udp",
+             "dport",
+             "53",
+             "dnat",
+             "to",
+             "#{host_ip}:#{port}"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "rule",
+             "ip",
+             "hermit_ns",
+             "prerouting",
+             "tcp",
+             "dport",
+             "53",
+             "dnat",
+             "to",
+             "#{host_ip}:#{port}"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "rule",
+             "ip",
+             "hermit_ns",
+             "prerouting",
+             "tcp",
+             "dport",
+             "80",
+             "dnat",
+             "to",
+             "#{host_ip}:#{sni_http_port}"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "rule",
+             "ip",
+             "hermit_ns",
+             "prerouting",
+             "tcp",
+             "dport",
+             "443",
+             "dnat",
+             "to",
+             "#{host_ip}:#{sni_https_port}"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             ns,
+             "nft",
+             "add",
+             "rule",
+             "ip",
+             "hermit_ns",
+             "forward",
+             "accept"
+           ]) do
+      if is_binary(host_ts_ip) and host_ts_ip != "" do
+        run_cmd("ip", [
+          "netns",
+          "exec",
+          ns,
+          "nft",
+          "add",
+          "rule",
+          "ip",
+          "hermit_ns",
+          "postrouting",
+          "ip",
+          "saddr",
+          host_ts_ip,
+          "oifname",
+          "eth0",
+          "masquerade"
+        ])
+      else
+        {:ok, ""}
+      end
     end
   end
 

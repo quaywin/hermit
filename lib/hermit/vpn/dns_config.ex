@@ -271,7 +271,7 @@ defmodule Hermit.Vpn.DnsConfig do
 
     case Hermit.Repo.get_by(__MODULE__, name: "Default DNS Profile") ||
            Hermit.Repo.get_by(__MODULE__, name: "Global DNS Configuration") ||
-           (Hermit.Repo.all(from(d in __MODULE__, order_by: [asc: d.id])) |> List.first()) do
+           Hermit.Repo.all(from(d in __MODULE__, order_by: [asc: d.id])) |> List.first() do
       nil ->
         %__MODULE__{}
         |> changeset(%{name: "Default DNS Profile", custom_rules: [], services: %{}})

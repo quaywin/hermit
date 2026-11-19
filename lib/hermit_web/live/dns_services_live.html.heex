@@ -42,7 +42,12 @@
 
     <!-- Search Box -->
     <div class="w-full lg:w-72">
-      <form id="services-search-form" phx-change="search" phx-submit="search" onsubmit="return false;">
+      <form
+        id="services-search-form"
+        phx-change="search"
+        phx-submit="search"
+        onsubmit="return false;"
+      >
         <div class="relative">
           <.icon
             name="hero-magnifying-glass"
@@ -133,8 +138,7 @@
                 <%= case state.action do %>
                   <% "route_tunnel" -> %>
                     <span class="px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase tracking-wider bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 flex items-center gap-1">
-                      <span class="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Routed
+                      <span class="size-1.5 rounded-full bg-emerald-500 animate-pulse" /> Routed
                     </span>
                   <% "block" -> %>
                     <span class="px-2 py-0.5 rounded-[4px] font-semibold text-[10px] uppercase tracking-wider bg-red-500/10 text-red-500 border border-red-500/20">

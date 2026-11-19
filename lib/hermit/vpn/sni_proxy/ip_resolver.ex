@@ -4,7 +4,7 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   for Smart Routed domains, depending on the client's network.
   """
 
-  @cache_ttl_ms 5_000
+  @cache_ttl_ms 30_000
   @routes_table :hermit_smart_routes
 
   @doc """

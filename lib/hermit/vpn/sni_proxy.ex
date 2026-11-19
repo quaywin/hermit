@@ -217,7 +217,8 @@ defmodule Hermit.Vpn.SniProxy do
           inbound_cfg = pair.inbound_config || %{}
 
           targets =
-            Map.get(inbound_cfg, "routing_targets") || Map.get(inbound_cfg, :routing_targets) || ""
+            Map.get(inbound_cfg, "routing_targets") || Map.get(inbound_cfg, :routing_targets) ||
+              ""
 
           parsed = Hermit.Vpn.RoutingParser.parse(targets)
 

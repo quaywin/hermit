@@ -85,7 +85,7 @@ defmodule Hermit.Dns.Telemetry do
 
     total_queries = Enum.reduce(hourly_series, 0, fn h, acc -> acc + h.total end)
     blocked_queries = Enum.reduce(hourly_series, 0, fn h, acc -> acc + h.blocked end)
-    block_rate = if total_queries > 0, do: round((blocked_queries / total_queries) * 100), else: 0
+    block_rate = if total_queries > 0, do: round(blocked_queries / total_queries * 100), else: 0
 
     %{
       total_queries: total_queries,

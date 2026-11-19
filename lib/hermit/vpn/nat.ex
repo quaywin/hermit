@@ -75,11 +75,16 @@ defmodule Hermit.Vpn.Nat do
             :ok
 
           {error_output, _code} ->
-            Logger.warning("Failed to batch apply nftables NAT rules for #{table_name}: #{error_output}")
+            Logger.warning(
+              "Failed to batch apply nftables NAT rules for #{table_name}: #{error_output}"
+            )
         end
       after
         File.rm(tmp_path)
       end
+
+      # Ensure host iptables rules allow traffic through Hermit veth interfaces (bypassing host Tailscale ts-input drop rules)
+      Hermit.Application.setup_iptables_host()
 
       :ok
     rescue

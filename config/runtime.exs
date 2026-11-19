@@ -22,8 +22,7 @@ end
 
 web_port = System.get_env("PORT") || System.get_env("HERMIT_PORT") || "3000"
 
-config :hermit, HermitWeb.Endpoint,
-  http: [port: String.to_integer(web_port)]
+config :hermit, HermitWeb.Endpoint, http: [port: String.to_integer(web_port)]
 
 if config_env() in [:dev, :prod] do
   database_name = if config_env() == :dev, do: "hermit_dev.db", else: "hermit_prod.db"
@@ -39,7 +38,7 @@ if config_env() in [:dev, :prod] do
     database: database_path,
     journal_mode: :wal,
     busy_timeout: 5000,
-    cache_size: -2000,
+    cache_size: -16_000,
     temp_store: :memory
 
   if config_env() == :prod do

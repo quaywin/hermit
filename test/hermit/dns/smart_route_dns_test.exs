@@ -136,7 +136,11 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
       })
 
     custom_rules = Hermit.Dns.Rules.precompile(config)
-    :ets.insert(:inbound_profiles_cache, {{:endpoint_config, endpoint.id}, {config, custom_rules}})
+
+    :ets.insert(
+      :inbound_profiles_cache,
+      {{:endpoint_config, endpoint.id}, {config, custom_rules}}
+    )
 
     qname = <<7>> <> "netflix" <> <<3>> <> "com" <> <<0>>
     packet = <<0, 15, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0>> <> qname <> <<0, 1, 0, 1>>

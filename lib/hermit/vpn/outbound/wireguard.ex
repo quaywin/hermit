@@ -491,14 +491,104 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
   end
 
   defp fallback_wireguard_nftables(wg_name, block_ipv6) do
-    with {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "table", "inet", "hermit_ns"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "chain", "inet", "hermit_ns", "forward", "{ type filter hook forward priority filter ; }"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "chain", "inet", "hermit_ns", "postrouting", "{ type nat hook postrouting priority srcnat ; }"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "forward", "tcp", "flags", "syn", "tcp", "option", "maxseg", "size", "set", "rt", "mtu"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "forward", "accept"]),
-         {:ok, _} <- run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "postrouting", "oifname", "wg0", "masquerade"]) do
+    with {:ok, _} <-
+           run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "table", "inet", "hermit_ns"]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             wg_name,
+             "nft",
+             "add",
+             "chain",
+             "inet",
+             "hermit_ns",
+             "forward",
+             "{ type filter hook forward priority filter ; }"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             wg_name,
+             "nft",
+             "add",
+             "chain",
+             "inet",
+             "hermit_ns",
+             "postrouting",
+             "{ type nat hook postrouting priority srcnat ; }"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             wg_name,
+             "nft",
+             "add",
+             "rule",
+             "inet",
+             "hermit_ns",
+             "forward",
+             "tcp",
+             "flags",
+             "syn",
+             "tcp",
+             "option",
+             "maxseg",
+             "size",
+             "set",
+             "rt",
+             "mtu"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             wg_name,
+             "nft",
+             "add",
+             "rule",
+             "inet",
+             "hermit_ns",
+             "forward",
+             "accept"
+           ]),
+         {:ok, _} <-
+           run_cmd("ip", [
+             "netns",
+             "exec",
+             wg_name,
+             "nft",
+             "add",
+             "rule",
+             "inet",
+             "hermit_ns",
+             "postrouting",
+             "oifname",
+             "wg0",
+             "masquerade"
+           ]) do
       if block_ipv6 do
-        run_cmd("ip", ["netns", "exec", wg_name, "nft", "add", "rule", "inet", "hermit_ns", "forward", "meta", "nfproto", "ipv6", "reject", "with", "icmpv6", "type", "port-unreachable"])
+        run_cmd("ip", [
+          "netns",
+          "exec",
+          wg_name,
+          "nft",
+          "add",
+          "rule",
+          "inet",
+          "hermit_ns",
+          "forward",
+          "meta",
+          "nfproto",
+          "ipv6",
+          "reject",
+          "with",
+          "icmpv6",
+          "type",
+          "port-unreachable"
+        ])
       else
         {:ok, :skipped}
       end

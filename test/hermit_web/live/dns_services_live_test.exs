@@ -40,7 +40,8 @@ defmodule HermitWeb.DnsServicesLiveTest do
     {:ok, _pair} =
       Hermit.Repo.insert(%VpnPair{
         pair_id: "wg_us",
-        wg_config: "[Interface]\nPrivateKey = a\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = b\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0",
+        wg_config:
+          "[Interface]\nPrivateKey = a\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = b\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0",
         status: "running"
       })
 

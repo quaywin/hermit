@@ -2,19 +2,11 @@ defmodule Hermit.Vpn.PairWorker do
   use GenServer, restart: :transient
   require Logger
 
-  @topic "vpn_pairs"
+  alias Hermit.Vpn.PairDiagnostics
+  alias Hermit.Vpn.PairMetrics
+  alias Hermit.Vpn.Pairs
 
-  @default_metrics %{
-    bytes_received: 0,
-    bytes_sent: 0,
-    ts_ips: [],
-    ts_backend_state: "Offline",
-    ts_user: "Unknown",
-    ts_magic_dns: "",
-    ts_exit_node: false,
-    wg_port: nil,
-    latency: nil
-  }
+  @topic "vpn_pairs"
 
   defstruct [
     :id,
@@ -56,7 +48,11 @@ defmodule Hermit.Vpn.PairWorker do
     GenServer.start_link(__MODULE__, args, name: via_tuple(args.id))
   end
 
-  defp safe_call(pid, msg, timeout \\ 15_000) do
+  @doc false
+  def via_tuple(id), do: {:via, Registry, {Hermit.Vpn.Registry, id}}
+
+  @doc false
+  def safe_call(pid, msg, timeout \\ 15_000) do
     try do
       GenServer.call(pid, msg, timeout)
     catch
@@ -65,36 +61,41 @@ defmodule Hermit.Vpn.PairWorker do
     end
   end
 
+  defdelegate list_pairs(), to: Pairs
+  defdelegate update_wg_config(id, new_wg_config), to: Pairs
+  defdelegate update_inbound_config(id, new_config), to: Pairs
+  defdelegate update_outbound_config(id, new_config), to: Pairs
+
   def get_state(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, :get_state)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def pause_pair(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, :pause)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def resume_pair(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, :resume)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def restart_pair(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, :restart)
       {:error, reason} -> {:error, reason}
     end
   end
 
   def start_wg(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, {:start_wg})
       {:error, reason} -> {:error, reason}
     end
@@ -108,113 +109,14 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   def restart_wg(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, {:restart_wg})
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def update_wg_config(id, new_wg_config) do
-    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-      nil ->
-        {:error, :not_found}
-
-      pair ->
-        if is_nil(new_wg_config) or String.trim(new_wg_config) == "" do
-          changeset =
-            pair
-            |> Hermit.Vpn.VpnPair.changeset(%{wg_config: new_wg_config})
-            |> Ecto.Changeset.add_error(:wg_config, "can't be blank")
-
-          {:error, changeset}
-        else
-          outbound_config = pair.outbound_config || %{}
-          updated_outbound_config = Map.put(outbound_config, "wg_config", new_wg_config)
-
-          case pair
-               |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: updated_outbound_config})
-               |> Hermit.Repo.update() do
-            {:ok, updated_pair} ->
-              case GenServer.whereis(via_tuple(id)) do
-                nil ->
-                  case ensure_worker_running(id) do
-                    {:ok, pid} -> safe_call(pid, {:update_wg_config, new_wg_config})
-                    _ -> {:ok, updated_pair}
-                  end
-
-                pid ->
-                  safe_call(pid, {:update_wg_config, new_wg_config})
-              end
-
-            {:error, changeset} ->
-              {:error, changeset}
-          end
-        end
-    end
-  end
-
-  def update_inbound_config(id, new_config) do
-    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-      nil ->
-        {:error, :not_found}
-
-      pair ->
-        case pair
-             |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: new_config})
-             |> Hermit.Repo.update() do
-          {:ok, updated_pair} ->
-            case GenServer.whereis(via_tuple(id)) do
-              nil ->
-                case ensure_worker_running(id) do
-                  {:ok, pid} ->
-                    safe_call(pid, {:update_inbound_config, updated_pair.inbound_config})
-
-                  _ ->
-                    {:ok, updated_pair}
-                end
-
-              pid ->
-                safe_call(pid, {:update_inbound_config, updated_pair.inbound_config})
-            end
-
-          {:error, changeset} ->
-            {:error, changeset}
-        end
-    end
-  end
-
-  def update_outbound_config(id, new_config) do
-    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-      nil ->
-        {:error, :not_found}
-
-      pair ->
-        case pair
-             |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: new_config})
-             |> Hermit.Repo.update() do
-          {:ok, updated_pair} ->
-            case GenServer.whereis(via_tuple(id)) do
-              nil ->
-                case ensure_worker_running(id) do
-                  {:ok, pid} ->
-                    safe_call(pid, {:update_outbound_config, updated_pair.outbound_config})
-
-                  _ ->
-                    {:ok, updated_pair}
-                end
-
-              pid ->
-                safe_call(pid, {:update_outbound_config, updated_pair.outbound_config})
-            end
-
-          {:error, changeset} ->
-            {:error, changeset}
-        end
-    end
-  end
-
   def start_ts(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, {:start_ts})
       {:error, reason} -> {:error, reason}
     end
@@ -228,159 +130,9 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   def restart_ts(id) do
-    case ensure_worker_running(id) do
+    case Pairs.ensure_worker_running(id) do
       {:ok, pid} -> safe_call(pid, {:restart_ts})
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Lists states for all VPN pairs.
-  """
-  def list_pairs do
-    persisted_pairs =
-      try do
-        Hermit.Vpn.VpnPair
-        |> Hermit.Repo.all()
-        |> Hermit.Repo.preload([:inbound_profile, :outbound_profile])
-      rescue
-        _ -> []
-      end
-
-    persisted_ids = Enum.map(persisted_pairs, & &1.pair_id)
-
-    registry_ids =
-      Registry.select(Hermit.Vpn.Registry, [{{:"$1", :"$2", :"$3"}, [], [:"$1"]}])
-      |> Enum.filter(fn
-        key when is_binary(key) -> not String.starts_with?(key, "ui_session:")
-        _ -> false
-      end)
-
-    all_ids = Enum.uniq(persisted_ids ++ registry_ids)
-
-    Enum.map(all_ids, fn id ->
-      case GenServer.whereis(via_tuple(id)) do
-        nil ->
-          pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
-          build_offline_state(pair, id)
-
-        pid ->
-          try do
-            GenServer.call(pid, :get_state, 1000)
-          catch
-            _, _ ->
-              pair = Enum.find(persisted_pairs, fn p -> p.pair_id == id end)
-              build_offline_state(pair, id)
-          end
-      end
-    end)
-  end
-
-  defp build_offline_state(pair, id) do
-    {inbound_type, inbound_config} =
-      cond do
-        pair && pair.inbound_config && map_size(pair.inbound_config) > 0 ->
-          profile_cfg = (pair.inbound_profile && pair.inbound_profile.config) || %{}
-          merged = Map.merge(pair.inbound_config, profile_cfg)
-          sanitized = sanitize_inbound_config(id, merged)
-
-          {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) || "tailscale",
-           sanitized}
-
-        pair && pair.inbound_profile ->
-          sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
-          {pair.inbound_profile.type, sanitized}
-
-        true ->
-          {"tailscale", %{}}
-      end
-
-    {outbound_type, outbound_config} =
-      cond do
-        pair && pair.outbound_config && map_size(pair.outbound_config) > 0 ->
-          profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
-          merged = Map.merge(pair.outbound_config, profile_cfg)
-
-          {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) ||
-             "wireguard", merged}
-
-        pair && pair.outbound_profile ->
-          {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
-
-        true ->
-          {"wireguard", %{}}
-      end
-
-    inbound_mod =
-      case inbound_type do
-        "tailscale" -> Hermit.Vpn.Inbound.Tailscale
-        "proxy" -> Hermit.Vpn.Inbound.Proxy
-        _ -> Hermit.Vpn.Inbound.Tailscale
-      end
-
-    outbound_mod =
-      case outbound_type do
-        "wireguard" -> Hermit.Vpn.Outbound.WireGuard
-        "local" -> Hermit.Vpn.Outbound.Local
-        _ -> Hermit.Vpn.Outbound.WireGuard
-      end
-
-    %__MODULE__{
-      id: id,
-      inbound_profile_id: pair && pair.inbound_profile_id,
-      outbound_profile_id: pair && pair.outbound_profile_id,
-      wg_container_name: "hermit_wg_#{id}",
-      wg_config_path: Path.join([get_storage_base_path(), id, "wg0.conf"]),
-      wg_config_content:
-        Map.get(outbound_config, "wg_config") || Map.get(outbound_config, :wg_config) || "",
-      ts_auth_key:
-        Map.get(inbound_config, "ts_auth_key") || Map.get(inbound_config, :ts_auth_key) || "",
-      status: String.to_atom((pair && pair.status) || "stopped"),
-      error_reason: pair && (pair.wg_error_reason || pair.ts_error_reason),
-      wg_status: String.to_atom((pair && pair.wg_status) || "stopped"),
-      ts_status: String.to_atom((pair && pair.ts_status) || "stopped"),
-      wg_error_reason: pair && pair.wg_error_reason,
-      ts_error_reason: pair && pair.ts_error_reason,
-      metrics: @default_metrics,
-      storage_dir: Path.join(get_storage_base_path(), id),
-      started_at: pair && pair.started_at,
-      ts_port: nil,
-      inbound_module: inbound_mod,
-      outbound_module: outbound_mod,
-      inbound_config: inbound_config,
-      outbound_config: outbound_config,
-      inbound_type: inbound_type
-    }
-  end
-
-  defp via_tuple(id), do: {:via, Registry, {Hermit.Vpn.Registry, id}}
-
-  defp ensure_worker_running(id) do
-    case GenServer.whereis(via_tuple(id)) do
-      nil ->
-        case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-          nil ->
-            {:error, :not_found}
-
-          pair ->
-            case DynamicSupervisor.start_child(
-                   Hermit.Vpn.DynamicSupervisor,
-                   {__MODULE__,
-                    %{
-                      id: id,
-                      inbound_profile_id: pair.inbound_profile_id,
-                      outbound_profile_id: pair.outbound_profile_id
-                    }}
-                 ) do
-              {:ok, pid} -> {:ok, pid}
-              {:ok, pid, _} -> {:ok, pid}
-              {:error, {:already_started, pid}} -> {:ok, pid}
-              error -> error
-            end
-        end
-
-      pid ->
-        {:ok, pid}
     end
   end
 
@@ -391,99 +143,12 @@ defmodule Hermit.Vpn.PairWorker do
     Process.flag(:trap_exit, true)
 
     id = args.id
-    storage_dir = Path.join(get_storage_base_path(), id)
+    storage_dir = Path.join(PairDiagnostics.get_storage_base_path(), id)
     wg_config_path = Path.join(storage_dir, "wg0.conf")
 
     {wg_status, ts_status, overall_status, started_at, inbound_type, inbound_config,
      outbound_type, outbound_config, inbound_profile_id, outbound_profile_id} =
-      try do
-        case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-          nil ->
-            {:starting, :starting, :starting_wg, nil, args[:inbound_type] || "tailscale",
-             args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
-             args[:outbound_type] || "wireguard",
-             args[:outbound_config] ||
-               %{"wg_config" => args[:wg_config] || args[:wg_config_content]},
-             args[:inbound_profile_id], args[:outbound_profile_id]}
-
-          pair ->
-            pair = Hermit.Repo.preload(pair, [:inbound_profile, :outbound_profile])
-
-            {inbound_type, inbound_config} =
-              cond do
-                pair.inbound_config && map_size(pair.inbound_config) > 0 ->
-                  profile_cfg = (pair.inbound_profile && pair.inbound_profile.config) || %{}
-                  merged = Map.merge(pair.inbound_config, profile_cfg)
-                  sanitized = sanitize_inbound_config(id, merged)
-
-                  {pair.inbound_type || (pair.inbound_profile && pair.inbound_profile.type) ||
-                     "tailscale", sanitized}
-
-                pair.inbound_profile ->
-                  sanitized = sanitize_inbound_config(id, pair.inbound_profile.config || %{})
-                  save_inbound_config_db(pair, sanitized)
-                  {pair.inbound_profile.type, sanitized}
-
-                true ->
-                  {"tailscale", %{}}
-              end
-
-            {outbound_type, outbound_config} =
-              cond do
-                pair.outbound_config && map_size(pair.outbound_config) > 0 ->
-                  profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
-                  merged = Map.merge(pair.outbound_config, profile_cfg)
-
-                  {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) ||
-                     "wireguard", merged}
-
-                pair.outbound_profile ->
-                  cfg = pair.outbound_profile.config || %{}
-                  save_outbound_config_db(pair, cfg)
-                  {pair.outbound_profile.type, cfg}
-
-                true ->
-                  {"wireguard", %{}}
-              end
-
-            {
-              String.to_atom(pair.wg_status || "stopped"),
-              String.to_atom(pair.ts_status || "stopped"),
-              String.to_atom(pair.status || "stopped"),
-              pair.started_at,
-              inbound_type,
-              inbound_config,
-              outbound_type,
-              outbound_config,
-              pair.inbound_profile_id || args[:inbound_profile_id],
-              pair.outbound_profile_id || args[:outbound_profile_id]
-            }
-        end
-      rescue
-        e ->
-          Logger.error("Failed to load VPN pair state from database during init: #{inspect(e)}")
-
-          {:starting, :starting, :starting_wg, nil, args[:inbound_type] || "tailscale",
-           args[:inbound_config] || %{"ts_auth_key" => args[:ts_auth_key]},
-           args[:outbound_type] || "wireguard",
-           args[:outbound_config] ||
-             %{"wg_config" => args[:wg_config] || args[:wg_config_content]},
-           args[:inbound_profile_id], args[:outbound_profile_id]}
-      end
-
-    inbound_module =
-      case inbound_type do
-        "tailscale" -> Hermit.Vpn.Inbound.Tailscale
-        "proxy" -> Hermit.Vpn.Inbound.Proxy
-        _ -> Hermit.Vpn.Inbound.Tailscale
-      end
-
-    outbound_module =
-      case outbound_type do
-        "wireguard" -> Hermit.Vpn.Outbound.WireGuard
-        "local" -> Hermit.Vpn.Outbound.Local
-        _ -> Hermit.Vpn.Outbound.WireGuard
-      end
+      Pairs.load_initial_state(id, args)
 
     wg_config_content =
       Map.get(outbound_config, "wg_config") ||
@@ -518,14 +183,14 @@ defmodule Hermit.Vpn.PairWorker do
       ts_status: ts_status,
       wg_error_reason: nil,
       ts_error_reason: nil,
-      metrics: @default_metrics,
+      metrics: PairMetrics.default_metrics(),
       storage_dir: storage_dir,
       started_at: started_at,
       ts_port: nil,
       ts_retry_count: 0,
       wg_retry_count: 0,
-      inbound_module: inbound_module,
-      outbound_module: outbound_module,
+      inbound_module: Pairs.inbound_module_for(inbound_type),
+      outbound_module: Pairs.outbound_module_for(outbound_type),
       inbound_config: inbound_config,
       outbound_config: outbound_config,
       inbound_type: inbound_type,
@@ -549,13 +214,7 @@ defmodule Hermit.Vpn.PairWorker do
         {:ok, state, {:continue, :bootstrap_ts}}
 
       true ->
-        state =
-          if wg_status == :running do
-            schedule_metrics_poll(state)
-          else
-            state
-          end
-
+        state = if wg_status == :running, do: schedule_metrics_poll(state), else: state
         {:ok, state}
     end
   end
@@ -568,75 +227,33 @@ defmodule Hermit.Vpn.PairWorker do
   @impl true
   def handle_continue(:pause_cleanup, state) do
     Logger.info("Running pause cleanup for VPN pair: #{state.id}")
+    teardown_pair_resources(state)
 
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
-
-    Hermit.Vpn.SniProxy.unregister_pair(state.id)
-
-    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
-      Process.exit(state.smart_relayer_pid, :shutdown)
-    end
-
-    state.inbound_module.cleanup(state.id, state.storage_dir)
-    state.outbound_module.cleanup(state.id, state.storage_dir)
-
-    updated_state = %{state | ts_port: nil}
-    updated_state = broadcast_update(updated_state)
-
+    updated_state = broadcast_update(%{state | ts_port: nil})
     {:noreply, updated_state}
   end
 
   @impl true
   def handle_continue(:restart_cleanup, state) do
     Logger.info("Running restart cleanup for VPN pair: #{state.id}")
-
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
-
-    Hermit.Vpn.SniProxy.unregister_pair(state.id)
-
-    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
-      Process.exit(state.smart_relayer_pid, :shutdown)
-    end
-
-    state.inbound_module.cleanup(state.id, state.storage_dir)
-    state.outbound_module.cleanup(state.id, state.storage_dir)
+    teardown_pair_resources(state)
 
     # Allow OS kernel to clean up netns and interfaces
     Process.sleep(1000)
 
-    updated_state = %{state | ts_port: nil}
-    updated_state = broadcast_update(updated_state)
-
+    updated_state = broadcast_update(%{state | ts_port: nil})
     {:noreply, updated_state, {:continue, :bootstrap}}
   end
 
   @impl true
   def handle_continue(:restart_wg_cleanup, state) do
     Logger.info("Running restart WG cleanup for VPN pair: #{state.id}")
-
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
-
-    Hermit.Vpn.SniProxy.unregister_pair(state.id)
-
-    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
-      Process.exit(state.smart_relayer_pid, :shutdown)
-    end
-
-    state.inbound_module.cleanup(state.id, state.storage_dir)
-    state.outbound_module.cleanup(state.id, state.storage_dir)
+    teardown_pair_resources(state)
 
     # Allow OS kernel to clean up netns and interfaces
     Process.sleep(1000)
 
-    updated_state = %{state | ts_port: nil}
-    updated_state = broadcast_update(updated_state)
-
+    updated_state = broadcast_update(%{state | ts_port: nil})
     {:noreply, updated_state, {:continue, :bootstrap_wg}}
   end
 
@@ -648,7 +265,7 @@ defmodule Hermit.Vpn.PairWorker do
       File.mkdir_p!(state.storage_dir)
       File.mkdir_p!(Path.join(state.storage_dir, "tailscale"))
 
-      resolved_content = resolve_endpoint_in_config(state.wg_config_content)
+      resolved_content = PairDiagnostics.resolve_endpoint_in_config(state.wg_config_content)
       File.write!(state.wg_config_path, resolved_content)
       File.chmod!(state.wg_config_path, 0o600)
 
@@ -667,8 +284,7 @@ defmodule Hermit.Vpn.PairWorker do
                 "Outbound profile is already in use by active tunnel '#{conflicting_id}'."
           }
 
-          updated_state = broadcast_update(error_state)
-          {:noreply, updated_state}
+          {:noreply, broadcast_update(error_state)}
 
         :ok ->
           case state.outbound_module.bootstrap(
@@ -677,46 +293,47 @@ defmodule Hermit.Vpn.PairWorker do
                  state.outbound_config || %{}
                ) do
             {:ok, iface} ->
-              updated_state = %{
-                state
-                | wg_status: :starting,
-                  wg_error_reason: nil,
-                  wg_retry_count: 0,
-                  outbound_if: iface
-              }
-
-              updated_state = broadcast_update(updated_state)
-              updated_state = schedule_metrics_poll(updated_state)
+              updated_state =
+                %{
+                  state
+                  | wg_status: :starting,
+                    wg_error_reason: nil,
+                    wg_retry_count: 0,
+                    outbound_if: iface
+                }
+                |> broadcast_update()
+                |> schedule_metrics_poll()
 
               send(self(), {:check_wg_health, 10})
-
               {:noreply, updated_state}
 
             {:error, reason} ->
-              error_state = %{
-                state
-                | wg_status: :error,
-                  wg_error_reason: "WireGuard creation failed: #{inspect(reason)}"
-              }
+              error_state =
+                %{
+                  state
+                  | wg_status: :error,
+                    wg_error_reason: "WireGuard creation failed: #{inspect(reason)}"
+                }
+                |> broadcast_update()
 
-              updated_state = broadcast_update(error_state)
-              maybe_schedule_wg_recovery(updated_state)
-              {:noreply, updated_state}
+              maybe_schedule_wg_recovery(error_state)
+              {:noreply, error_state}
           end
       end
     rescue
       e ->
         Logger.error("Failed to write configurations or start WG: #{inspect(e)}")
 
-        error_state = %{
-          state
-          | wg_status: :error,
-            wg_error_reason: "Setup failure: #{Exception.message(e)}"
-        }
+        error_state =
+          %{
+            state
+            | wg_status: :error,
+              wg_error_reason: "Setup failure: #{Exception.message(e)}"
+          }
+          |> broadcast_update()
 
-        updated_state = broadcast_update(error_state)
-        maybe_schedule_wg_recovery(updated_state)
-        {:noreply, updated_state}
+        maybe_schedule_wg_recovery(error_state)
+        {:noreply, error_state}
     end
   end
 
@@ -746,11 +363,11 @@ defmodule Hermit.Vpn.PairWorker do
           wg_error_reason: nil,
           ts_error_reason: nil,
           started_at: nil,
-          metrics: @default_metrics
+          metrics: PairMetrics.default_metrics()
       }
       |> cancel_metrics_poll()
+      |> broadcast_update()
 
-    updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :pause_cleanup}}
   end
 
@@ -758,17 +375,18 @@ defmodule Hermit.Vpn.PairWorker do
   def handle_call(:resume, _from, state) do
     Logger.info("Resuming VPN pair (both components): #{state.id}")
 
-    updated_state = %{
-      state
-      | wg_status: :starting,
-        ts_status: :starting,
-        wg_error_reason: nil,
-        ts_error_reason: nil,
-        wg_retry_count: 0,
-        ts_retry_count: 0
-    }
+    updated_state =
+      %{
+        state
+        | wg_status: :starting,
+          ts_status: :starting,
+          wg_error_reason: nil,
+          ts_error_reason: nil,
+          wg_retry_count: 0,
+          ts_retry_count: 0
+      }
+      |> broadcast_update()
 
-    updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap}}
   end
 
@@ -786,20 +404,19 @@ defmodule Hermit.Vpn.PairWorker do
           wg_error_reason: nil,
           ts_error_reason: nil,
           started_at: nil,
-          metrics: @default_metrics,
+          metrics: PairMetrics.default_metrics(),
           wg_retry_count: 0,
           ts_retry_count: 0
       }
       |> cancel_metrics_poll()
+      |> broadcast_update()
 
-    updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :restart_cleanup}}
   end
 
   @impl true
   def handle_call({:start_wg}, _from, state) do
-    updated_state = %{state | wg_status: :starting, wg_error_reason: nil}
-    updated_state = broadcast_update(updated_state)
+    updated_state = broadcast_update(%{state | wg_status: :starting, wg_error_reason: nil})
     {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_wg}}
   end
 
@@ -808,20 +425,7 @@ defmodule Hermit.Vpn.PairWorker do
     Logger.info("Stopping WireGuard for pair: #{state.id}")
 
     state = maybe_shutdown_bootstrap_task(state)
-
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
-
-    Hermit.Vpn.SniProxy.unregister_pair(state.id)
-
-    if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
-      Process.exit(state.smart_relayer_pid, :shutdown)
-    end
-
-    state.inbound_module.cleanup(state.id, state.storage_dir)
-
-    state.outbound_module.cleanup(state.id, state.storage_dir)
+    teardown_pair_resources(state)
 
     updated_state =
       %{
@@ -832,11 +436,11 @@ defmodule Hermit.Vpn.PairWorker do
           ts_error_reason: nil,
           ts_port: nil,
           started_at: nil,
-          metrics: @default_metrics
+          metrics: PairMetrics.default_metrics()
       }
       |> cancel_metrics_poll()
+      |> broadcast_update()
 
-    updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state}
   end
 
@@ -856,73 +460,18 @@ defmodule Hermit.Vpn.PairWorker do
           started_at: nil,
           wg_retry_count: 0,
           ts_retry_count: 0,
-          metrics: @default_metrics
+          metrics: PairMetrics.default_metrics()
       }
       |> cancel_metrics_poll()
+      |> broadcast_update()
 
-    updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state, {:continue, :restart_wg_cleanup}}
   end
 
   @impl true
   def handle_call({:update_wg_config, new_wg_config}, _from, state) do
     Logger.info("Updating WireGuard config for pair: #{state.id}")
-
-    updated_state = %{state | wg_config_content: new_wg_config}
-    updated_state = maybe_shutdown_bootstrap_task(updated_state)
-
-    try do
-      File.mkdir_p!(updated_state.storage_dir)
-      resolved_content = resolve_endpoint_in_config(new_wg_config)
-      File.write!(updated_state.wg_config_path, resolved_content)
-      File.chmod!(updated_state.wg_config_path, 0o600)
-
-      updated_state = broadcast_update(updated_state)
-
-      if updated_state.wg_status in [:running, :starting, :error] do
-        if state.ts_port do
-          stop_inbound_process(state.ts_port)
-        end
-
-        state.inbound_module.cleanup(state.id, state.storage_dir)
-        state.outbound_module.cleanup(state.id, state.storage_dir)
-
-        new_ts_status =
-          if updated_state.ts_status in [:running, :starting] do
-            :starting
-          else
-            updated_state.ts_status
-          end
-
-        restarted_state =
-          %{
-            updated_state
-            | wg_status: :starting,
-              ts_status: new_ts_status,
-              ts_port: nil,
-              wg_error_reason: nil,
-              ts_error_reason: nil
-          }
-          |> cancel_metrics_poll()
-
-        restarted_state = broadcast_update(restarted_state)
-        {:reply, {:ok, restarted_state}, restarted_state, {:continue, :bootstrap_wg}}
-      else
-        {:reply, {:ok, updated_state}, updated_state}
-      end
-    rescue
-      e ->
-        Logger.error("Failed to update WG config file: #{inspect(e)}")
-
-        error_state = %{
-          updated_state
-          | wg_status: :error,
-            wg_error_reason: "Config update setup failure: #{Exception.message(e)}"
-        }
-
-        error_state = broadcast_update(error_state)
-        {:reply, {:error, Exception.message(e)}, error_state}
-    end
+    apply_outbound_config_update(%{state | wg_config_content: new_wg_config}, new_wg_config)
   end
 
   @impl true
@@ -939,66 +488,12 @@ defmodule Hermit.Vpn.PairWorker do
         wg_config_content: new_wg_config
     }
 
-    updated_state = maybe_shutdown_bootstrap_task(updated_state)
-
-    try do
-      File.mkdir_p!(updated_state.storage_dir)
-      resolved_content = resolve_endpoint_in_config(new_wg_config)
-      File.write!(updated_state.wg_config_path, resolved_content)
-      File.chmod!(updated_state.wg_config_path, 0o600)
-
-      updated_state = broadcast_update(updated_state)
-
-      if updated_state.wg_status in [:running, :starting, :error] do
-        if state.ts_port do
-          stop_inbound_process(state.ts_port)
-        end
-
-        state.inbound_module.cleanup(state.id, state.storage_dir)
-        state.outbound_module.cleanup(state.id, state.storage_dir)
-
-        new_ts_status =
-          if updated_state.ts_status in [:running, :starting] do
-            :starting
-          else
-            updated_state.ts_status
-          end
-
-        restarted_state =
-          %{
-            updated_state
-            | wg_status: :starting,
-              ts_status: new_ts_status,
-              ts_port: nil,
-              wg_error_reason: nil,
-              ts_error_reason: nil
-          }
-          |> cancel_metrics_poll()
-
-        restarted_state = broadcast_update(restarted_state)
-        {:reply, {:ok, restarted_state}, restarted_state, {:continue, :bootstrap_wg}}
-      else
-        {:reply, {:ok, updated_state}, updated_state}
-      end
-    rescue
-      e ->
-        Logger.error("Failed to update Outbound config file: #{inspect(e)}")
-
-        error_state = %{
-          updated_state
-          | wg_status: :error,
-            wg_error_reason: "Config update setup failure: #{Exception.message(e)}"
-        }
-
-        error_state = broadcast_update(error_state)
-        {:reply, {:error, Exception.message(e)}, error_state}
-    end
+    apply_outbound_config_update(updated_state, new_wg_config)
   end
 
   @impl true
   def handle_call({:set_inbound_config, new_config}, _from, state) do
-    updated_state = %{state | inbound_config: new_config}
-    updated_state = broadcast_update(updated_state)
+    updated_state = broadcast_update(%{state | inbound_config: new_config})
     {:reply, {:ok, updated_state}, updated_state}
   end
 
@@ -1026,27 +521,24 @@ defmodule Hermit.Vpn.PairWorker do
       Hermit.Vpn.SniProxy.sync_all_routes()
     end
 
-    updated_state = %{state | inbound_config: new_config}
-    updated_state = sync_smart_routes_and_relayer(updated_state)
-    updated_state = broadcast_update(updated_state)
+    updated_state =
+      %{state | inbound_config: new_config}
+      |> sync_smart_routes_and_relayer()
+      |> broadcast_update()
 
     cond do
       auth_key_changed? and state.wg_status == :running ->
         {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
 
       state.inbound_type == "proxy" and state.wg_status == :running ->
-        state = maybe_shutdown_bootstrap_task(state)
+        _ = maybe_shutdown_bootstrap_task(state)
         if state.ts_port, do: stop_inbound_process(state.ts_port)
         state.inbound_module.cleanup(state.id, state.storage_dir)
 
-        updated_state = %{
-          updated_state
-          | ts_status: :starting,
-            ts_error_reason: nil,
-            ts_port: nil
-        }
+        updated_state =
+          %{updated_state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
+          |> broadcast_update()
 
-        updated_state = broadcast_update(updated_state)
         {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
 
       state.ts_status == :running ->
@@ -1086,13 +578,12 @@ defmodule Hermit.Vpn.PairWorker do
          {:error, "WireGuard is not running. Outbound connection must be established first."},
          state}
 
-      not netns_exists?(state.wg_container_name) ->
+      not PairDiagnostics.netns_exists?(state.wg_container_name) ->
         {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."},
          state}
 
       true ->
-        updated_state = %{state | ts_status: :starting, ts_error_reason: nil}
-        updated_state = broadcast_update(updated_state)
+        updated_state = broadcast_update(%{state | ts_status: :starting, ts_error_reason: nil})
         {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
     end
   end
@@ -1102,11 +593,7 @@ defmodule Hermit.Vpn.PairWorker do
     Logger.info("Stopping Tailscale for pair: #{state.id}")
 
     state = maybe_shutdown_bootstrap_task(state)
-
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
-
+    if state.ts_port, do: stop_inbound_process(state.ts_port)
     Hermit.Vpn.SniProxy.unregister_pair(state.id)
 
     if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
@@ -1115,15 +602,10 @@ defmodule Hermit.Vpn.PairWorker do
 
     state.inbound_module.cleanup(state.id, state.storage_dir)
 
-    updated_state = %{
-      state
-      | ts_status: :stopped,
-        ts_error_reason: nil,
-        ts_port: nil,
-        started_at: nil
-    }
+    updated_state =
+      %{state | ts_status: :stopped, ts_error_reason: nil, ts_port: nil, started_at: nil}
+      |> broadcast_update()
 
-    updated_state = broadcast_update(updated_state)
     {:reply, {:ok, updated_state}, updated_state}
   end
 
@@ -1135,7 +617,7 @@ defmodule Hermit.Vpn.PairWorker do
          {:error, "WireGuard is not running. Outbound connection must be established first."},
          state}
 
-      not netns_exists?(state.wg_container_name) ->
+      not PairDiagnostics.netns_exists?(state.wg_container_name) ->
         {:reply, {:error, "Network namespace does not exist. WireGuard must be started first."},
          state}
 
@@ -1143,15 +625,13 @@ defmodule Hermit.Vpn.PairWorker do
         Logger.info("Restarting Tailscale for pair: #{state.id}")
 
         state = maybe_shutdown_bootstrap_task(state)
-
-        if state.ts_port do
-          stop_inbound_process(state.ts_port)
-        end
-
+        if state.ts_port, do: stop_inbound_process(state.ts_port)
         state.inbound_module.cleanup(state.id, state.storage_dir)
 
-        updated_state = %{state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
-        updated_state = broadcast_update(updated_state)
+        updated_state =
+          %{state | ts_status: :starting, ts_error_reason: nil, ts_port: nil}
+          |> broadcast_update()
+
         {:reply, {:ok, updated_state}, updated_state, {:continue, :bootstrap_ts}}
     end
   end
@@ -1164,9 +644,7 @@ defmodule Hermit.Vpn.PairWorker do
   @impl true
   def handle_info({:inbound_config_updated, _new_config}, state) do
     if state.ts_error_reason || state.ts_status == :error do
-      updated_state = %{state | ts_error_reason: nil, ts_status: :running}
-      updated_state = broadcast_update(updated_state)
-      {:noreply, updated_state}
+      {:noreply, broadcast_update(%{state | ts_error_reason: nil, ts_status: :running})}
     else
       {:noreply, state}
     end
@@ -1180,17 +658,14 @@ defmodule Hermit.Vpn.PairWorker do
         ts_error_reason: "Failed to dynamically update Tailscale settings: #{inspect(reason)}"
     }
 
-    updated_state = broadcast_update(error_state)
-    {:noreply, updated_state}
+    {:noreply, broadcast_update(error_state)}
   end
-
-  # Health checking and metric polling
 
   @impl true
   def handle_info({:check_wg_health, retries}, state) do
     case state.outbound_module.get_status(state.id, state.storage_dir) do
       :running ->
-        trigger_handshake("hermit_wg_#{state.id}")
+        PairDiagnostics.trigger_handshake("hermit_wg_#{state.id}")
 
         case state.outbound_module.get_metrics(state.id, state.storage_dir) do
           {:ok, %{bytes_received: bytes_received}}
@@ -1204,45 +679,8 @@ defmodule Hermit.Vpn.PairWorker do
                 state
               end
 
-            if state.ts_status == :starting do
-              if state.bootstrap_task do
-                {:noreply, state}
-              else
-                parent = self()
-                id = state.id
-                outbound_if = state.outbound_if || "wg0"
-                storage_dir = state.storage_dir
-                inbound_config = state.inbound_config
-                inbound_module = state.inbound_module
-
-                {:ok, task_pid} =
-                  Task.start(fn ->
-                    res = inbound_module.bootstrap(id, outbound_if, storage_dir, inbound_config)
-
-                    case res do
-                      {:ok, port_or_pid} ->
-                        if is_port(port_or_pid) do
-                          try do
-                            Port.connect(port_or_pid, parent)
-                            send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
-                          rescue
-                            ArgumentError ->
-                              send(parent, {:bootstrap_result, self(), {:error, :port_closed}})
-                          end
-                        else
-                          Process.unlink(port_or_pid)
-                          send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
-                        end
-
-                      other ->
-                        send(parent, {:bootstrap_result, self(), other})
-                    end
-                  end)
-
-                ref = Process.monitor(task_pid)
-                new_state = %{state | bootstrap_task: %{pid: task_pid, ref: ref}}
-                {:noreply, new_state}
-              end
+            if state.ts_status == :starting and is_nil(state.bootstrap_task) do
+              {:noreply, start_inbound_bootstrap_task(state)}
             else
               {:noreply, state}
             end
@@ -1281,8 +719,7 @@ defmodule Hermit.Vpn.PairWorker do
 
       state.current_ping_task && state.current_ping_task.ref == ref ->
         metrics = Map.put(state.metrics || %{}, :latency, :error)
-        updated_state = %{state | metrics: metrics, current_ping_task: nil}
-        updated_state = broadcast_update(updated_state)
+        updated_state = broadcast_update(%{state | metrics: metrics, current_ping_task: nil})
         {:noreply, updated_state}
 
       true ->
@@ -1295,8 +732,7 @@ defmodule Hermit.Vpn.PairWorker do
     if state.current_ping_task && state.current_ping_task.ref == ref do
       Process.demonitor(ref, [:flush])
       metrics = Map.put(state.metrics || %{}, :latency, latency)
-      updated_state = %{state | metrics: metrics, current_ping_task: nil}
-      updated_state = broadcast_update(updated_state)
+      updated_state = broadcast_update(%{state | metrics: metrics, current_ping_task: nil})
       {:noreply, updated_state}
     else
       {:noreply, state}
@@ -1309,7 +745,7 @@ defmodule Hermit.Vpn.PairWorker do
       case state.outbound_module.get_metrics(state.id, state.storage_dir) do
         {:ok, outbound_metrics} ->
           inbound_info =
-            if should_poll_inbound?(state) do
+            if PairMetrics.should_poll_inbound?(state) do
               info = state.inbound_module.get_network_info(state.id, state.storage_dir)
               Map.put(info, :inbound_fetched_at, System.system_time(:second))
             else
@@ -1327,20 +763,19 @@ defmodule Hermit.Vpn.PairWorker do
               ])
             end
 
-          metrics = Map.merge(outbound_metrics, inbound_info)
-
-          # Preserve existing latency in the new metrics map
-          existing_latency = Map.get(state.metrics || %{}, :latency)
-          metrics = Map.put(metrics, :latency, existing_latency)
+          metrics =
+            outbound_metrics
+            |> Map.merge(inbound_info)
+            |> Map.put(:latency, Map.get(state.metrics || %{}, :latency))
 
           now = System.system_time(:second)
 
           state =
-            if has_active_ui?() and is_nil(state.current_ping_task) and
+            if PairMetrics.has_active_ui?() and is_nil(state.current_ping_task) and
                  now - state.latency_last_checked_at >= 30 do
               task =
                 Task.async(fn ->
-                  measure_ping(state.outbound_module, state.id)
+                  PairDiagnostics.measure_ping(state.outbound_module, state.id)
                 end)
 
               %{state | current_ping_task: task, latency_last_checked_at: now}
@@ -1348,16 +783,17 @@ defmodule Hermit.Vpn.PairWorker do
               state
             end
 
-          updated_state = %{state | metrics: metrics, wg_retry_count: 0}
-          updated_state = broadcast_update(updated_state)
-          updated_state = schedule_metrics_poll(updated_state)
+          updated_state =
+            %{state | metrics: metrics, wg_retry_count: 0}
+            |> broadcast_update()
+            |> schedule_metrics_poll()
+
           {:noreply, updated_state}
 
         _error ->
           case state.outbound_module.get_status(state.id, state.storage_dir) do
             :running ->
-              updated_state = schedule_metrics_poll(state)
-              {:noreply, updated_state}
+              {:noreply, schedule_metrics_poll(state)}
 
             _ ->
               if state.status != :stopped do
@@ -1365,10 +801,7 @@ defmodule Hermit.Vpn.PairWorker do
                   "WireGuard namespace is down for pair #{state.id}. Triggering recovery..."
                 )
 
-                if state.ts_port do
-                  stop_inbound_process(state.ts_port)
-                end
-
+                if state.ts_port, do: stop_inbound_process(state.ts_port)
                 state.inbound_module.cleanup(state.id, state.storage_dir)
 
                 error_state =
@@ -1381,10 +814,10 @@ defmodule Hermit.Vpn.PairWorker do
                       wg_error_reason: "WireGuard namespace went down unexpectedly"
                   }
                   |> cancel_metrics_poll()
+                  |> broadcast_update()
 
-                updated_state = broadcast_update(error_state)
-                maybe_schedule_wg_recovery(updated_state)
-                {:noreply, updated_state}
+                maybe_schedule_wg_recovery(error_state)
+                {:noreply, error_state}
               else
                 {:noreply, state}
               end
@@ -1397,24 +830,23 @@ defmodule Hermit.Vpn.PairWorker do
 
   @impl true
   def handle_info({:EXIT, port, reason}, state) when is_port(port) do
-    cond do
-      port == state.ts_port ->
-        Logger.error("Tailscale port for pair #{state.id} exited: #{inspect(reason)}")
+    if port == state.ts_port do
+      Logger.error("Tailscale port for pair #{state.id} exited: #{inspect(reason)}")
 
-        error_state = %{
+      error_state =
+        %{
           state
           | ts_status: :error,
             ts_error_reason: "Tailscale daemon exited unexpectedly: #{inspect(reason)}",
             ts_port: nil,
             started_at: nil
         }
+        |> broadcast_update()
 
-        updated_state = broadcast_update(error_state)
-        maybe_schedule_ts_recovery(updated_state)
-        {:noreply, updated_state}
-
-      true ->
-        {:noreply, state}
+      maybe_schedule_ts_recovery(error_state)
+      {:noreply, error_state}
+    else
+      {:noreply, state}
     end
   end
 
@@ -1427,9 +859,7 @@ defmodule Hermit.Vpn.PairWorker do
         )
 
         state = maybe_shutdown_bootstrap_task(state)
-
         state.inbound_module.cleanup(state.id, state.storage_dir)
-
         state.outbound_module.cleanup(state.id, state.storage_dir)
 
         updated_state =
@@ -1442,8 +872,8 @@ defmodule Hermit.Vpn.PairWorker do
               wg_retry_count: state.wg_retry_count + 1
           }
           |> cancel_metrics_poll()
+          |> broadcast_update()
 
-        updated_state = broadcast_update(updated_state)
         {:noreply, updated_state, {:continue, :bootstrap}}
       else
         Logger.error("Max WireGuard recovery retries reached for pair: #{state.id}")
@@ -1457,14 +887,7 @@ defmodule Hermit.Vpn.PairWorker do
             "#{last_reason} (Max retries reached)"
           end
 
-        error_state = %{
-          state
-          | wg_status: :error,
-            wg_error_reason: final_reason
-        }
-
-        updated_state = broadcast_update(error_state)
-        {:noreply, updated_state}
+        {:noreply, broadcast_update(%{state | wg_status: :error, wg_error_reason: final_reason})}
       end
     else
       {:noreply, state}
@@ -1480,22 +903,19 @@ defmodule Hermit.Vpn.PairWorker do
         )
 
         state = maybe_shutdown_bootstrap_task(state)
-
-        if state.ts_port do
-          stop_inbound_process(state.ts_port)
-        end
-
+        if state.ts_port, do: stop_inbound_process(state.ts_port)
         state.inbound_module.cleanup(state.id, state.storage_dir)
 
-        updated_state = %{
-          state
-          | ts_status: :starting,
-            ts_error_reason: nil,
-            ts_port: nil,
-            ts_retry_count: state.ts_retry_count + 1
-        }
+        updated_state =
+          %{
+            state
+            | ts_status: :starting,
+              ts_error_reason: nil,
+              ts_port: nil,
+              ts_retry_count: state.ts_retry_count + 1
+          }
+          |> broadcast_update()
 
-        updated_state = broadcast_update(updated_state)
         {:noreply, updated_state, {:continue, :bootstrap_ts}}
       else
         Logger.error("Max Tailscale recovery retries reached for pair: #{state.id}")
@@ -1509,14 +929,7 @@ defmodule Hermit.Vpn.PairWorker do
             "#{last_reason} (Max retries reached)"
           end
 
-        error_state = %{
-          state
-          | ts_status: :error,
-            ts_error_reason: final_reason
-        }
-
-        updated_state = broadcast_update(error_state)
-        {:noreply, updated_state}
+        {:noreply, broadcast_update(%{state | ts_status: :error, ts_error_reason: final_reason})}
       end
     else
       {:noreply, state}
@@ -1529,17 +942,18 @@ defmodule Hermit.Vpn.PairWorker do
       pid == state.ts_port ->
         Logger.error("Inbound proxy PID for pair #{state.id} exited: #{inspect(reason)}")
 
-        error_state = %{
-          state
-          | ts_status: :error,
-            ts_error_reason: "Inbound proxy exited unexpectedly: #{inspect(reason)}",
-            ts_port: nil,
-            started_at: nil
-        }
+        error_state =
+          %{
+            state
+            | ts_status: :error,
+              ts_error_reason: "Inbound proxy exited unexpectedly: #{inspect(reason)}",
+              ts_port: nil,
+              started_at: nil
+          }
+          |> broadcast_update()
 
-        updated_state = broadcast_update(error_state)
-        maybe_schedule_ts_recovery(updated_state)
-        {:noreply, updated_state}
+        maybe_schedule_ts_recovery(error_state)
+        {:noreply, error_state}
 
       pid == state.smart_relayer_pid ->
         if reason not in [:normal, :shutdown, :killed] do
@@ -1567,12 +981,15 @@ defmodule Hermit.Vpn.PairWorker do
 
     Phoenix.PubSub.broadcast(Hermit.PubSub, @topic, {:vpn_pair_deleted, state.id})
 
-    state = maybe_shutdown_bootstrap_task(state)
+    _ = maybe_shutdown_bootstrap_task(state)
+    teardown_pair_resources(state)
+    :ok
+  end
 
-    if state.ts_port do
-      stop_inbound_process(state.ts_port)
-    end
+  # --- Internal Helpers ---
 
+  defp teardown_pair_resources(state) do
+    if state.ts_port, do: stop_inbound_process(state.ts_port)
     Hermit.Vpn.SniProxy.unregister_pair(state.id)
 
     if state.smart_relayer_pid && Process.alive?(state.smart_relayer_pid) do
@@ -1584,202 +1001,101 @@ defmodule Hermit.Vpn.PairWorker do
     :ok
   end
 
-  # --- Internal Helpers ---
-
-  defp resolve_endpoint_in_config(nil), do: ""
-
-  defp resolve_endpoint_in_config(content) do
-    Regex.replace(
-      ~r/^\s*Endpoint\s*=\s*(\[[^\]]+\]|[^:\s]+)\s*:\s*(\d+)/mi,
-      content,
-      fn full_match, host, port ->
-        case resolve_host(host) do
-          {:ok, ip_str} -> "Endpoint = #{ip_str}:#{port}"
-          _ -> full_match
-        end
-      end
-    )
-  end
-
-  defp resolve_host(host) do
-    clean_host =
-      host
-      |> String.trim_leading("[")
-      |> String.trim_trailing("]")
-
-    charlist_host = String.to_charlist(clean_host)
-
-    case :inet.getaddr(charlist_host, :inet) do
-      {:ok, ip_tuple} ->
-        {:ok, ip_tuple_to_string(ip_tuple)}
-
-      _ ->
-        case :inet.getaddr(charlist_host, :inet6) do
-          {:ok, ip_tuple} -> {:ok, ip_tuple_to_string(ip_tuple)}
-          error -> error
-        end
-    end
-  end
-
-  defp ip_tuple_to_string(ip_tuple) when tuple_size(ip_tuple) == 8 do
-    ip_str = ip_tuple |> :inet.ntoa() |> List.to_string()
-    "[#{ip_str}]"
-  end
-
-  defp ip_tuple_to_string(ip_tuple) do
-    ip_tuple |> :inet.ntoa() |> List.to_string()
-  end
-
-  defp get_storage_base_path do
-    config = Application.get_env(:hermit, :storage, [])
-    Keyword.get(config, :base_path, "/app/storage")
-  end
-
-  defp mock? do
-    config = Application.get_env(:hermit, :docker, [])
-    Keyword.get(config, :mock, false)
-  end
-
-  defp diagnose_wg_handshake_failure(state) do
-    config_content = state.wg_config_content || ""
-
-    endpoint_host =
-      case Regex.run(~r/^\s*Endpoint\s*=\s*(\[[^\]]+\]|[^:\s]+)\s*:\s*\d+/mi, config_content) do
-        [_, host] ->
-          host
-          |> String.trim_leading("[")
-          |> String.trim_trailing("]")
-
-        _ ->
-          nil
-      end
-
-    private_key =
-      case Regex.run(~r/^\s*PrivateKey\s*=\s*([^\s#\n\r]+)/m, config_content) do
-        [_, key] -> String.trim(key)
-        _ -> nil
-      end
-
-    endpoint_ip =
-      if endpoint_host do
-        case resolve_host(endpoint_host) do
-          {:ok, ip_str} -> ip_str
-          _ -> endpoint_host
-        end
-      else
-        nil
-      end
-
-    ping_ok =
-      if endpoint_ip && not mock?() do
-        try do
-          case System.cmd("ping", ["-c", "1", "-W", "1", endpoint_ip], stderr_to_stdout: true) do
-            {_, 0} -> true
-            _ -> false
-          end
-        rescue
-          _ -> false
-        catch
-          _, _ -> false
-        end
-      else
-        true
-      end
-
-    duplicate_pair_id =
-      if private_key && private_key != "" do
-        find_duplicate_private_key_pair(private_key, state.id)
-      else
-        nil
-      end
-
-    cond do
-      duplicate_pair_id ->
-        "Handshake Refused: Duplicate PrivateKey detected with active tunnel '#{duplicate_pair_id}'. VPN providers (NordVPN/Mullvad) drop duplicate key connections. Please use a unique PrivateKey for this profile."
-
-      not ping_ok and endpoint_ip != nil ->
-        "Endpoint Unreachable: Cannot connect to #{endpoint_host} (#{endpoint_ip}). Packet loss 100%. IP address may be blocked by ISP/firewall or server is offline. Try selecting a different server/region."
-
-      true ->
-        "WireGuard Handshake Refused: Server #{endpoint_ip || endpoint_host || "endpoint"} is reachable but rejected UDP handshake. Verify PrivateKey and PublicKey validity."
-    end
-  end
-
-  defp find_duplicate_private_key_pair(private_key, current_pair_id) do
-    import Ecto.Query
+  defp apply_outbound_config_update(updated_state, new_wg_config) do
+    updated_state = maybe_shutdown_bootstrap_task(updated_state)
 
     try do
-      from(p in Hermit.Vpn.VpnPair,
-        where: p.pair_id != ^current_pair_id and p.wg_status in ["running", "starting"]
-      )
-      |> Hermit.Repo.all()
-      |> Hermit.Repo.preload([:outbound_profile])
-      |> Enum.find(fn pair ->
-        cfg =
-          cond do
-            pair.outbound_config && map_size(pair.outbound_config) > 0 -> pair.outbound_config
-            pair.outbound_profile -> pair.outbound_profile.config || %{}
-            true -> %{}
+      File.mkdir_p!(updated_state.storage_dir)
+      resolved_content = PairDiagnostics.resolve_endpoint_in_config(new_wg_config)
+      File.write!(updated_state.wg_config_path, resolved_content)
+      File.chmod!(updated_state.wg_config_path, 0o600)
+
+      updated_state = broadcast_update(updated_state)
+
+      if updated_state.wg_status in [:running, :starting, :error] do
+        if updated_state.ts_port, do: stop_inbound_process(updated_state.ts_port)
+        updated_state.inbound_module.cleanup(updated_state.id, updated_state.storage_dir)
+        updated_state.outbound_module.cleanup(updated_state.id, updated_state.storage_dir)
+
+        new_ts_status =
+          if updated_state.ts_status in [:running, :starting] do
+            :starting
+          else
+            updated_state.ts_status
           end
 
-        content = Map.get(cfg, "wg_config") || Map.get(cfg, :wg_config) || ""
+        restarted_state =
+          %{
+            updated_state
+            | wg_status: :starting,
+              ts_status: new_ts_status,
+              ts_port: nil,
+              wg_error_reason: nil,
+              ts_error_reason: nil
+          }
+          |> cancel_metrics_poll()
+          |> broadcast_update()
 
-        case Regex.run(~r/^\s*PrivateKey\s*=\s*([^\s#\n\r]+)/m, content) do
-          [_, key] -> String.trim(key) == private_key
-          _ -> false
-        end
-      end)
-      |> case do
-        nil -> nil
-        conflicting -> conflicting.pair_id
+        {:reply, {:ok, restarted_state}, restarted_state, {:continue, :bootstrap_wg}}
+      else
+        {:reply, {:ok, updated_state}, updated_state}
       end
     rescue
-      _ -> nil
+      e ->
+        Logger.error("Failed to update Outbound/WG config file: #{inspect(e)}")
+
+        error_state =
+          %{
+            updated_state
+            | wg_status: :error,
+              wg_error_reason: "Config update setup failure: #{Exception.message(e)}"
+          }
+          |> broadcast_update()
+
+        {:reply, {:error, Exception.message(e)}, error_state}
     end
   end
 
-  defp trigger_handshake(wg_name) do
-    if not mock?() do
+  defp start_inbound_bootstrap_task(state) do
+    parent = self()
+    id = state.id
+    outbound_if = state.outbound_if || "wg0"
+    storage_dir = state.storage_dir
+    inbound_config = state.inbound_config
+    inbound_module = state.inbound_module
+
+    {:ok, task_pid} =
       Task.start(fn ->
-        System.cmd("ip", [
-          "netns",
-          "exec",
-          wg_name,
-          "curl",
-          "-s",
-          "-o",
-          "/dev/null",
-          "--max-time",
-          "1",
-          "http://1.1.1.1"
-        ])
+        res = inbound_module.bootstrap(id, outbound_if, storage_dir, inbound_config)
+
+        case res do
+          {:ok, port_or_pid} ->
+            if is_port(port_or_pid) do
+              try do
+                Port.connect(port_or_pid, parent)
+                send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
+              rescue
+                ArgumentError ->
+                  send(parent, {:bootstrap_result, self(), {:error, :port_closed}})
+              end
+            else
+              Process.unlink(port_or_pid)
+              send(parent, {:bootstrap_result, self(), {:ok, port_or_pid}})
+            end
+
+          other ->
+            send(parent, {:bootstrap_result, self(), other})
+        end
       end)
-    end
-  end
 
-  defp netns_exists?(ns_name) do
-    if mock?() do
-      storage_dir = Path.join(get_storage_base_path(), String.replace(ns_name, "hermit_wg_", ""))
-      File.exists?(storage_dir)
-    else
-      case System.cmd("ip", ["netns", "list"], stderr_to_stdout: true) do
-        {output, 0} ->
-          output
-          |> String.split("\n")
-          |> Enum.any?(fn line ->
-            String.starts_with?(line, ns_name)
-          end)
-
-        _ ->
-          false
-      end
-    end
+    ref = Process.monitor(task_pid)
+    %{state | bootstrap_task: %{pid: task_pid, ref: ref}}
   end
 
   defp retry_health_check(0, state) do
     diagnostic_reason =
       try do
-        diagnose_wg_handshake_failure(state)
+        PairDiagnostics.diagnose_wg_handshake_failure(state)
       rescue
         e ->
           Logger.warning("Error during WireGuard handshake failure diagnosis: #{inspect(e)}")
@@ -1788,17 +1104,18 @@ defmodule Hermit.Vpn.PairWorker do
 
     Logger.error("WireGuard tunnel handshake timeout for pair #{state.id}: #{diagnostic_reason}")
 
-    error_state = %{
-      state
-      | wg_status: :error,
-        wg_error_reason: diagnostic_reason,
-        ts_status: if(state.ts_status == :starting, do: :stopped, else: state.ts_status),
-        ts_error_reason: nil
-    }
+    error_state =
+      %{
+        state
+        | wg_status: :error,
+          wg_error_reason: diagnostic_reason,
+          ts_status: if(state.ts_status == :starting, do: :stopped, else: state.ts_status),
+          ts_error_reason: nil
+      }
+      |> broadcast_update()
+      |> schedule_metrics_poll()
 
-    updated_state = broadcast_update(error_state)
-    updated_state = schedule_metrics_poll(updated_state)
-    {:noreply, updated_state}
+    {:noreply, error_state}
   end
 
   defp retry_health_check(retries, state) do
@@ -1807,22 +1124,14 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp schedule_metrics_poll(state) do
-    if state.metrics_timer do
-      Process.cancel_timer(state.metrics_timer)
-    end
-
-    interval = if has_active_ui?(), do: 3000, else: 10_000
-    timer = Process.send_after(self(), :poll_metrics, interval)
+    if state.metrics_timer, do: Process.cancel_timer(state.metrics_timer)
+    timer = Process.send_after(self(), :poll_metrics, PairMetrics.poll_interval_ms())
     %{state | metrics_timer: timer}
   end
 
   defp cancel_metrics_poll(state) do
-    if state.metrics_timer do
-      Process.cancel_timer(state.metrics_timer)
-    end
-
-    state = %{state | metrics_timer: nil}
-    cancel_ping_task(state)
+    if state.metrics_timer, do: Process.cancel_timer(state.metrics_timer)
+    cancel_ping_task(%{state | metrics_timer: nil})
   end
 
   defp cancel_ping_task(state) do
@@ -1849,30 +1158,7 @@ defmodule Hermit.Vpn.PairWorker do
   end
 
   defp broadcast_update(state) do
-    {overall_status, error_reason} =
-      cond do
-        state.wg_status == :error ->
-          {:error, state.wg_error_reason}
-
-        state.ts_status == :error ->
-          {:error, state.ts_error_reason}
-
-        state.wg_status == :running and state.ts_status == :running ->
-          {:running, nil}
-
-        state.wg_status == :starting ->
-          {:starting_wg, nil}
-
-        state.ts_status == :starting ->
-          {:starting_ts, nil}
-
-        state.wg_status == :stopped and state.ts_status == :stopped ->
-          {:stopped, nil}
-
-        true ->
-          {:stopped, nil}
-      end
-
+    {overall_status, error_reason} = PairMetrics.compute_overall_status(state)
     updated_state = %{state | status: overall_status, error_reason: error_reason}
 
     db_changed? =
@@ -1886,7 +1172,7 @@ defmodule Hermit.Vpn.PairWorker do
 
     state_with_db =
       if db_changed? do
-        update_db_status(
+        Pairs.update_db_status(
           updated_state.id,
           to_string(updated_state.wg_status),
           to_string(updated_state.ts_status),
@@ -1910,30 +1196,13 @@ defmodule Hermit.Vpn.PairWorker do
         updated_state
       end
 
+    if db_changed? do
+      Hermit.Vpn.SniProxy.IpResolver.clear_cache()
+    end
+
     Phoenix.PubSub.broadcast(Hermit.PubSub, @topic, {:vpn_pair_updated, state_with_db})
 
     state_with_db
-  end
-
-  defp update_db_status(id, wg_status, ts_status, wg_err, ts_err, overall_status, started_at) do
-    case Hermit.Repo.get(Hermit.Vpn.VpnPair, id) do
-      nil ->
-        :ok
-
-      pair ->
-        pair
-        |> Hermit.Vpn.VpnPair.changeset(%{
-          status: overall_status,
-          wg_status: wg_status,
-          ts_status: ts_status,
-          wg_error_reason: wg_err,
-          ts_error_reason: ts_err,
-          started_at: started_at
-        })
-        |> Hermit.Repo.update()
-    end
-  rescue
-    _ -> :ok
   end
 
   defp stop_inbound_process(port_or_pid) do
@@ -1954,62 +1223,6 @@ defmodule Hermit.Vpn.PairWorker do
     end
 
     :ok
-  end
-
-  defp should_poll_inbound?(state) do
-    now = System.system_time(:second)
-    last_poll = Map.get(state.metrics || %{}, :inbound_fetched_at, 0)
-
-    now - last_poll >= 300 or not has_inbound_info?(state.metrics || %{}, state.inbound_module)
-  end
-
-  defp has_inbound_info?(metrics, Hermit.Vpn.Inbound.Tailscale) do
-    metrics[:ts_ips] != [] and metrics[:ts_backend_state] == "Running"
-  end
-
-  defp has_inbound_info?(metrics, Hermit.Vpn.Inbound.Proxy) do
-    metrics[:proxy_port] != nil and metrics[:proxy_status] == "Running"
-  end
-
-  defp has_inbound_info?(_metrics, _module), do: false
-
-  defp has_active_ui? do
-    match_spec = [
-      {{{:ui_session, :_}, :_, :_}, [], [true]},
-      {{:"$1", :_, :_},
-       [
-         {:andalso, {:is_binary, :"$1"},
-          {:andalso, {:>=, {:byte_size, :"$1"}, 11},
-           {:==, {:binary_part, :"$1", 0, 11}, "ui_session:"}}}
-       ], [true]}
-    ]
-
-    try do
-      case Registry.select(Hermit.Vpn.Registry, match_spec) do
-        [_ | _] -> true
-        _ -> false
-      end
-    rescue
-      _ -> false
-    end
-  end
-
-  defp sanitize_inbound_config(_pair_id, config), do: config
-
-  defp save_inbound_config_db(pair, config) do
-    pair
-    |> Hermit.Vpn.VpnPair.changeset(%{inbound_config: config})
-    |> Hermit.Repo.update()
-  rescue
-    _ -> :ok
-  end
-
-  defp save_outbound_config_db(pair, config) do
-    pair
-    |> Hermit.Vpn.VpnPair.changeset(%{outbound_config: config})
-    |> Hermit.Repo.update()
-  rescue
-    _ -> :ok
   end
 
   defp maybe_shutdown_bootstrap_task(state) do
@@ -2034,110 +1247,36 @@ defmodule Hermit.Vpn.PairWorker do
           state.inbound_module.approve_exit_node(state.id)
         end)
 
-        running_state = %{
-          state
-          | ts_status: :running,
-            ts_error_reason: nil,
-            started_at: System.system_time(:second),
-            ts_port: port,
-            ts_retry_count: 0
-        }
+        running_state =
+          %{
+            state
+            | ts_status: :running,
+              ts_error_reason: nil,
+              started_at: System.system_time(:second),
+              ts_port: port,
+              ts_retry_count: 0
+          }
+          |> broadcast_update()
+          |> schedule_metrics_poll()
 
-        updated_state = broadcast_update(running_state)
-        updated_state = schedule_metrics_poll(updated_state)
-        {:noreply, updated_state}
+        {:noreply, running_state}
 
       {:error, reason} ->
-        error_state = %{
-          state
-          | ts_status: :error,
-            ts_error_reason: format_inbound_error(reason, state.inbound_type)
-        }
+        error_state =
+          %{
+            state
+            | ts_status: :error,
+              ts_error_reason: PairDiagnostics.format_inbound_error(reason, state.inbound_type)
+          }
+          |> broadcast_update()
 
-        updated_state = broadcast_update(error_state)
-        maybe_schedule_ts_recovery(updated_state)
-        updated_state = schedule_metrics_poll(updated_state)
-        {:noreply, updated_state}
-    end
-  end
-
-  defp format_inbound_error(reason, "proxy") do
-    "Proxy Inbound failed: #{inspect(reason)}"
-  end
-
-  defp format_inbound_error(reason, _inbound_type) do
-    str = inspect(reason)
-
-    cond do
-      String.contains?(str, "invalid key") or String.contains?(str, "API key") or
-          String.contains?(str, "not valid") ->
-        "Tailscale Auth Key is invalid or expired. Please update the key in Inbound Profiles."
-
-      String.contains?(str, "tag not found") or
-          (String.contains?(str, "tag:") and String.contains?(str, "not found")) ->
-        "Tailscale ACL Tag not found. Please declare the tag in Tailscale ACL tagOwners."
-
-      String.contains?(str, "node key has expired") or String.contains?(str, "key has expired") ->
-        "Tailscale Node Key has expired. Please re-authenticate."
-
-      String.contains?(str, "failed to connect to control server") ->
-        "Cannot connect to Tailscale control plane. Check network or login server."
-
-      match?({:tailscale_up_failed, {_code, output}} when is_binary(output), reason) ->
-        {:tailscale_up_failed, {_code, output}} = reason
-        lines = String.split(output, "\n", trim: true)
-
-        err_line =
-          Enum.find(Enum.reverse(lines), fn l -> not String.starts_with?(l, "Warning:") end)
-
-        err_line || "Tailscale connection failed"
-
-      true ->
-        "Tailscale failed: #{inspect(reason)}"
-    end
-  end
-
-  defp measure_ping(outbound_module, pair_id) do
-    cond do
-      mock?() ->
-        :rand.uniform(60) + 20
-
-      outbound_module == Hermit.Vpn.Outbound.Local ->
-        :n_a
-
-      true ->
-        wg_name = "hermit_wg_#{pair_id}"
-
-        case System.cmd(
-               "ip",
-               [
-                 "netns",
-                 "exec",
-                 wg_name,
-                 "curl",
-                 "-o",
-                 "/dev/null",
-                 "-s",
-                 "-w",
-                 "%{time_connect}",
-                 "--connect-timeout",
-                 "2",
-                 "http://1.1.1.1"
-               ],
-               stderr_to_stdout: false
-             ) do
-          {output, _exit_code} ->
-            case Float.parse(String.trim(output)) do
-              {val, _} when val > 0.0 -> round(val * 1000)
-              _ -> :error
-            end
-        end
+        maybe_schedule_ts_recovery(error_state)
+        {:noreply, schedule_metrics_poll(error_state)}
     end
   end
 
   defp sync_smart_routes_and_relayer(state) do
     if Hermit.Vpn.SniProxy.has_routes?(state.id) do
-      # If inbound is not already proxy and wg is running, ensure sidecar Proxy.Relayer is active
       if state.inbound_type != "proxy" and state.wg_status == :running do
         if state.smart_relayer_pid == nil or not Process.alive?(state.smart_relayer_pid) do
           case Hermit.Vpn.Inbound.Proxy.Relayer.start_link(

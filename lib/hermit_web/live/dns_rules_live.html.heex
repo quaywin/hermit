@@ -147,7 +147,12 @@
 
       <!-- Search Box -->
       <div class="w-full lg:w-72">
-        <form id="rules-search-form" phx-change="search" phx-submit="search" onsubmit="return false;">
+        <form
+          id="rules-search-form"
+          phx-change="search"
+          phx-submit="search"
+          onsubmit="return false;"
+        >
           <div class="relative">
             <.icon
               name="hero-magnifying-glass"
@@ -285,7 +290,10 @@
                         <.icon name="hero-globe-alt" class="size-3 text-purple-400" />
                         <span>Redirect IP</span>
                       <% "forward_dns" -> %>
-                        <.icon name="hero-arrow-top-right-on-square" class="size-3 text-amber-500" />
+                        <.icon
+                          name="hero-arrow-top-right-on-square"
+                          class="size-3 text-amber-500"
+                        />
                         <span>Forward DNS</span>
                       <% other -> %>
                         <span>{other}</span>

@@ -426,10 +426,42 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
            ]),
          {:ok, _} <-
            run_cmd("ip", ["netns", "exec", wg_name, "ip", "link", "set", vn_name, "up"]) do
+      ensure_netns_dns(wg_name)
       :ok
     else
       {:error, reason} -> {:error, {:veth_setup_failed, reason}}
     end
+  end
+
+  defp ensure_netns_dns(wg_name) do
+    netns_dns_dir = "/etc/netns/#{wg_name}"
+    resolv_file = Path.join(netns_dns_dir, "resolv.conf")
+
+    case File.read(resolv_file) do
+      {:ok, content} ->
+        if String.contains?(content, "100.100.100.100") do
+          sanitized =
+            content
+            |> String.split("\n")
+            |> Enum.reject(&String.contains?(&1, "100.100.100.100"))
+            |> Enum.join("\n")
+
+          final =
+            if String.trim(sanitized) == "" do
+              "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+            else
+              sanitized
+            end
+
+          File.write!(resolv_file, final)
+        end
+
+      _ ->
+        File.mkdir_p!(netns_dns_dir)
+        File.write!(resolv_file, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    end
+  rescue
+    _ -> :ok
   end
 
   defp cleanup_veth(vh_name) do

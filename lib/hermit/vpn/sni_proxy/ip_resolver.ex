@@ -4,7 +4,7 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   for Smart Routed domains, depending on the client's network.
   """
 
-  @cache_ttl_ms 30_000
+  @cache_ttl_ms 5_000
   @routes_table :hermit_smart_routes
 
   @doc """
@@ -30,6 +30,9 @@ defmodule Hermit.Vpn.SniProxy.IpResolver do
   def internal_ip?(ip) do
     case parse_ip(ip) do
       {10, 200, _, _} ->
+        true
+
+      {10, 251, _, _} ->
         true
 
       parsed when is_tuple(parsed) ->

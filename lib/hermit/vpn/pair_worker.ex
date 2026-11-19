@@ -783,6 +783,13 @@ defmodule Hermit.Vpn.PairWorker do
               state
             end
 
+          new_ts_ips = Map.get(metrics, :ts_ips, [])
+          old_ts_ips = get_in(state.metrics || %{}, [:ts_ips]) || []
+
+          if new_ts_ips != old_ts_ips do
+            Hermit.Vpn.SniProxy.IpResolver.clear_cache()
+          end
+
           updated_state =
             %{state | metrics: metrics, wg_retry_count: 0}
             |> broadcast_update()

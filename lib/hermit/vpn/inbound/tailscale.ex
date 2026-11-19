@@ -27,8 +27,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
         _ -> true
       end
 
-    dns_mode = Map.get(config, "dns_mode") || "default"
-
     cond do
       err = get_mock_error() ->
         {:error, err}
@@ -96,7 +94,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             "up",
             "--reset",
             "--authkey=#{ts_auth_key}",
-            "--accept-dns=#{dns_mode == "default"}",
+            "--accept-dns=false",
             "--accept-routes=false",
             "--stateful-filtering=false",
             "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",
@@ -190,8 +188,6 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
             _ -> true
           end
 
-        dns_mode = Map.get(config, "dns_mode") || "default"
-
         ts_up_args = [
           "netns",
           "exec",
@@ -200,7 +196,7 @@ defmodule Hermit.Vpn.Inbound.Tailscale do
           "--socket=#{socket_path}",
           "up",
           "--reset",
-          "--accept-dns=#{dns_mode == "default"}",
+          "--accept-dns=false",
           "--accept-routes=false",
           "--stateful-filtering=false",
           "--hostname=hermit-node-#{String.replace(pair_id, "_", "-")}",

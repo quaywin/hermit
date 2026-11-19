@@ -74,6 +74,8 @@ defmodule Hermit.Vpn.SniProxyTest do
     test "identifies netns veth IPs as internal" do
       assert IpResolver.internal_ip?({10, 200, 1, 2})
       assert IpResolver.internal_ip?("10.200.1.2")
+      assert IpResolver.internal_ip?({10, 251, 1, 2})
+      assert IpResolver.internal_ip?("10.251.1.2")
       refute IpResolver.internal_ip?("8.8.8.8")
       refute IpResolver.internal_ip?({8, 8, 8, 8})
     end

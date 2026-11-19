@@ -333,15 +333,19 @@ else
   else
     echo "⚠ Warning: Could not download SHA256SUMS; skipping checksum verification."
   fi
-  tar -xzf "$TMP_TAR" -C "$RELEASE_DIR"
+  tar --no-same-owner -xzf "$TMP_TAR" -C "$RELEASE_DIR"
   rm -f "$TMP_TAR" "$TMP_SUMS"
 fi
 
+touch "$RELEASE_DIR"
 chmod +x "$RELEASE_DIR/bin/server" "$RELEASE_DIR/bin/hermit" 2>/dev/null || true
 ln -sfn "$RELEASE_DIR" "$INSTALL_ROOT/current"
 
-# Keep only the 2 most recent releases to save disk space
-ls -1dt "$INSTALL_ROOT/releases/"* 2>/dev/null | tail -n +3 | xargs -r rm -rf
+# Keep only the 2 most recent releases (sorted by release ID, never deleting current target)
+CURRENT_TARGET=$(readlink -f "$INSTALL_ROOT/current" 2>/dev/null || echo "")
+ls -1d "$INSTALL_ROOT/releases/"* 2>/dev/null | sort -r | tail -n +3 | while read -r old_rel; do
+  [ -n "$old_rel" ] && [ "$old_rel" != "$CURRENT_TARGET" ] && rm -rf "$old_rel"
+done
 
 # 6. Install systemd service
 cat <<'EOF' > "$SERVICE_FILE"

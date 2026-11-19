@@ -42,7 +42,7 @@ fi
 
 # 1. Require root
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ Please run this installer as root (e.g. sudo bash install-native.sh)."
+  echo "❌ Please run this installer as root (e.g. sudo bash install.sh)."
   exit 1
 fi
 
@@ -322,7 +322,6 @@ else
   curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/install.sh" -o "$INSTALL_ROOT/install.sh" 2>/dev/null || true
   chmod 0755 "$INSTALL_ROOT/install.sh" 2>/dev/null || true
 fi
-ln -sfn "$INSTALL_ROOT/install.sh" "$INSTALL_ROOT/install-native.sh" 2>/dev/null || true
 
 cat <<'EOF' > "$CLI_SCRIPT"
 #!/bin/bash
@@ -351,8 +350,6 @@ case "${1:-}" in
   update|upgrade)
     if [ -x /opt/hermit/install.sh ]; then
       sudo /opt/hermit/install.sh --yes "$@"
-    elif [ -x /opt/hermit/install-native.sh ]; then
-      sudo /opt/hermit/install-native.sh --yes "$@"
     else
       echo "Installer not found at /opt/hermit/install.sh. Running latest installer from GitHub..."
       curl -fsSL "https://raw.githubusercontent.com/quaywin/hermit/main/install.sh" | sudo bash -s -- --yes "$@"

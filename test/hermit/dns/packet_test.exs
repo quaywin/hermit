@@ -50,6 +50,18 @@ defmodule Hermit.Dns.PacketTest do
     assert binary_part(resp, 2, 2) == <<0x81, 0x83>>
   end
 
+  test "builds a valid SERVFAIL response packet directly with RCODE 2" do
+    id = <<0x55, 0xAA>>
+    query_rec = dns_query(name: "test.com", class: 1, type: 1)
+
+    resp = Packet.build_servfail(id, query_rec)
+
+    # QR=1, Opcode=0, AA=false, TC=0, RD=1, RA=1, Z=0, RCODE=2 (SERVFAIL)
+    # flags binary is <<0x81, 0x82>>
+    assert binary_part(resp, 2, 2) == <<0x81, 0x82>>
+    assert binary_part(resp, 0, 2) == id
+  end
+
   test "builds a valid A redirect response packet" do
     id = <<0x99, 0x99>>
     query_rec = dns_query(name: "test.com", class: 1, type: 1)

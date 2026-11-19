@@ -82,6 +82,7 @@ defmodule Hermit.Dns.FastPath do
         client_ip
       ) do
     enable_query_logging = config.enable_query_logging
+    is_internal = Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip)
 
     # 0. AAAA Blocking (Filter IPv6)
     if query.qtype == :AAAA and Map.get(config, :block_ipv6, false) do
@@ -106,30 +107,8 @@ defmodule Hermit.Dns.FastPath do
 
       {:ok, resp}
     else
-      # 1. Lookup cache first
-      cache_result =
-        case Cache.lookup(profile_id, query.domain, query.qtype) do
-          {:ok, _packet, "smart_routed", _info} = hit ->
-            if Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) do
-              :error
-            else
-              hit
-            end
-
-          {:ok, _packet, _status, _info} = hit ->
-            if not Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) and
-                 (match?({:ok, _}, Hermit.Vpn.SniProxy.match(query.domain)) or
-                    match?({"route_tunnel", _, _}, Rules.match(query.domain, custom_rules))) do
-              :error
-            else
-              hit
-            end
-
-          other ->
-            other
-        end
-
-      case cache_result do
+      # 1. Scoped cache lookup (O(1) ETS return without redundant checks)
+      case Cache.lookup(profile_id, is_internal, query.domain, query.qtype) do
         {:ok, cached_packet, status, answer_log_info} ->
           <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
           resp_packet = query.id <> rest_packet
@@ -184,7 +163,7 @@ defmodule Hermit.Dns.FastPath do
                 {"block", nil, "custom_rule"}
 
               {"route_tunnel", pair_id, _} ->
-                if Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) do
+                if is_internal do
                   {nil, nil, nil}
                 else
                   {"smart_route", pair_id, nil}
@@ -196,7 +175,7 @@ defmodule Hermit.Dns.FastPath do
 
           # 2.5 Match Smart Routed Domains (SNI Proxy) if not matched by custom rules
           {action, redirect_val} =
-            if is_nil(action) and not Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip) do
+            if is_nil(action) and not is_internal do
               case Hermit.Vpn.SniProxy.match(query.domain) do
                 {:ok, smart_pair_id} ->
                   {"smart_route", smart_pair_id}
@@ -244,6 +223,7 @@ defmodule Hermit.Dns.FastPath do
 
               Cache.store(
                 profile_id,
+                is_internal,
                 query.domain,
                 query.qtype,
                 resp,
@@ -278,6 +258,7 @@ defmodule Hermit.Dns.FastPath do
 
                 Cache.store(
                   profile_id,
+                  is_internal,
                   query.domain,
                   query.qtype,
                   resp,
@@ -308,6 +289,7 @@ defmodule Hermit.Dns.FastPath do
 
                 Cache.store(
                   profile_id,
+                  is_internal,
                   query.domain,
                   query.qtype,
                   resp,

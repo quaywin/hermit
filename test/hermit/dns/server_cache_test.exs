@@ -536,6 +536,39 @@ defmodule Hermit.Dns.ServerCacheTest do
     assert Hermit.Dns.Cache.lookup(profile_id, domain, :A) == :error
   end
 
+  test "DNS cache partitions entries between internal and external client scopes" do
+    profile_id = 9999
+    domain = "scoped-domain-test.com"
+    int_resp = <<1, 1, 1, 1>>
+    ext_resp = <<2, 2, 2, 2>>
+
+    Hermit.Dns.Cache.store(profile_id, true, domain, :A, int_resp, "resolved", "1.1.1.1", 60)
+    Hermit.Dns.Cache.store(profile_id, false, domain, :A, ext_resp, "resolved", "2.2.2.2", 60)
+
+    # Internal client sees only internal entry
+    assert {:ok, ^int_resp, "resolved", "1.1.1.1"} =
+             Hermit.Dns.Cache.lookup(profile_id, true, domain, :A)
+
+    # External client sees only external entry
+    assert {:ok, ^ext_resp, "resolved", "2.2.2.2"} =
+             Hermit.Dns.Cache.lookup(profile_id, false, domain, :A)
+
+    # Clear deletes both
+    Hermit.Dns.Cache.clear(profile_id)
+    assert Hermit.Dns.Cache.lookup(profile_id, true, domain, :A) == :error
+    assert Hermit.Dns.Cache.lookup(profile_id, false, domain, :A) == :error
+  end
+
+  test "DNS cache delete_domain invalidates scoped entries" do
+    profile_id = 9998
+    Hermit.Dns.Cache.store(profile_id, true, "sub.smart.com", :A, <<1, 1>>, "resolved", "1.1.1.1", 60)
+    Hermit.Dns.Cache.store(profile_id, false, "sub.smart.com", :A, <<2, 2>>, "smart_routed", "2.2.2.2", 60)
+
+    Hermit.Dns.Cache.delete_domain("*.smart.com")
+    assert Hermit.Dns.Cache.lookup(profile_id, true, "sub.smart.com", :A) == :error
+    assert Hermit.Dns.Cache.lookup(profile_id, false, "sub.smart.com", :A) == :error
+  end
+
   test "DNS cache is cleared when Server starts up" do
     {:ok, profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{

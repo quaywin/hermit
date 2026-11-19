@@ -61,10 +61,27 @@ defmodule HermitWeb.Endpoint do
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
 
-  plug Plug.MethodOverride
+  @session_plug Plug.Session.init(@session_options)
+  @method_override_plug Plug.MethodOverride.init([])
+
+  plug :maybe_method_override
   plug Plug.Head
-  plug Plug.Session, @session_options
+  plug :maybe_session
   plug HermitWeb.Router
+
+  defp maybe_method_override(conn, _opts) do
+    case conn.path_info do
+      ["dns-query" | _] -> conn
+      _ -> Plug.MethodOverride.call(conn, @method_override_plug)
+    end
+  end
+
+  defp maybe_session(conn, _opts) do
+    case conn.path_info do
+      ["dns-query" | _] -> conn
+      _ -> Plug.Session.call(conn, @session_plug)
+    end
+  end
 
   @impl SiteEncrypt
   def certification do

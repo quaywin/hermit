@@ -1,6 +1,7 @@
 defmodule Hermit.Dns.BlocklistLoader do
   use GenServer
   require Logger
+  import Bitwise
   alias Hermit.Repo
   alias Hermit.Dns.Blocklist
 
@@ -12,8 +13,8 @@ defmodule Hermit.Dns.BlocklistLoader do
 
   @impl true
   def init(_opts) do
-    # Create unified ETS table with read_concurrency to optimize concurrent DNS queries
-    :ets.new(:dns_blocklist_entries, [:bag, :public, :named_table, read_concurrency: true])
+    # Create unified ETS table with :set to eliminate duplicate domains across blocklists
+    :ets.new(:dns_blocklist_entries, [:set, :public, :named_table, read_concurrency: true])
 
     # Create Bloom Filter storage table
     :ets.new(:dns_bloom_filter, [:set, :public, :named_table, read_concurrency: true])
@@ -200,26 +201,27 @@ defmodule Hermit.Dns.BlocklistLoader do
     case File.read(cache_path) do
       {:ok, binary} ->
         try do
-          %{count: count, domains: domains, bloom_binary: bloom_binary} =
-            :erlang.binary_to_term(binary)
+          cache_data = :erlang.binary_to_term(binary)
+          count = cache_data[:count] || 0
+          bloom_binary = cache_data[:bloom_binary]
 
           # Clean old entries for this blocklist first
-          :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
+          clean_blocklist_entries(blocklist.id)
           :ets.delete(:dns_bloom_filter, blocklist.id)
 
-          # Populate ETS in chunks of 5000
-          domains
-          |> Enum.chunk_every(5000)
-          |> Enum.each(fn chunk ->
-            entries = Enum.map(chunk, &{&1, blocklist.id})
-            :ets.insert(:dns_blocklist_entries, entries)
-          end)
+          # Populate ETS in chunks
+          chunks =
+            cond do
+              is_list(cache_data[:chunks]) -> cache_data[:chunks]
+              is_list(cache_data[:domains]) -> Enum.chunk_every(cache_data[:domains], 5000)
+              true -> []
+            end
+
+          Enum.each(chunks, &insert_domains_chunk(&1, blocklist.id))
 
           if count > 0 and is_binary(bloom_binary) do
             :ets.insert(:dns_bloom_filter, {blocklist.id, bloom_binary})
           end
-
-          :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
 
           duration =
             System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
@@ -228,6 +230,7 @@ defmodule Hermit.Dns.BlocklistLoader do
             "Loaded #{count} domains into Blocklist '#{blocklist.name}' from disk cache in #{duration}ms (0% CPU spike)"
           )
 
+          :erlang.garbage_collect()
           {:ok, count}
         rescue
           _ ->
@@ -246,7 +249,7 @@ defmodule Hermit.Dns.BlocklistLoader do
       start_time = System.monotonic_time()
 
       # Clean old entries for this blocklist first
-      :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist.id}, [], [true]}])
+      clean_blocklist_entries(blocklist.id)
       :ets.delete(:dns_bloom_filter, blocklist.id)
 
       case get_lines(blocklist.url) do
@@ -269,14 +272,10 @@ defmodule Hermit.Dns.BlocklistLoader do
               |> Enum.to_list()
 
             count = length(domains)
+            chunks = Enum.chunk_every(domains, 5000)
 
-            # 2. Insert into the main database ETS table in chunks of 5000 to keep it efficient
-            domains
-            |> Enum.chunk_every(5000)
-            |> Enum.each(fn chunk ->
-              entries = Enum.map(chunk, &{&1, blocklist.id})
-              :ets.insert(:dns_blocklist_entries, entries)
-            end)
+            # 2. Insert into the main database ETS table in chunks of 5000 using bitmasks
+            Enum.each(chunks, &insert_domains_chunk(&1, blocklist.id))
 
             # 3. Generate Bloom Filter and store it as a single binary key in ETS
             bloom_binary =
@@ -290,10 +289,10 @@ defmodule Hermit.Dns.BlocklistLoader do
                 nil
               end
 
-            # Save compiled data to disk cache for instantaneous future boots
+            # Save compiled data to disk cache in chunks
             save_to_disk_cache(cache_path, %{
               count: count,
-              domains: domains,
+              chunks: chunks,
               bloom_binary: bloom_binary
             })
 
@@ -310,9 +309,6 @@ defmodule Hermit.Dns.BlocklistLoader do
 
             # Update rules count and timestamp in DB without triggering callbacks
             update_rules_count(blocklist.id, count)
-
-            # Store metadata in ETS
-            :ets.insert(:dns_blocklist_entries, {{:metadata, blocklist.id}, blocklist.name})
           after
             # Cleanup temporary file if downloaded
             if temp_path && File.exists?(temp_path) do
@@ -335,6 +331,66 @@ defmodule Hermit.Dns.BlocklistLoader do
         {:error, :table_terminated}
     end
   end
+
+  defp insert_domains_chunk(chunk, blocklist_id) do
+    bit = 1 <<< (blocklist_id - 1)
+
+    entries =
+      Enum.map(chunk, fn domain ->
+        case :ets.lookup(:dns_blocklist_entries, domain) do
+          [{^domain, existing_mask}] when is_integer(existing_mask) ->
+            {domain, existing_mask ||| bit}
+
+          _ ->
+            {domain, bit}
+        end
+      end)
+
+    :ets.insert(:dns_blocklist_entries, entries)
+  end
+
+  defp clean_blocklist_entries(blocklist_id) do
+    bit = 1 <<< (blocklist_id - 1)
+    inv_bit = bnot(bit)
+
+    # 1. Delete all entries where mask == bit (only this blocklist was blocking it)
+    :ets.select_delete(:dns_blocklist_entries, [
+      {{:_, bit}, [], [true]}
+    ])
+
+    # 2. For entries where other bits are also set, clear this bit
+    match_spec = [
+      {{:"$1", :"$2"}, [{:andalso, {:not, {:==, :"$2", bit}}, {:>, {:band, :"$2", bit}, 0}}],
+       [{{:"$1", :"$2"}}]}
+    ]
+
+    update_remaining_bits_chunked(match_spec, inv_bit)
+  end
+
+  defp update_remaining_bits_chunked(match_spec, inv_bit) do
+    case :ets.select(:dns_blocklist_entries, match_spec, 1000) do
+      :"$end_of_table" ->
+        :ok
+
+      {entries, cont} ->
+        updated = Enum.map(entries, fn {domain, mask} -> {domain, mask &&& inv_bit} end)
+        :ets.insert(:dns_blocklist_entries, updated)
+        do_update_chunks(cont, inv_bit)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp do_update_chunks(:"$end_of_table", _), do: :ok
+
+  defp do_update_chunks({entries, cont}, inv_bit) do
+    updated = Enum.map(entries, fn {domain, mask} -> {domain, mask &&& inv_bit} end)
+    :ets.insert(:dns_blocklist_entries, updated)
+    do_update_chunks(:ets.select(cont), inv_bit)
+  end
+
+  defp do_update_chunks(_, _), do: :ok
 
   defp save_to_disk_cache(cache_path, data) do
     try do
@@ -372,8 +428,7 @@ defmodule Hermit.Dns.BlocklistLoader do
     cache_path = get_cache_path(blocklist_id)
     if File.exists?(cache_path), do: File.rm(cache_path)
 
-    :ets.select_delete(:dns_blocklist_entries, [{{:_, blocklist_id}, [], [true]}])
-    :ets.delete(:dns_blocklist_entries, {:metadata, blocklist_id})
+    clean_blocklist_entries(blocklist_id)
     :ets.delete(:dns_bloom_filter, blocklist_id)
 
     # Clear DNS caches for all profiles using this blocklist
@@ -494,24 +549,7 @@ defmodule Hermit.Dns.BlocklistLoader do
     end
   end
 
-  # Format: ||domain.com^ (with optional modifiers after ^, e.g. ||domain.com^$third-party)
-  defp parse_adguard_line(line) do
-    if String.starts_with?(line, "||") do
-      # Remove leading ||
-      rest = String.slice(line, 2..-1//-1)
-      # Find the index of the first carat ^
-      case :binary.match(rest, "^") do
-        {idx, _len} ->
-          domain = binary_part(rest, 0, idx)
-          clean_domain(domain)
-
-        :nomatch ->
-          nil
-      end
-    else
-      nil
-    end
-  end
+  defp parse_adguard_line(_line), do: nil
 
   # Format: 0.0.0.0 domain.com or 127.0.0.1 domain.com
   defp parse_hosts_line(line) do

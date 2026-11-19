@@ -328,6 +328,27 @@ defmodule Hermit.Vpn.SniProxy do
   end
 
   @doc """
+  Gets the target host and port for SOCKS5 proxy for a given pair_id.
+  Prefers direct connection to the namespace SOCKS daemon to eliminate loopback hop.
+  """
+  @spec get_socks5_target(String.t()) ::
+          {:ok, tuple() | charlist(), pos_integer()} | {:error, term()}
+  def get_socks5_target(pair_id) when is_binary(pair_id) do
+    init_table()
+
+    case :ets.lookup(@table, {:direct_target, pair_id}) do
+      [{{:direct_target, ^pair_id}, {target_host, target_port}}] ->
+        {:ok, target_host, target_port}
+
+      _ ->
+        case get_socks5_port(pair_id) do
+          {:ok, port} -> {:ok, {127, 0, 0, 1}, port}
+          error -> error
+        end
+    end
+  end
+
+  @doc """
   Gets the SOCKS5 proxy port for a given pair_id.
   """
   @spec get_socks5_port(String.t()) :: {:ok, pos_integer()} | {:error, term()}

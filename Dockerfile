@@ -44,9 +44,13 @@ CMD ["mix", "phx.server"]
 # ==========================================
 FROM ${BUILDER_IMAGE} AS builder
 
-# install build dependencies
+# install build dependencies and download Tailscale
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential git
+  && apt-get install -y --no-install-recommends build-essential git curl tar \
+  && ARCH=$(dpkg --print-architecture) \
+  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
+  && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/local/bin/ \
+  && rm -rf /tmp/tailscale*
 
 # prepare build dir
 WORKDIR /app
@@ -89,15 +93,16 @@ RUN mix release && cp -r _build/${MIX_ENV}/rel/hermit /app/hermit_release
 FROM ${RUNNER_IMAGE} AS final
 ARG TARGETARCH
 
-# Install dependencies, download and install Tailscale in a single layer to minimize size
+# Install runtime dependencies and clean apt cache to minimize image size
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      libstdc++6 openssl libncurses6 locales ca-certificates \
-     iproute2 iptables nftables wireguard-tools curl tar procps openresolv ethtool microsocks tinyproxy iputils-ping \
-  && ARCH=$(dpkg --print-architecture) \
-  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.98.4_${ARCH}.tgz" | tar -xz -C /tmp \
-  && cp /tmp/tailscale_1.98.4_${ARCH}/tailscale* /usr/bin/ \
-  && rm -rf /tmp/tailscale*
+     iproute2 iptables nftables wireguard-tools curl procps openresolv ethtool microsocks tinyproxy iputils-ping \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# Copy Tailscale binaries prepared in builder
+COPY --from=builder /usr/local/bin/tailscale* /usr/bin/
 
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
@@ -110,7 +115,7 @@ WORKDIR "/app"
 
 # set runner ENV
 ENV MIX_ENV="prod"
-ENV ERL_FLAGS="+sub true +scl false +sbwt short +sbwtdcpu short +MMmcs 30 +Muycs 30"
+ENV ERL_FLAGS="+sbwt none +sbwtdcpu none +sbwtdio none +sub true +MMmcs 30 +Muycs 30"
 ENV ERL_CRASH_DUMP_SECONDS=0
 ENV GOMEMLIMIT="32MiB"
 ENV GOGC="50"

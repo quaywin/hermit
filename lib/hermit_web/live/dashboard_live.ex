@@ -27,8 +27,13 @@ defmodule HermitWeb.DashboardLive do
       Hermit.Repo.aggregate(from(e in Hermit.Vpn.DnsEndpoint, where: e.enabled == true), :count) ||
         0
 
-    active_tunnels =
-      Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+    active_pair_ids =
+      pairs
+      |> Enum.filter(fn p -> p.ts_status == :running and p.wg_status == :running end)
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    active_tunnels = MapSet.size(active_pair_ids)
 
     dns_summary = Hermit.Dns.Telemetry.get_24h_summary()
 
@@ -40,6 +45,7 @@ defmodule HermitWeb.DashboardLive do
      |> assign(outbound_profiles: outbound_profiles)
      |> assign(total_endpoints: total_endpoints)
      |> assign(active_endpoints: active_endpoints)
+     |> assign(active_pair_ids: active_pair_ids)
      |> assign(active_tunnels: active_tunnels)
      |> assign(dns_summary: dns_summary)
      |> assign(show_create_modal: false)
@@ -219,15 +225,20 @@ defmodule HermitWeb.DashboardLive do
         end
       end)
 
-    pairs = PairWorker.list_pairs()
+    current_active_ids = socket.assigns[:active_pair_ids] || MapSet.new()
 
-    active_tunnels =
-      Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+    active_pair_ids =
+      if state.ts_status == :running and state.wg_status == :running do
+        MapSet.put(current_active_ids, state.id)
+      else
+        MapSet.delete(current_active_ids, state.id)
+      end
 
     {:noreply,
      socket
      |> assign(error_tunnels: updated_errors)
-     |> assign(active_tunnels: active_tunnels)
+     |> assign(active_pair_ids: active_pair_ids)
+     |> assign(active_tunnels: MapSet.size(active_pair_ids))
      |> stream_insert(:vpn_pairs, state)}
   end
 
@@ -236,15 +247,14 @@ defmodule HermitWeb.DashboardLive do
     current_errors = socket.assigns[:error_tunnels] || []
     updated_errors = Enum.reject(current_errors, &(&1.id == id))
 
-    pairs = PairWorker.list_pairs()
-
-    active_tunnels =
-      Enum.count(pairs, fn p -> p.ts_status == :running and p.wg_status == :running end)
+    current_active_ids = socket.assigns[:active_pair_ids] || MapSet.new()
+    active_pair_ids = MapSet.delete(current_active_ids, id)
 
     {:noreply,
      socket
      |> assign(error_tunnels: updated_errors)
-     |> assign(active_tunnels: active_tunnels)
+     |> assign(active_pair_ids: active_pair_ids)
+     |> assign(active_tunnels: MapSet.size(active_pair_ids))
      |> stream_delete(:vpn_pairs, %{id: id})}
   end
 

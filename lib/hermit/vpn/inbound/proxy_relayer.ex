@@ -103,8 +103,22 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
                 Logger.info("Host HTTP Proxy listening on port #{actual_http_port}")
 
                 # Register directly into ETS tables for instant zero-disk lookups
+                direct_target =
+                  if mock? do
+                    {{127, 0, 0, 1}, actual_socks_port}
+                  else
+                    parsed_ns_ip =
+                      case :inet.parse_address(String.to_charlist(ns_ip)) do
+                        {:ok, ip_tuple} -> ip_tuple
+                        _ -> String.to_charlist(ns_ip)
+                      end
+
+                    {parsed_ns_ip, socks_port}
+                  end
+
                 if :ets.info(:hermit_smart_routes) != :undefined do
                   :ets.insert(:hermit_smart_routes, {{:ports, pair_id}, actual_socks_port})
+                  :ets.insert(:hermit_smart_routes, {{:direct_target, pair_id}, direct_target})
                 end
 
                 if :ets.info(:dns_proxy_cache) != :undefined do
@@ -173,8 +187,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
   defp accept_loop(listen_socket, type, state) do
     case :gen_tcp.accept(listen_socket) do
       {:ok, client_socket} ->
-        # Spawn client handler to relay traffic
-        spawn(fn ->
+        task_fn = fn ->
           Process.flag(:max_heap_size, %{size: 2_621_440, kill: true, error_logger: true})
 
           # Apply standard socket options to client socket
@@ -191,7 +204,13 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
           ])
 
           handle_connection(client_socket, type, state)
-        end)
+        end
+
+        if Process.whereis(Hermit.Vpn.SniProxy.TaskSupervisor) do
+          Task.Supervisor.start_child(Hermit.Vpn.SniProxy.TaskSupervisor, task_fn)
+        else
+          spawn(task_fn)
+        end
 
         accept_loop(listen_socket, type, state)
 
@@ -259,6 +278,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     # Clean up ETS route and proxy cache
     if :ets.info(:hermit_smart_routes) != :undefined do
       :ets.delete(:hermit_smart_routes, {:ports, state.pair_id})
+      :ets.delete(:hermit_smart_routes, {:direct_target, state.pair_id})
     end
 
     if :ets.info(:dns_proxy_cache) != :undefined do
@@ -303,7 +323,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
              send_timeout_close: true
            ]) do
         {:ok, dest_socket} ->
-          start_passive_relay(client_socket, dest_socket)
+          start_active_relay(client_socket, dest_socket)
 
         {:error, reason} ->
           Logger.error(
@@ -343,7 +363,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
              send_timeout_close: true
            ]) do
         {:ok, dest_socket} ->
-          start_passive_relay(client_socket, dest_socket)
+          start_active_relay(client_socket, dest_socket)
 
         {:error, reason} ->
           Logger.error(
@@ -355,38 +375,74 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     end
   end
 
-  defp start_passive_relay(s1, s2) do
-    old_trap = Process.flag(:trap_exit, true)
+  defp start_active_relay(client, target) do
+    :inet.setopts(client, [
+      :binary,
+      packet: :raw,
+      nodelay: true,
+      recbuf: 65_536,
+      sndbuf: 65_536,
+      buffer: 65_536,
+      send_timeout: 10_000,
+      send_timeout_close: true,
+      active: 32
+    ])
 
-    helper =
-      spawn_link(fn ->
-        passive_loop(s2, s1)
-      end)
+    :inet.setopts(target, [
+      :binary,
+      packet: :raw,
+      nodelay: true,
+      recbuf: 65_536,
+      sndbuf: 65_536,
+      buffer: 65_536,
+      send_timeout: 10_000,
+      send_timeout_close: true,
+      active: 32
+    ])
 
-    try do
-      passive_loop(s1, s2)
+    relay_loop(client, target)
+  end
+
+  defp relay_loop(client, target) do
+    receive do
+      {:tcp, ^client, data} ->
+        case :gen_tcp.send(target, data) do
+          :ok -> relay_loop(client, target)
+          {:error, _} -> cleanup_sockets(client, target)
+        end
+
+      {:tcp, ^target, data} ->
+        case :gen_tcp.send(client, data) do
+          :ok -> relay_loop(client, target)
+          {:error, _} -> cleanup_sockets(client, target)
+        end
+
+      {:tcp_passive, ^client} ->
+        :inet.setopts(client, active: 32)
+        relay_loop(client, target)
+
+      {:tcp_passive, ^target} ->
+        :inet.setopts(target, active: 32)
+        relay_loop(client, target)
+
+      {:tcp_closed, _} ->
+        cleanup_sockets(client, target)
+
+      {:tcp_error, _, _} ->
+        cleanup_sockets(client, target)
+
+      _other ->
+        relay_loop(client, target)
     after
-      :gen_tcp.close(s1)
-      :gen_tcp.close(s2)
-      Process.exit(helper, :kill)
-      Process.flag(:trap_exit, old_trap)
+      60_000 ->
+        cleanup_sockets(client, target)
     end
   end
 
-  defp passive_loop(src, dest) do
-    case :gen_tcp.recv(src, 0, 60000) do
-      {:ok, data} ->
-        case :gen_tcp.send(dest, data) do
-          :ok ->
-            passive_loop(src, dest)
-
-          {:error, _} ->
-            :ok
-        end
-
-      {:error, _} ->
-        :ok
-    end
+  defp cleanup_sockets(client, target) do
+    :gen_tcp.close(client)
+    :gen_tcp.close(target)
+    :ok
   end
 
   defp mock_echo_loop(socket) do

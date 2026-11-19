@@ -2,6 +2,7 @@ defmodule Hermit.Dns.Filter do
   @moduledoc """
   Encapsulates logic for DNS blocklists and domain filtering.
   """
+  import Bitwise
 
   @filter_cache_table :dns_filter_cache
   @max_filter_cache_entries 50_000
@@ -62,13 +63,14 @@ defmodule Hermit.Dns.Filter do
   end
 
   defp do_match_ets_blocklist?(domain, blocklist_id) do
-    case :ets.lookup(:dns_blocklist_entries, domain) do
-      [] ->
-        match_suffix_recursive_dynamic(domain, blocklist_id)
+    bit = 1 <<< (blocklist_id - 1)
 
-      tuples ->
-        Enum.any?(tuples, fn {_, id} -> id == blocklist_id end) or
-          match_suffix_recursive_dynamic(domain, blocklist_id)
+    case :ets.lookup(:dns_blocklist_entries, domain) do
+      [{^domain, mask}] when is_integer(mask) ->
+        (mask &&& bit) != 0 or match_suffix_recursive_dynamic(domain, blocklist_id)
+
+      _ ->
+        match_suffix_recursive_dynamic(domain, blocklist_id)
     end
   end
 
@@ -178,18 +180,25 @@ defmodule Hermit.Dns.Filter do
   end
 
   defp do_match_any_ets_blocklist?(domain, blocklist_ids) do
-    case :ets.lookup(:dns_blocklist_entries, domain) do
-      [] ->
-        match_any_suffix_recursive(domain, blocklist_ids)
+    target_mask =
+      Enum.reduce(blocklist_ids, 0, fn id, acc ->
+        acc ||| (1 <<< (id - 1))
+      end)
 
-      tuples ->
-        Enum.find_value(tuples, fn {_, id} ->
-          if id in blocklist_ids, do: id
-        end) || match_any_suffix_recursive(domain, blocklist_ids)
+    case :ets.lookup(:dns_blocklist_entries, domain) do
+      [{^domain, mask}] when is_integer(mask) ->
+        if (mask &&& target_mask) != 0 do
+          find_matched_id(mask, blocklist_ids)
+        else
+          match_any_suffix_recursive(domain, blocklist_ids, target_mask)
+        end
+
+      _ ->
+        match_any_suffix_recursive(domain, blocklist_ids, target_mask)
     end
   end
 
-  defp match_any_suffix_recursive(domain, blocklist_ids) do
+  defp match_any_suffix_recursive(domain, blocklist_ids, target_mask) do
     case :binary.match(domain, ".") do
       :nomatch ->
         nil
@@ -198,25 +207,22 @@ defmodule Hermit.Dns.Filter do
         suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
 
         case :ets.lookup(:dns_blocklist_entries, suffix) do
-          [] ->
-            match_any_suffix_recursive(suffix, blocklist_ids)
-
-          tuples ->
-            matched_id =
-              Enum.find_value(tuples, fn {_, id} ->
-                if id in blocklist_ids, do: id
-              end)
-
-            if matched_id do
-              matched_id
+          [{^suffix, mask}] when is_integer(mask) ->
+            if (mask &&& target_mask) != 0 do
+              find_matched_id(mask, blocklist_ids)
             else
-              match_any_suffix_recursive(suffix, blocklist_ids)
+              match_any_suffix_recursive(suffix, blocklist_ids, target_mask)
             end
+
+          _ ->
+            match_any_suffix_recursive(suffix, blocklist_ids, target_mask)
         end
     end
   end
 
   defp match_suffix_recursive_dynamic(domain, blocklist_id) do
+    bit = 1 <<< (blocklist_id - 1)
+
     case :binary.match(domain, ".") do
       :nomatch ->
         false
@@ -225,17 +231,23 @@ defmodule Hermit.Dns.Filter do
         suffix = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
 
         case :ets.lookup(:dns_blocklist_entries, suffix) do
-          [] ->
-            match_suffix_recursive_dynamic(suffix, blocklist_id)
-
-          tuples ->
-            if Enum.any?(tuples, fn {_, id} -> id == blocklist_id end) do
+          [{^suffix, mask}] when is_integer(mask) ->
+            if (mask &&& bit) != 0 do
               true
             else
               match_suffix_recursive_dynamic(suffix, blocklist_id)
             end
+
+          _ ->
+            match_suffix_recursive_dynamic(suffix, blocklist_id)
         end
     end
+  end
+
+  defp find_matched_id(mask, blocklist_ids) do
+    Enum.find(blocklist_ids, fn id ->
+      (mask &&& (1 <<< (id - 1))) != 0
+    end)
   end
 
   defp match_suffix_recursive(domain, table) do

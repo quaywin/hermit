@@ -3,7 +3,7 @@ defmodule HermitWeb.DNSController do
   import Bitwise
   require Logger
 
-  @doh_token_cache_ttl_ms 5_000
+  @doh_token_cache_ttl_ms 600_000
 
   def query(conn, %{"doh_token" => doh_token} = params) do
     case get_endpoint_by_doh_token_cached(doh_token) do

@@ -59,20 +59,21 @@ defmodule Hermit.Vpn.SniProxy.Handler do
   defp route_connection(client_socket, host, target_port, initial_packet) do
     case SniProxy.match(host) do
       {:ok, pair_id} ->
-        case SniProxy.get_socks5_port(pair_id) do
-          {:ok, socks5_port} ->
+        case SniProxy.get_socks5_target(pair_id) do
+          {:ok, target_host, target_port_num} ->
             connect_and_relay(
               client_socket,
               host,
               target_port,
               initial_packet,
-              socks5_port,
+              target_host,
+              target_port_num,
               pair_id
             )
 
           {:error, reason} ->
             Logger.error(
-              "SNI Proxy: SOCKS5 proxy port not available for pair #{pair_id}: #{inspect(reason)}"
+              "SNI Proxy: SOCKS5 proxy target not available for pair #{pair_id}: #{inspect(reason)}"
             )
 
             :gen_tcp.close(client_socket)
@@ -97,7 +98,15 @@ defmodule Hermit.Vpn.SniProxy.Handler do
     end
   end
 
-  defp connect_and_relay(client_socket, host, target_port, initial_packet, socks5_port, pair_id) do
+  defp connect_and_relay(
+         client_socket,
+         host,
+         target_port,
+         initial_packet,
+         target_host,
+         socks5_port,
+         pair_id
+       ) do
     connect_opts = [
       :binary,
       packet: :raw,
@@ -111,7 +120,7 @@ defmodule Hermit.Vpn.SniProxy.Handler do
       send_timeout_close: true
     ]
 
-    case :gen_tcp.connect({127, 0, 0, 1}, socks5_port, connect_opts, 5000) do
+    case :gen_tcp.connect(target_host, socks5_port, connect_opts, 5000) do
       {:ok, target_socket} ->
         case socks5_handshake(target_socket, host, target_port) do
           :ok ->

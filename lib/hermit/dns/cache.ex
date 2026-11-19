@@ -8,33 +8,72 @@ defmodule Hermit.Dns.Cache do
   @eviction_batch_size 2_500
   @delete_chunk_size 1_000
 
+  @spec lookup(integer(), boolean(), String.t(), atom(), boolean()) ::
+          {:ok, binary(), String.t(), String.t()}
+          | {:stale, binary(), String.t(), String.t()}
+          | :error
+  def lookup(profile_id, is_internal, domain, qtype, allow_stale?) when is_boolean(is_internal) do
+    domain = String.downcase(domain)
+    now = System.monotonic_time(:second)
+    key = {profile_id, is_internal, domain, qtype}
+
+    case :ets.lookup(@dns_cache_table, key) do
+      [{^key, resp_packet, status, answer_log_info, expires_at}] ->
+        check_expiration(resp_packet, status, answer_log_info, expires_at, now, allow_stale?)
+
+      _ ->
+        legacy_key = {profile_id, domain, qtype}
+
+        case :ets.lookup(@dns_cache_table, legacy_key) do
+          [{^legacy_key, resp_packet, status, answer_log_info, expires_at}] ->
+            check_expiration(resp_packet, status, answer_log_info, expires_at, now, allow_stale?)
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  def lookup(profile_id, domain, qtype) do
+    lookup(profile_id, true, domain, qtype, false)
+  end
+
+  def lookup(profile_id, is_internal, domain, qtype) when is_boolean(is_internal) do
+    lookup(profile_id, is_internal, domain, qtype, false)
+  end
+
   @spec lookup(integer(), String.t(), atom(), boolean()) ::
           {:ok, binary(), String.t(), String.t()}
           | {:stale, binary(), String.t(), String.t()}
           | :error
-  def lookup(profile_id, domain, qtype, allow_stale? \\ false) do
-    domain = String.downcase(domain)
-    now = System.monotonic_time(:second)
+  def lookup(profile_id, domain, qtype, allow_stale?) when is_boolean(allow_stale?) do
+    lookup(profile_id, true, domain, qtype, allow_stale?)
+  end
 
-    case :ets.lookup(@dns_cache_table, {profile_id, domain, qtype}) do
-      [{{^profile_id, ^domain, ^qtype}, resp_packet, status, answer_log_info, expires_at}] ->
-        if now < expires_at do
-          {:ok, resp_packet, status, answer_log_info}
-        else
-          if allow_stale? do
-            {:stale, resp_packet, status, answer_log_info}
-          else
-            :error
-          end
-        end
-
-      _ ->
+  defp check_expiration(resp_packet, status, answer_log_info, expires_at, now, allow_stale?) do
+    if now < expires_at do
+      {:ok, resp_packet, status, answer_log_info}
+    else
+      if allow_stale? do
+        {:stale, resp_packet, status, answer_log_info}
+      else
         :error
+      end
     end
   end
 
-  @spec store(integer(), String.t(), atom(), binary(), String.t(), String.t(), integer()) :: :ok
-  def store(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl) do
+  @spec store(
+          integer(),
+          boolean(),
+          String.t(),
+          atom(),
+          binary(),
+          String.t(),
+          String.t(),
+          integer()
+        ) :: :ok
+  def store(profile_id, is_internal, domain, qtype, resp_packet, status, answer_log_info, ttl)
+      when is_boolean(is_internal) do
     domain = String.downcase(domain)
     expires_at = System.monotonic_time(:second) + ttl
 
@@ -42,10 +81,15 @@ defmodule Hermit.Dns.Cache do
 
     :ets.insert(
       @dns_cache_table,
-      {{profile_id, domain, qtype}, resp_packet, status, answer_log_info, expires_at}
+      {{profile_id, is_internal, domain, qtype}, resp_packet, status, answer_log_info, expires_at}
     )
 
     :ok
+  end
+
+  @spec store(integer(), String.t(), atom(), binary(), String.t(), String.t(), integer()) :: :ok
+  def store(profile_id, domain, qtype, resp_packet, status, answer_log_info, ttl) do
+    store(profile_id, true, domain, qtype, resp_packet, status, answer_log_info, ttl)
   end
 
   @doc """
@@ -56,6 +100,7 @@ defmodule Hermit.Dns.Cache do
     now = System.monotonic_time(:second)
 
     :ets.select_delete(@dns_cache_table, [
+      {{{:_, :_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]},
       {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
     ])
 
@@ -97,7 +142,11 @@ defmodule Hermit.Dns.Cache do
   defp evict_batch(count) do
     case :ets.select(
            @dns_cache_table,
-           [{{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}],
+           [
+             {{{:"$1", :"$2", :"$3", :"$4"}, :_, :_, :_, :_}, [],
+              [{{:"$1", :"$2", :"$3", :"$4"}}]},
+             {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}
+           ],
            count
          ) do
       {keys, _cont} when is_list(keys) ->
@@ -111,6 +160,7 @@ defmodule Hermit.Dns.Cache do
   @spec clear(integer()) :: :ok
   def clear(profile_id) do
     :ets.select_delete(@dns_cache_table, [
+      {{{profile_id, :_, :_, :_}, :_, :_, :_, :_}, [], [true]},
       {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]}
     ])
 
@@ -136,12 +186,14 @@ defmodule Hermit.Dns.Cache do
       base = String.slice(norm, 2..-1//1)
 
       :ets.select_delete(@dns_cache_table, [
+        {{{:"$1", :"$2", :"$3", :"$4"}, :_, :_, :_, :_}, [{:==, :"$3", base}], [true]},
         {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [{:==, :"$2", base}], [true]}
       ])
 
       delete_matching_suffix_chunked(suffix)
     else
       :ets.select_delete(@dns_cache_table, [
+        {{{:"$1", :"$2", :"$3", :"$4"}, :_, :_, :_, :_}, [{:==, :"$3", norm}], [true]},
         {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [{:==, :"$2", norm}], [true]}
       ])
     end
@@ -155,7 +207,10 @@ defmodule Hermit.Dns.Cache do
     :ets.safe_fixtable(@dns_cache_table, true)
 
     try do
-      match_spec = [{{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}]
+      match_spec = [
+        {{{:"$1", :"$2", :"$3", :"$4"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3", :"$4"}}]},
+        {{{:"$1", :"$2", :"$3"}, :_, :_, :_, :_}, [], [{{:"$1", :"$2", :"$3"}}]}
+      ]
 
       do_delete_suffix_chunk(
         :ets.select(@dns_cache_table, match_spec, @delete_chunk_size),
@@ -169,10 +224,16 @@ defmodule Hermit.Dns.Cache do
   defp do_delete_suffix_chunk(:"$end_of_table", _suffix), do: :ok
 
   defp do_delete_suffix_chunk({keys, cont}, suffix) do
-    Enum.each(keys, fn {p_id, d, qtype} ->
-      if String.ends_with?(d, suffix) do
-        :ets.delete(@dns_cache_table, {p_id, d, qtype})
-      end
+    Enum.each(keys, fn
+      {p_id, is_int, d, qtype} ->
+        if String.ends_with?(d, suffix) do
+          :ets.delete(@dns_cache_table, {p_id, is_int, d, qtype})
+        end
+
+      {p_id, d, qtype} ->
+        if String.ends_with?(d, suffix) do
+          :ets.delete(@dns_cache_table, {p_id, d, qtype})
+        end
     end)
 
     do_delete_suffix_chunk(:ets.select(cont), suffix)

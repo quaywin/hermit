@@ -214,8 +214,22 @@ defmodule Hermit.Dns.Packet do
   Builds a standard SERVFAIL response for a query ID and query record.
   """
   def build_servfail(id_bin, query_record) when Record.is_record(query_record, :dns_query) do
-    servfail = build_nxdomain(id_bin, query_record)
-    patch_rcode(servfail, 2)
+    id_val = parse_id_bin(id_bin)
+
+    msg =
+      dns_message(
+        id: id_val,
+        qr: true,
+        aa: false,
+        rd: true,
+        ra: true,
+        # SERVFAIL
+        rc: 2,
+        qc: 1,
+        questions: [query_record]
+      )
+
+    :dns.encode_message(msg)
   end
 
   @doc """

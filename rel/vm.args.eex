@@ -1,0 +1,10 @@
+## Fixed BEAM memory & scheduler optimizations for low-resource VPS / Raspberry Pi.
+## Users can still adjust scheduler count via ERL_AFLAGS (e.g. "+S 2:2") without
+## overriding these defaults.
++sub true
++scl false
++sbwt none
++sbwtdcpu none
++sbwtdio none
++MMmcs 30
++Muycs 30

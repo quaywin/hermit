@@ -1,0 +1,25 @@
+[Unit]
+Description=Hermit VPN & Smart DNS Orchestrator
+Documentation=https://github.com/quaywin/hermit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hermit/current
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=/etc/hermit/env
+ExecStart=/opt/hermit/current/bin/server
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+LimitNOFILE=65536
+
+# Standard journald logging (automatically rotated by systemd-journald)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hermit
+
+[Install]
+WantedBy=multi-user.target

@@ -8,13 +8,16 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/hermit/current
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/opt/hermit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=/etc/hermit/env
 ExecStart=/opt/hermit/current/bin/server
 Restart=always
 RestartSec=3
 TimeoutStopSec=15
 LimitNOFILE=65536
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
 
 # Standard journald logging (automatically rotated by systemd-journald)
 StandardOutput=journal

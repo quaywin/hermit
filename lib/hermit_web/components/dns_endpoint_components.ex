@@ -89,13 +89,11 @@ defmodule HermitWeb.DnsEndpointComponents do
             <%= case @status do %>
               <% :running -> %>
                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  running
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> running
                 </span>
               <% :starting -> %>
                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                  <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span>
-                  starting
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-bounce"></span> starting
                 </span>
               <% :error -> %>
                 <span
@@ -166,9 +164,14 @@ defmodule HermitWeb.DnsEndpointComponents do
             ]}
             title={
               cond do
-                is_nil(@endpoint.inbound_profile_id) -> "Assign a Tailscale Inbound Profile to activate"
-                @endpoint.enabled -> "Click to Deactivate"
-                true -> "Click to Activate"
+                is_nil(@endpoint.inbound_profile_id) ->
+                  "Assign a Tailscale Inbound Profile to activate"
+
+                @endpoint.enabled ->
+                  "Click to Deactivate"
+
+                true ->
+                  "Click to Activate"
               end
             }
           >

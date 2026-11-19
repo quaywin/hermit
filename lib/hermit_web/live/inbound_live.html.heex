@@ -180,6 +180,39 @@
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>
+                <details class="group border border-base-300 rounded-[6px] bg-base-100/60 transition-colors">
+                  <summary class="flex items-center justify-between p-2.5 text-xs font-medium cursor-pointer text-base-content/70 hover:text-base-content select-none">
+                    <span class="flex items-center gap-1.5">
+                      <.icon name="hero-shield-check" class="size-3.5 text-[#3ecf8e]" />
+                      Tailscale ACL Setup (Required for OAuth Keys)
+                    </span>
+                    <.icon
+                      name="hero-chevron-down"
+                      class="size-3.5 transition-transform group-open:rotate-180"
+                    />
+                  </summary>
+                  <div class="p-3 pt-2 space-y-2 border-t border-base-300/60 text-xs">
+                    <div class="flex items-center justify-between gap-2">
+                      <a
+                        href="https://login.tailscale.com/admin/acls"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-[#3ecf8e] hover:underline font-medium"
+                      >
+                        Open Tailscale Admin ACLs ↗
+                      </a>
+                      <button
+                        type="button"
+                        onclick="navigator.clipboard.writeText(this.dataset.acl); const t=this.textContent; this.textContent='Copied!'; setTimeout(()=>this.textContent=t, 1500);"
+                        data-acl='{"tagOwners":{"tag:hermit":["autogroup:admin"]},"autoApprovers":{"exitNode":["tag:hermit"],"routes":{"0.0.0.0/0":["tag:hermit"],"::/0":["tag:hermit"]}}}'
+                        class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer"
+                      >
+                        Copy ACL JSON
+                      </button>
+                    </div>
+                    <pre class="p-2 rounded-[4px] bg-base-200 border border-base-300 font-mono text-[11px] overflow-x-auto text-base-content/80">{~s({"tagOwners":{"tag:hermit":["autogroup:admin"]},"autoApprovers":{"exitNode":["tag:hermit"],"routes":{"0.0.0.0/0":["tag:hermit"],"::/0":["tag:hermit"]}}})}</pre>
+                  </div>
+                </details>
                 <div class="space-y-1.5">
                   <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">Tailscale Tags (Optional, default: tag:hermit)</label>
                   <input

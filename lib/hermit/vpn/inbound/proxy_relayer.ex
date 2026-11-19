@@ -35,13 +35,11 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
         {:ok, :mocked}
       else
         with :ok <- setup_veth(wg_name, vh_name, vn_name, host_ip, ns_ip),
-             :ok <- write_tinyproxy_config(storage_dir, ns_ip, http_port),
-             {:ok, socks_port_proc} <- start_microsocks(wg_name, ns_ip, socks_port),
-             {:ok, http_port_proc} <- start_tinyproxy(wg_name, storage_dir) do
-          # Write proxy pids to files so cleanup can access them if needed
-          write_pid_file(storage_dir, "microsocks.pid", socks_port_proc)
-          write_pid_file(storage_dir, "tinyproxy.pid", http_port_proc)
-          {:ok, {socks_port_proc, http_port_proc}}
+             :ok <- write_3proxy_config(storage_dir, ns_ip, socks_port, http_port),
+             {:ok, proxy_port_proc} <- start_3proxy(wg_name, storage_dir) do
+          # Write proxy pid to file so cleanup and metrics can access it
+          write_pid_file(storage_dir, "3proxy.pid", proxy_port_proc)
+          {:ok, proxy_port_proc}
         else
           {:error, reason} -> {:error, reason}
         end
@@ -147,8 +145,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
                   vh_name: vh_name,
                   socks_listen_socket: socks_listen_socket,
                   http_listen_socket: http_listen_socket,
-                  socks_port_proc: if(procs == :mocked, do: nil, else: elem(procs, 0)),
-                  http_port_proc: if(procs == :mocked, do: nil, else: elem(procs, 1)),
+                  proxy_port_proc: if(procs == :mocked, do: nil, else: procs),
                   ns_ip: ns_ip,
                   socks_port: socks_port,
                   http_port: http_port,
@@ -170,8 +167,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
 
           {:error, reason} ->
             if procs != :mocked do
-              kill_port_process(elem(procs, 0))
-              kill_port_process(elem(procs, 1))
+              kill_port_process(procs)
             end
 
             unless mock?, do: cleanup_veth(vh_name)
@@ -224,20 +220,14 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     end
   end
 
-  # Monitor child ports
+  # Monitor child port
   @impl true
   def handle_info({:EXIT, port, reason}, state) when is_port(port) do
-    cond do
-      port == state.socks_port_proc ->
-        Logger.error("microsocks daemon exited: #{inspect(reason)}")
-        {:stop, {:microsocks_exited, reason}, state}
-
-      port == state.http_port_proc ->
-        Logger.error("tinyproxy daemon exited: #{inspect(reason)}")
-        {:stop, {:tinyproxy_exited, reason}, state}
-
-      true ->
-        {:noreply, state}
+    if port == state.proxy_port_proc do
+      Logger.error("3proxy daemon exited: #{inspect(reason)}")
+      {:stop, {:threeproxy_exited, reason}, state}
+    else
+      {:noreply, state}
     end
   end
 
@@ -261,16 +251,17 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     ports = Enum.filter([state[:actual_socks_port], state[:actual_http_port]], &is_integer/1)
     if ports != [], do: Hermit.Vpn.PortAllocator.release_ports(ports)
 
-    # Kill microsocks and tinyproxy inside the netns
+    # Kill 3proxy inside the netns
     unless state.mock? do
-      kill_port_process(state.socks_port_proc)
-      kill_port_process(state.http_port_proc)
+      kill_port_process(state.proxy_port_proc)
       cleanup_veth(state.vh_name)
     end
 
     # Delete local files
     File.rm(Path.join(state.storage_dir, "proxy_info.json"))
     File.rm(Path.join(state.storage_dir, "proxy.pid"))
+    File.rm(Path.join(state.storage_dir, "3proxy.pid"))
+    File.rm(Path.join(state.storage_dir, "3proxy.cfg"))
     File.rm(Path.join(state.storage_dir, "microsocks.pid"))
     File.rm(Path.join(state.storage_dir, "tinyproxy.pid"))
     File.rm(Path.join(state.storage_dir, "tinyproxy.conf"))
@@ -468,6 +459,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
          {:ok, _} <- run_cmd("ip", ["link", "set", vn_name, "netns", wg_name]),
          {:ok, _} <- run_cmd("ip", ["addr", "add", "#{host_ip}/30", "dev", vh_name]),
          {:ok, _} <- run_cmd("ip", ["link", "set", vh_name, "up"]),
+         {:ok, _} <- run_cmd("sysctl", ["-w", "net.ipv4.conf.#{vh_name}.rp_filter=2"]),
          {:ok, _} <-
            run_cmd("ip", [
              "netns",
@@ -526,68 +518,41 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     :ok
   end
 
-  defp write_tinyproxy_config(storage_dir, listen_ip, port) do
-    conf_path = Path.join(storage_dir, "tinyproxy.conf")
-    pid_path = Path.join(storage_dir, "tinyproxy.pid")
-    log_path = Path.join(storage_dir, "tinyproxy.log")
+  defp write_3proxy_config(storage_dir, listen_ip, socks_port, http_port) do
+    conf_path = Path.join(storage_dir, "3proxy.cfg")
 
     content = """
-    Port #{port}
-    Listen #{listen_ip}
-    Timeout 600
-    MaxClients 100
-    Allow 172.29.0.0/16
-    Allow 127.0.0.1
-    PidFile "#{pid_path}"
-    LogFile "#{log_path}"
-    LogLevel Info
+    nscache 65536
+    timeouts 1 5 30 60 180 1800 15 60
+    auth none
+    socks -p#{socks_port} -i#{listen_ip}
+    proxy -n -p#{http_port} -i#{listen_ip}
     """
 
     File.write!(conf_path, content)
     :ok
   end
 
-  defp start_microsocks(wg_name, ns_ip, port) do
-    Logger.info("Starting microsocks inside netns #{wg_name} on #{ns_ip}:#{port}")
+  defp start_3proxy(wg_name, storage_dir) do
+    conf_path = Path.join(storage_dir, "3proxy.cfg")
+    threeproxy_bin = System.find_executable("3proxy") || "/opt/hermit/bin/3proxy"
+    Logger.info("Starting 3proxy inside netns #{wg_name} using config #{conf_path}")
 
     port_args = [
       "netns",
       "exec",
       wg_name,
-      "microsocks",
-      "-p",
-      "#{port}",
-      "-i",
-      ns_ip
-    ]
-
-    try do
-      p = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
-      {:ok, p}
-    rescue
-      e -> {:error, {:microsocks_spawn_failed, e}}
-    end
-  end
-
-  defp start_tinyproxy(wg_name, storage_dir) do
-    conf_path = Path.join(storage_dir, "tinyproxy.conf")
-    Logger.info("Starting tinyproxy inside netns #{wg_name} using config #{conf_path}")
-
-    port_args = [
-      "netns",
-      "exec",
-      wg_name,
-      "tinyproxy",
-      "-d",
-      "-c",
+      threeproxy_bin,
       conf_path
     ]
 
+    ip_bin = System.find_executable("ip") || "/usr/bin/ip"
+
     try do
-      p = Port.open({:spawn_executable, "/usr/bin/ip"}, [:binary, args: port_args])
+      p = Port.open({:spawn_executable, ip_bin}, [:binary, args: port_args])
       {:ok, p}
     rescue
-      e -> {:error, {:tinyproxy_spawn_failed, e}}
+      e -> {:error, {:threeproxy_spawn_failed, e}}
     end
   end
 

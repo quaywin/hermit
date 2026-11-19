@@ -268,7 +268,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         # We need a process PID running inside the netns to read /proc/<pid>/net/dev.
         # We check possible PID files written by Inbound modules.
         pid =
-          ["tailscale/tailscaled.pid", "microsocks.pid", "tinyproxy.pid"]
+          ["tailscale/tailscaled.pid", "3proxy.pid", "microsocks.pid", "tinyproxy.pid"]
           |> Enum.find_value(fn rel_path ->
             path = Path.join(storage_dir, rel_path)
 

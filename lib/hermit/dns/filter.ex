@@ -182,7 +182,7 @@ defmodule Hermit.Dns.Filter do
   defp do_match_any_ets_blocklist?(domain, blocklist_ids) do
     target_mask =
       Enum.reduce(blocklist_ids, 0, fn id, acc ->
-        acc ||| (1 <<< (id - 1))
+        acc ||| 1 <<< (id - 1)
       end)
 
     case :ets.lookup(:dns_blocklist_entries, domain) do
@@ -246,7 +246,7 @@ defmodule Hermit.Dns.Filter do
 
   defp find_matched_id(mask, blocklist_ids) do
     Enum.find(blocklist_ids, fn id ->
-      (mask &&& (1 <<< (id - 1))) != 0
+      (mask &&& 1 <<< (id - 1)) != 0
     end)
   end
 

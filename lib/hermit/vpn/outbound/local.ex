@@ -274,7 +274,7 @@ defmodule Hermit.Vpn.Outbound.Local do
 
       true ->
         pid =
-          ["tailscale/tailscaled.pid", "microsocks.pid", "tinyproxy.pid"]
+          ["tailscale/tailscaled.pid", "3proxy.pid", "microsocks.pid", "tinyproxy.pid"]
           |> Enum.find_value(fn rel_path ->
             path = Path.join(storage_dir, rel_path)
 

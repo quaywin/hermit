@@ -357,14 +357,14 @@ defmodule HermitWeb.SystemLive do
 
             <div class="py-4 space-y-3 text-xs text-base-content/80">
               <p>
-                Hermit will download the latest native release archive, switch
-                <span class="font-mono font-bold text-emerald-500">/opt/hermit/current</span>,
+                Hermit will download the latest native release archive, switch <span class="font-mono font-bold text-emerald-500">/opt/hermit/current</span>,
                 and restart <span class="font-mono font-bold">hermit.service</span>.
               </p>
               <ul class="list-disc list-inside space-y-1 text-base-content/70">
                 <li>
                   Database and configuration files in <span class="font-mono">/var/lib/hermit</span>
-                  and <span class="font-mono">/etc/hermit/env</span> remain preserved.
+                  and <span class="font-mono">/etc/hermit/env</span>
+                  remain preserved.
                 </li>
                 <li>Active VPN tunnels and DNS nodes will cleanly re-establish after restart.</li>
                 <li>The web interface will automatically reconnect in ~5–10 seconds.</li>

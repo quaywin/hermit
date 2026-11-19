@@ -3,25 +3,25 @@ defmodule Hermit.MixProject do
 
   default_version = "0.2.75"
 
-  @version (
-    cond do
-      (v = System.get_env("HERMIT_VERSION")) && v != "" ->
-        String.trim_leading(String.trim(v), "v")
+  @version (cond do
+              (v = System.get_env("HERMIT_VERSION")) && v != "" ->
+                String.trim_leading(String.trim(v), "v")
 
-      (v = System.get_env("GITHUB_REF_NAME")) && v != "" ->
-        String.trim_leading(String.trim(v), "v")
+              (v = System.get_env("GITHUB_REF_NAME")) && v != "" ->
+                String.trim_leading(String.trim(v), "v")
 
-      true ->
-        try do
-          case System.cmd("git", ["describe", "--tags", "--abbrev=0"], stderr_to_stdout: true) do
-            {tag, 0} -> String.trim_leading(String.trim(tag), "v")
-            _ -> default_version
-          end
-        rescue
-          _ -> default_version
-        end
-    end
-  )
+              true ->
+                try do
+                  case System.cmd("git", ["describe", "--tags", "--abbrev=0"],
+                         stderr_to_stdout: true
+                       ) do
+                    {tag, 0} -> String.trim_leading(String.trim(tag), "v")
+                    _ -> default_version
+                  end
+                rescue
+                  _ -> default_version
+                end
+            end)
 
   def project do
     [

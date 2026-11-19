@@ -45,4 +45,36 @@ defmodule Hermit.UpdaterTest do
       assert Map.has_key?(status, :is_upgrading?)
     end
   end
+
+  describe "verify_sha256_against_sums/3" do
+    test "returns :ok when file sha256 matches SHA256SUMS entry" do
+      tmp = Path.join(System.tmp_dir!(), "hermit-sum-test-#{System.unique_integer([:positive])}")
+      content = "hermit test payload"
+      File.write!(tmp, content)
+      on_exit(fn -> File.rm(tmp) end)
+
+      expected_hash = :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
+
+      sums = """
+      0000000000000000000000000000000000000000000000000000000000000000  hermit-linux-arm64.tar.gz
+      #{expected_hash}  hermit-linux-amd64.tar.gz
+      """
+
+      assert :ok == Updater.verify_sha256_against_sums(tmp, "hermit-linux-amd64.tar.gz", sums)
+    end
+
+    test "returns error on checksum mismatch or missing entry" do
+      tmp = Path.join(System.tmp_dir!(), "hermit-sum-test-#{System.unique_integer([:positive])}")
+      File.write!(tmp, "hermit test payload")
+      on_exit(fn -> File.rm(tmp) end)
+
+      sums = "deadbeef  hermit-linux-amd64.tar.gz\n"
+
+      assert {:error, "Checksum mismatch for hermit-linux-amd64.tar.gz"} ==
+               Updater.verify_sha256_against_sums(tmp, "hermit-linux-amd64.tar.gz", sums)
+
+      assert {:error, "Checksum entry not found for hermit-linux-arm64.tar.gz"} ==
+               Updater.verify_sha256_against_sums(tmp, "hermit-linux-arm64.tar.gz", sums)
+    end
+  end
 end

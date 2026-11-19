@@ -245,7 +245,13 @@ defmodule Hermit.Dns.Upstream do
           is_internal = Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip)
 
           # Serve-Stale (RFC 8767) before returning SERVFAIL
-          case Cache.lookup(state.profile_id, is_internal, original_query.domain, original_query.qtype, true) do
+          case Cache.lookup(
+                 state.profile_id,
+                 is_internal,
+                 original_query.domain,
+                 original_query.qtype,
+                 true
+               ) do
             {:stale, stale_packet, status, answer_log_info} ->
               stale_packet = Packet.patch_stale_ttl(stale_packet, 30)
               <<_::binary-size(2), rest_packet::binary>> = stale_packet

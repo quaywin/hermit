@@ -40,8 +40,8 @@ defmodule Hermit.Vpn.Inbound.Proxy do
 
       Logger.info("Performing safety cleanup for Proxy Inbound #{pair_id}")
 
-      # 1. Kill microsocks and tinyproxy daemons if pid files exist
-      Enum.each(["microsocks.pid", "tinyproxy.pid"], fn file ->
+      # 1. Kill proxy daemons if pid files exist
+      Enum.each(["3proxy.pid", "microsocks.pid", "tinyproxy.pid"], fn file ->
         path = Path.join(storage_dir, file)
 
         if File.exists?(path) do
@@ -79,6 +79,7 @@ defmodule Hermit.Vpn.Inbound.Proxy do
 
       # 3. Clean up config/info files
       File.rm(Path.join(storage_dir, "proxy_info.json"))
+      File.rm(Path.join(storage_dir, "3proxy.cfg"))
       File.rm(Path.join(storage_dir, "tinyproxy.conf"))
       File.rm(Path.join(storage_dir, "proxy.pid"))
 
@@ -104,9 +105,9 @@ defmodule Hermit.Vpn.Inbound.Proxy do
             _ -> false
           end
 
-        # Read microsocks pid to verify it is running
-        microsocks_running =
-          case File.read(Path.join(storage_dir, "microsocks.pid")) do
+        # Read 3proxy pid to verify it is running
+        proxy_running =
+          case File.read(Path.join(storage_dir, "3proxy.pid")) do
             {:ok, content} ->
               pid = String.trim(content)
               File.exists?("/proc/#{pid}")
@@ -115,7 +116,7 @@ defmodule Hermit.Vpn.Inbound.Proxy do
               false
           end
 
-        if veth_exists and microsocks_running, do: :running, else: :stopped
+        if veth_exists and proxy_running, do: :running, else: :stopped
     end
   end
 

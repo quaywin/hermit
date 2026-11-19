@@ -28,7 +28,9 @@ if config_env() in [:dev, :prod] do
   database_name = if config_env() == :dev, do: "hermit_dev.db", else: "hermit_prod.db"
 
   default_prod_storage =
-    if match?({:unix, :linux}, :os.type()), do: "/var/lib/hermit", else: Path.expand("storage", File.cwd!())
+    if match?({:unix, :linux}, :os.type()),
+      do: "/var/lib/hermit",
+      else: Path.expand("storage", File.cwd!())
 
   storage_default =
     if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: default_prod_storage
@@ -84,33 +86,9 @@ if config_env() in [:dev, :prod] do
   if config_env() == :prod do
     host = System.get_env("PHX_HOST") || "localhost"
 
-    check_origin =
-      case System.get_env("CHECK_ORIGIN") do
-        "false" ->
-          false
-
-        origins when is_binary(origins) and origins != "" ->
-          origins
-          |> String.split(",", trim: true)
-          |> Enum.map(&String.trim/1)
-
-        _ ->
-          if host in ["localhost", "127.0.0.1", "example.com"] do
-            false
-          else
-            [
-              "https://#{host}",
-              "http://#{host}",
-              "//#{host}",
-              "//localhost",
-              "//127.0.0.1"
-            ]
-          end
-      end
-
     config :hermit, HermitWeb.Endpoint,
       url: [host: host, port: 443, scheme: "https"],
-      check_origin: check_origin
+      check_origin: {HermitWeb.Endpoint, :check_origin?, []}
   end
 
   config :hermit, HermitWeb.Endpoint,
@@ -176,7 +154,9 @@ end
 
 if config_env() != :test do
   default_prod_storage =
-    if match?({:unix, :linux}, :os.type()), do: "/var/lib/hermit", else: Path.expand("storage", File.cwd!())
+    if match?({:unix, :linux}, :os.type()),
+      do: "/var/lib/hermit",
+      else: Path.expand("storage", File.cwd!())
 
   storage_default =
     if config_env() == :dev, do: Path.expand("storage", File.cwd!()), else: default_prod_storage

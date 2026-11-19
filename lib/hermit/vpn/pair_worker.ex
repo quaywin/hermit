@@ -147,7 +147,8 @@ defmodule Hermit.Vpn.PairWorker do
     wg_config_path = Path.join(storage_dir, "wg0.conf")
 
     {wg_status, ts_status, overall_status, started_at, inbound_type, inbound_config,
-     outbound_type, outbound_config, inbound_profile_id, outbound_profile_id} =
+     outbound_type, outbound_config, inbound_profile_id,
+     outbound_profile_id} =
       Pairs.load_initial_state(id, args)
 
     wg_config_content =

@@ -64,4 +64,55 @@ defmodule HermitWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug HermitWeb.Router
+
+  @doc """
+  Custom `check_origin` callback for Phoenix LiveView/WebSockets.
+  Allows the configured `PHX_HOST`, localhost, and private LAN / Tailscale CGNAT IPs
+  unless overridden by `CHECK_ORIGIN`.
+  """
+  def check_origin?(%URI{host: host}) when is_binary(host) do
+    case System.get_env("CHECK_ORIGIN") do
+      "false" ->
+        true
+
+      origins when is_binary(origins) and origins != "" ->
+        allowed =
+          origins
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+
+        Enum.any?(allowed, fn origin ->
+          clean =
+            origin
+            |> String.replace(~r{^https?://}, "")
+            |> String.replace(~r{^//}, "")
+            |> String.split(":")
+            |> List.first()
+
+          clean == host
+        end)
+
+      _ ->
+        phx_host = System.get_env("PHX_HOST") || "localhost"
+
+        phx_host in ["localhost", "127.0.0.1", "example.com"] or
+          host in [phx_host, "localhost", "127.0.0.1"] or
+          internal_ip_host?(host)
+    end
+  end
+
+  def check_origin?(_), do: false
+
+  defp internal_ip_host?(host) do
+    case :inet.parse_address(String.to_charlist(host)) do
+      {:ok, {127, _, _, _}} -> true
+      {:ok, {10, _, _, _}} -> true
+      {:ok, {172, b, _, _}} when b >= 16 and b <= 31 -> true
+      {:ok, {192, 168, _, _}} -> true
+      {:ok, {100, b, _, _}} when b >= 64 and b <= 127 -> true
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+      {:ok, {a, _, _, _, _, _, _, _}} when a >= 0xFC00 and a <= 0xFDFF -> true
+      _ -> false
+    end
+  end
 end

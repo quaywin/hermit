@@ -5,26 +5,8 @@ defmodule HermitWeb.Layouts do
   """
   use HermitWeb, :html
 
-  # Embed all files in layouts/* within this module.
-  # The default root.html.heex file contains the HTML
-  # skeleton of your application, namely HTML headers
-  # and other static content.
   embed_templates "layouts/*"
 
-  @doc """
-  Renders your app layout.
-
-  This function is typically invoked from every template,
-  and it often contains your application menu, sidebar,
-  or similar.
-
-  ## Examples
-
-      <Layouts.app flash={@flash}>
-        <h1>Content</h1>
-      </Layouts.app>
-
-  """
   attr :flash, :map, required: true, doc: "the map of flash messages"
 
   attr :current_scope, :map,
@@ -32,119 +14,40 @@ defmodule HermitWeb.Layouts do
     doc: "the current scope"
 
   def app(assigns) do
-    assigns = assign(assigns, :active, active_route(assigns))
+    assigns =
+      assigns
+      |> assign(:active, active_route(assigns))
+      |> assign(:updater_info, Hermit.Updater.status())
 
     ~H"""
     <div class="flex h-screen w-screen overflow-hidden bg-base-100 text-base-content font-sans antialiased">
-      <!-- Sidebar cho Desktop (luôn hiển thị trên màn hình lớn lg) -->
+      <!-- Desktop Sidebar -->
       <aside class="hidden lg:flex w-64 bg-base-100 border-r border-base-300 flex-col justify-between shrink-0 h-full">
-        <div class="flex flex-col">
+        <div class="flex flex-col overflow-y-auto">
           <!-- Logo / Header -->
-          <div class="h-16 flex items-center px-6 border-b border-base-300">
+          <div class="h-16 flex items-center px-6 border-b border-base-300 shrink-0">
             <.link navigate={~p"/"} class="flex items-center gap-2">
               <img src={~p"/images/logo.png"} width="30" />
               <span class="font-bold text-lg tracking-wider uppercase text-base-content">Hermit</span>
             </.link>
           </div>
 
-          <!-- Navigation Links -->
-          <nav class="p-4 space-y-4">
-            <!-- Group 1: Routing & VPN -->
-            <div class="space-y-1">
-              <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
-                Routing & VPN
-              </div>
-              <.sidebar_link navigate={~p"/"} active={@active == :dashboard} icon="hero-squares-2x2">
-                Dashboard
-              </.sidebar_link>
-              <.sidebar_link
-                navigate={~p"/inbounds"}
-                active={@active == :inbounds}
-                icon="hero-arrow-down-left"
-              >
-                Inbound Profiles
-              </.sidebar_link>
-              <.sidebar_link
-                navigate={~p"/outbounds"}
-                active={@active == :outbounds}
-                icon="hero-arrow-up-right"
-              >
-                Outbound Profiles
-              </.sidebar_link>
-            </div>
-
-            <!-- Group 2: DNS & Smart Routing -->
-            <div class="space-y-1">
-              <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
-                DNS & Smart Routing
-              </div>
-              <.sidebar_link
-                navigate={~p"/dns/endpoints"}
-                active={@active == :dns_endpoints}
-                icon="hero-adjustments-horizontal"
-              >
-                Endpoints
-              </.sidebar_link>
-              <.sidebar_link
-                navigate={~p"/dns/services"}
-                active={@active == :dns_services}
-                icon="hero-sparkles"
-              >
-                Services
-              </.sidebar_link>
-              <.sidebar_link
-                navigate={~p"/dns/rules"}
-                active={@active == :dns_rules}
-                icon="hero-list-bullet"
-              >
-                Custom Rules
-              </.sidebar_link>
-              <.sidebar_link
-                navigate={~p"/dns"}
-                active={@active == :dns_profiles}
-                icon="hero-globe-alt"
-              >
-                Profiles
-              </.sidebar_link>
-              <.sidebar_link
-                navigate={~p"/dns/blocklists"}
-                active={@active == :dns_blocklists}
-                icon="hero-shield-check"
-              >
-                Filters
-              </.sidebar_link>
-            </div>
-
-            <!-- Group 3: System -->
-            <div class="space-y-1">
-              <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
-                Configuration
-              </div>
-              <.sidebar_link
-                navigate={~p"/settings"}
-                active={@active == :settings}
-                icon="hero-cog-6-tooth"
-              >
-                Settings
-              </.sidebar_link>
-            </div>
-          </nav>
+          <.nav_menu active={@active} />
         </div>
 
-        <!-- Sidebar Bottom (Info & Update Badge + Theme Toggle) -->
-        <div class="p-4 border-t border-base-300 space-y-2 bg-base-100">
-          <% updater_info = Hermit.Updater.status() %>
+        <!-- Sidebar Footer -->
+        <div class="p-4 border-t border-base-300 space-y-2 bg-base-100 shrink-0">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <span class="text-[10px] text-base-content/50 font-mono">
-                v{updater_info.current_version}
+                v{@updater_info.current_version}
               </span>
-              <%= if updater_info.update_available? do %>
+              <%= if @updater_info.update_available? do %>
                 <.link
                   navigate={~p"/settings"}
                   class="badge badge-warning badge-xs font-mono text-[9px] gap-1 animate-pulse hover:opacity-80"
                 >
-                  <.icon name="hero-sparkles" class="size-2.5" /> v{updater_info.latest_version}
+                  <.icon name="hero-sparkles" class="size-2.5" /> v{@updater_info.latest_version}
                 </.link>
               <% end %>
             </div>
@@ -166,103 +69,108 @@ defmodule HermitWeb.Layouts do
 
       <!-- Main Content Area -->
       <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-        <!-- Top Nav cho Mobile / Tablet (Ẩn trên màn hình lớn lg) -->
+        <!-- Mobile Top Bar with Slide-out Drawer Menu -->
         <header class="h-16 flex items-center justify-between px-4 sm:px-6 border-b border-base-300 lg:hidden bg-base-100 shrink-0">
-          <div class="flex items-center gap-4 w-full overflow-hidden">
-            <.link navigate={~p"/"} class="flex items-center gap-2 shrink-0">
-              <img src={~p"/images/logo.png"} width="28" />
-              <span class="font-bold text-sm uppercase tracking-wider text-base-content">Hermit</span>
-            </.link>
-            <!-- Mobile Menu Links (Icons only for maximum space efficiency) -->
-            <nav class="flex items-center gap-4 flex-1 justify-end py-1">
-              <.link
-                navigate={~p"/"}
-                class={if @active == :dashboard, do: "text-emerald-500", else: "text-base-content/60"}
-                title="Dashboard"
-              >
-                <.icon name="hero-squares-2x2" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/dns/endpoints"}
-                class={
-                  if @active == :dns_endpoints, do: "text-emerald-500", else: "text-base-content/60"
-                }
-                title="Endpoints"
-              >
-                <.icon name="hero-adjustments-horizontal" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/inbounds"}
-                class={if @active == :inbounds, do: "text-emerald-500", else: "text-base-content/60"}
-                title="Inbound Profiles"
-              >
-                <.icon name="hero-arrow-down-left" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/outbounds"}
-                class={if @active == :outbounds, do: "text-emerald-500", else: "text-base-content/60"}
-                title="Outbound Profiles"
-              >
-                <.icon name="hero-arrow-up-right" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/dns/services"}
-                class={
-                  if @active == :dns_services, do: "text-emerald-500", else: "text-base-content/60"
-                }
-                title="Services"
-              >
-                <.icon name="hero-sparkles" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/dns/rules"}
-                class={if @active == :dns_rules, do: "text-emerald-500", else: "text-base-content/60"}
-                title="Custom Rules"
-              >
-                <.icon name="hero-list-bullet" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/dns"}
-                class={
-                  if @active == :dns_profiles, do: "text-emerald-500", else: "text-base-content/60"
-                }
-                title="DNS Profiles"
-              >
-                <.icon name="hero-globe-alt" class="size-5 shrink-0" />
-              </.link>
-              <.link
-                navigate={~p"/dns/blocklists"}
-                class={
-                  if @active == :dns_blocklists, do: "text-emerald-500", else: "text-base-content/60"
-                }
-                title="Filters"
-              >
-                <.icon name="hero-shield-check" class="size-5 shrink-0" />
-              </.link>
+          <.link navigate={~p"/"} class="flex items-center gap-2 shrink-0">
+            <img src={~p"/images/logo.png"} width="28" />
+            <span class="font-bold text-sm uppercase tracking-wider text-base-content">Hermit</span>
+          </.link>
+
+          <div class="flex items-center gap-2">
+            <%= if @updater_info.update_available? do %>
               <.link
                 navigate={~p"/settings"}
-                class={if @active == :settings, do: "text-emerald-500", else: "text-base-content/60"}
-                title="Settings"
+                class="badge badge-warning badge-xs font-mono text-[10px] gap-1"
               >
-                <.icon name="hero-cog-6-tooth" class="size-5 shrink-0" />
+                v{@updater_info.latest_version}
               </.link>
+            <% end %>
 
-              <button
-                type="button"
-                id="theme-toggle-mobile"
-                phx-hook="ThemeToggle"
-                class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content cursor-pointer p-1 shrink-0 ml-1"
-                title="Toggle Dark/Light Mode"
-                aria-label="Toggle Theme"
-              >
-                <.icon name="hero-sun" class="size-4 hidden [[data-theme=dark]_&]:block" />
-                <.icon name="hero-moon" class="size-4 block [[data-theme=dark]_&]:hidden" />
-              </button>
-            </nav>
+            <button
+              type="button"
+              id="theme-toggle-mobile"
+              phx-hook="ThemeToggle"
+              class="btn btn-ghost btn-sm text-base-content/70 hover:text-base-content cursor-pointer px-2"
+              title="Toggle Dark/Light Mode"
+              aria-label="Toggle Theme"
+            >
+              <.icon name="hero-sun" class="size-4 hidden [[data-theme=dark]_&]:block" />
+              <.icon name="hero-moon" class="size-4 block [[data-theme=dark]_&]:hidden" />
+            </button>
+
+            <button
+              type="button"
+              phx-click={
+                JS.remove_class("hidden", to: "#mobile-nav-drawer")
+                |> JS.add_class("flex", to: "#mobile-nav-drawer")
+              }
+              class="btn btn-ghost btn-sm text-base-content/80 hover:text-base-content cursor-pointer px-2"
+              aria-label="Open Navigation Menu"
+            >
+              <.icon name="hero-bars-3" class="size-5" />
+            </button>
           </div>
         </header>
 
-        <!-- Container cuộn chứa nội dung chính -->
+        <!-- Mobile Slide-over Navigation Drawer -->
+        <div
+          id="mobile-nav-drawer"
+          class="hidden fixed inset-0 z-50 lg:hidden"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            class="fixed inset-0 bg-black/50 backdrop-blur-xs"
+            phx-click={
+              JS.add_class("hidden", to: "#mobile-nav-drawer")
+              |> JS.remove_class("flex", to: "#mobile-nav-drawer")
+            }
+          />
+          <div class="relative z-10 w-72 max-w-[85vw] bg-base-100 border-r border-base-300 h-full flex flex-col justify-between shadow-2xl">
+            <div class="overflow-y-auto">
+              <div class="h-16 flex items-center justify-between px-5 border-b border-base-300">
+                <.link
+                  navigate={~p"/"}
+                  phx-click={
+                    JS.add_class("hidden", to: "#mobile-nav-drawer")
+                    |> JS.remove_class("flex", to: "#mobile-nav-drawer")
+                  }
+                  class="flex items-center gap-2"
+                >
+                  <img src={~p"/images/logo.png"} width="26" />
+                  <span class="font-bold text-base tracking-wider uppercase text-base-content">
+                    Hermit
+                  </span>
+                </.link>
+                <button
+                  type="button"
+                  phx-click={
+                    JS.add_class("hidden", to: "#mobile-nav-drawer")
+                    |> JS.remove_class("flex", to: "#mobile-nav-drawer")
+                  }
+                  class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content p-1"
+                  aria-label="Close Navigation Menu"
+                >
+                  <.icon name="hero-x-mark" class="size-5" />
+                </button>
+              </div>
+
+              <div phx-click={
+                JS.add_class("hidden", to: "#mobile-nav-drawer")
+                |> JS.remove_class("flex", to: "#mobile-nav-drawer")
+              }>
+                <.nav_menu active={@active} />
+              </div>
+            </div>
+
+            <div class="p-4 border-t border-base-300 flex items-center justify-between text-[11px] font-mono text-base-content/50">
+              <span>Hermit v{@updater_info.current_version}</span>
+              <span class="text-emerald-500">Native</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main Scrollable Content -->
         <main class="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 lg:px-8 bg-base-200/10">
           <div class="mx-auto max-w-7xl">
             {@inner_content}
@@ -272,6 +180,101 @@ defmodule HermitWeb.Layouts do
     </div>
 
     <.flash_group flash={@flash} />
+    """
+  end
+
+  attr :active, :atom, required: true
+
+  defp nav_menu(assigns) do
+    ~H"""
+    <nav class="p-4 space-y-5">
+      <!-- Group 1: VPN & Tunnels -->
+      <div class="space-y-1">
+        <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+          VPN & Tunnels
+        </div>
+        <.sidebar_link navigate={~p"/"} active={@active == :dashboard} icon="hero-squares-2x2">
+          Dashboard
+        </.sidebar_link>
+        <.sidebar_link
+          navigate={~p"/inbounds"}
+          active={@active == :inbounds}
+          icon="hero-arrow-down-left"
+        >
+          Inbounds
+        </.sidebar_link>
+        <.sidebar_link
+          navigate={~p"/outbounds"}
+          active={@active == :outbounds}
+          icon="hero-arrow-up-right"
+        >
+          Outbounds
+        </.sidebar_link>
+      </div>
+
+      <!-- Group 2: Smart Routing -->
+      <div class="space-y-1">
+        <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+          Smart Routing
+        </div>
+        <.sidebar_link
+          navigate={~p"/dns/services"}
+          active={@active == :dns_services}
+          icon="hero-sparkles"
+        >
+          Services
+        </.sidebar_link>
+        <.sidebar_link
+          navigate={~p"/dns/rules"}
+          active={@active == :dns_rules}
+          icon="hero-list-bullet"
+        >
+          Custom Rules
+        </.sidebar_link>
+      </div>
+
+      <!-- Group 3: DNS & Filtering -->
+      <div class="space-y-1">
+        <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+          DNS & Filtering
+        </div>
+        <.sidebar_link
+          navigate={~p"/dns/endpoints"}
+          active={@active == :dns_endpoints}
+          icon="hero-adjustments-horizontal"
+        >
+          Endpoints
+        </.sidebar_link>
+        <.sidebar_link
+          navigate={~p"/dns"}
+          active={@active == :dns_profiles}
+          icon="hero-globe-alt"
+        >
+          Profiles & Logs
+        </.sidebar_link>
+        <.sidebar_link
+          navigate={~p"/dns/blocklists"}
+          active={@active == :dns_blocklists}
+          icon="hero-shield-check"
+        >
+          Blocklists
+        </.sidebar_link>
+      </div>
+
+      <!-- Group 4: System -->
+      <div class="space-y-1">
+        <div class="text-[10px] font-bold text-base-content/40 tracking-wider px-3 pb-1 uppercase">
+          System
+        </div>
+        <.sidebar_link
+          navigate={~p"/settings"}
+          active={@active == :settings}
+          icon="hero-cog-6-tooth"
+        >
+          Settings
+        </.sidebar_link>
+      </div>
+    </nav>
     """
   end
 
@@ -319,13 +322,6 @@ defmodule HermitWeb.Layouts do
     end
   end
 
-  @doc """
-  Shows the flash group with standard titles and content.
-
-  ## Examples
-
-      <.flash_group flash={@flash} />
-  """
   attr :flash, :map, required: true, doc: "the map of flash messages"
   attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
 

@@ -7,6 +7,7 @@ echo "========================================="
 
 REPO="quaywin/hermit"
 TAILSCALE_VERSION="1.98.4"
+THREEPROXY_VERSION="1.0.3"
 INSTALL_ROOT="/opt/hermit"
 CONFIG_DIR="/etc/hermit"
 ENV_FILE="$CONFIG_DIR/env"
@@ -75,12 +76,7 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
   libstdc++6 openssl libncurses6 ca-certificates \
   iproute2 iptables nftables wireguard-tools curl tar procps \
-  openresolv ethtool microsocks tinyproxy iputils-ping >/dev/null
-
-# Stop default host tinyproxy service so it does not occupy port 8888 on host
-if systemctl list-unit-files tinyproxy.service >/dev/null 2>&1; then
-  systemctl disable --now tinyproxy.service >/dev/null 2>&1 || true
-fi
+  ethtool iputils-ping >/dev/null
 
 # Stop legacy Docker container if running to prevent port conflicts (3000, 8080, 8443)
 if command -v docker >/dev/null 2>&1; then
@@ -92,16 +88,63 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
-# Ensure tailscale & tailscaled binaries exist (without disturbing existing host tailscaled)
-if ! command -v tailscaled >/dev/null 2>&1 || ! command -v tailscale >/dev/null 2>&1; then
-  echo "ℹ Installing Tailscale ${TAILSCALE_VERSION} binaries..."
+# Ensure isolated Tailscale binaries exist under /opt/hermit/bin (without touching host /usr/local/bin)
+HERMIT_BIN_DIR="$INSTALL_ROOT/bin"
+mkdir -p "$HERMIT_BIN_DIR"
+NEED_TAILSCALE_INSTALL=false
+if [ ! -x "$HERMIT_BIN_DIR/tailscaled" ] || [ ! -x "$HERMIT_BIN_DIR/tailscale" ]; then
+  if ! command -v tailscaled >/dev/null 2>&1 || ! command -v tailscale >/dev/null 2>&1; then
+    NEED_TAILSCALE_INSTALL=true
+  fi
+else
+  INSTALLED_TS_VER=$("$HERMIT_BIN_DIR/tailscale" version 2>/dev/null | head -n1 | tr -d '[:space:]' || echo "")
+  if [ "$INSTALLED_TS_VER" != "$TAILSCALE_VERSION" ]; then
+    echo "ℹ Upgrading Hermit Tailscale (${INSTALLED_TS_VER:-unknown} -> ${TAILSCALE_VERSION})..."
+    NEED_TAILSCALE_INSTALL=true
+  fi
+fi
+
+if [ "$NEED_TAILSCALE_INSTALL" = true ]; then
+  echo "ℹ Installing Tailscale ${TAILSCALE_VERSION} binaries into ${HERMIT_BIN_DIR}..."
   TMP_TS=$(mktemp -d)
   TS_ARCHIVE="$TMP_TS/tailscale.tgz"
   curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz" -o "$TS_ARCHIVE"
   tar -xzf "$TS_ARCHIVE" -C "$TMP_TS"
-  install -m 0755 "$TMP_TS/tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscale" /usr/local/bin/tailscale
-  install -m 0755 "$TMP_TS/tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscaled" /usr/local/bin/tailscaled
+  install -m 0755 "$TMP_TS/tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscale" "$HERMIT_BIN_DIR/tailscale"
+  install -m 0755 "$TMP_TS/tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscaled" "$HERMIT_BIN_DIR/tailscaled"
   rm -rf "$TMP_TS"
+fi
+
+# Ensure isolated 3proxy binary exists under /opt/hermit/bin (replaces microsocks + tinyproxy)
+NEED_3PROXY_INSTALL=false
+if [ ! -x "$HERMIT_BIN_DIR/3proxy" ]; then
+  NEED_3PROXY_INSTALL=true
+else
+  INSTALLED_3P_VER=$("$HERMIT_BIN_DIR/3proxy" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "")
+  if [ -n "$INSTALLED_3P_VER" ] && [ "$INSTALLED_3P_VER" != "$THREEPROXY_VERSION" ]; then
+    echo "ℹ Upgrading 3proxy (${INSTALLED_3P_VER} -> ${THREEPROXY_VERSION})..."
+    NEED_3PROXY_INSTALL=true
+  fi
+fi
+
+if [ "$NEED_3PROXY_INSTALL" = true ]; then
+  case "$ARCH" in
+    amd64) THREEPROXY_ARCH="x86_64" ;;
+    arm64) THREEPROXY_ARCH="arm64" ;;
+  esac
+  echo "ℹ Installing 3proxy ${THREEPROXY_VERSION} binary into ${HERMIT_BIN_DIR}..."
+  TMP_3P=$(mktemp -d)
+  DEB_3P="$TMP_3P/3proxy.deb"
+  curl -fsSL "https://github.com/3proxy/3proxy/releases/download/${THREEPROXY_VERSION}/3proxy-${THREEPROXY_VERSION}.${THREEPROXY_ARCH}.deb" -o "$DEB_3P"
+  dpkg-deb -x "$DEB_3P" "$TMP_3P/extracted"
+  THREEPROXY_BIN=$(find "$TMP_3P/extracted" -type f -name 3proxy | head -n1 || true)
+  if [ -z "$THREEPROXY_BIN" ]; then
+    rm -rf "$TMP_3P"
+    echo "❌ Failed to extract 3proxy binary from package."
+    exit 1
+  fi
+  install -m 0755 "$THREEPROXY_BIN" "$HERMIT_BIN_DIR/3proxy"
+  rm -rf "$TMP_3P"
 fi
 echo "✓ Runtime dependencies ready"
 
@@ -262,19 +305,36 @@ if [ -n "$LOCAL_TARBALL" ]; then
   echo "ℹ Extracting local release archive: $LOCAL_TARBALL"
   tar -xzf "$LOCAL_TARBALL" -C "$RELEASE_DIR"
 else
-  TARBALL_URL="https://github.com/${REPO}/releases/latest/download/hermit-linux-${ARCH}.tar.gz"
+  TARBALL_NAME="hermit-linux-${ARCH}.tar.gz"
+  TARBALL_URL="https://github.com/${REPO}/releases/latest/download/${TARBALL_NAME}"
+  CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/SHA256SUMS"
   echo "ℹ Downloading Hermit release ($ARCH) from $TARBALL_URL..."
   TMP_TAR=$(mktemp)
+  TMP_SUMS=$(mktemp)
   if ! curl -fsSL "$TARBALL_URL" -o "$TMP_TAR"; then
-    rm -f "$TMP_TAR"
+    rm -f "$TMP_TAR" "$TMP_SUMS"
     rm -rf "$RELEASE_DIR"
     echo "❌ Failed to download $TARBALL_URL."
-    echo "   Tip: Build a release tarball with ./scripts/build-native-release.sh and install using:"
-    echo "   sudo bash install.sh --tarball /path/to/hermit-linux-${ARCH}.tar.gz"
+    echo "   Tip: Build a release tarball with:"
+    echo "   MIX_ENV=prod mix release --overwrite && tar -czf ${TARBALL_NAME} -C _build/prod/rel/hermit ."
+    echo "   Then install using: sudo bash install.sh --tarball /path/to/${TARBALL_NAME}"
     exit 1
   fi
+  if curl -fsSL "$CHECKSUMS_URL" -o "$TMP_SUMS"; then
+    EXPECTED_SHA=$(grep -E "[[:space:]]${TARBALL_NAME}$" "$TMP_SUMS" | awk '{print $1}' | head -n1 || echo "")
+    ACTUAL_SHA=$(sha256sum "$TMP_TAR" | awk '{print $1}')
+    if [ -z "$EXPECTED_SHA" ] || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+      rm -f "$TMP_TAR" "$TMP_SUMS"
+      rm -rf "$RELEASE_DIR"
+      echo "❌ Checksum verification failed for ${TARBALL_NAME}!"
+      exit 1
+    fi
+    echo "✓ Verified SHA256 checksum"
+  else
+    echo "⚠ Warning: Could not download SHA256SUMS; skipping checksum verification."
+  fi
   tar -xzf "$TMP_TAR" -C "$RELEASE_DIR"
-  rm -f "$TMP_TAR"
+  rm -f "$TMP_TAR" "$TMP_SUMS"
 fi
 
 chmod +x "$RELEASE_DIR/bin/server" "$RELEASE_DIR/bin/hermit" 2>/dev/null || true
@@ -295,13 +355,16 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/hermit/current
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/opt/hermit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=/etc/hermit/env
 ExecStart=/opt/hermit/current/bin/server
 Restart=always
 RestartSec=3
 TimeoutStopSec=15
 LimitNOFILE=65536
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hermit
@@ -348,15 +411,56 @@ case "${1:-}" in
     echo "✓ Hermit stopped."
     ;;
   update|upgrade)
-    if [ -x /opt/hermit/install.sh ]; then
+    shift
+    if [[ " $* " == *" --tarball "* ]] && [ -x /opt/hermit/install.sh ]; then
       sudo /opt/hermit/install.sh --yes "$@"
     else
-      echo "Installer not found at /opt/hermit/install.sh. Running latest installer from GitHub..."
-      curl -fsSL "https://raw.githubusercontent.com/quaywin/hermit/main/install.sh" | sudo bash -s -- --yes "$@"
+      TMP_INSTALL=$(mktemp)
+      if curl -fsSL "https://raw.githubusercontent.com/quaywin/hermit/main/install.sh" -o "$TMP_INSTALL"; then
+        sudo bash "$TMP_INSTALL" --yes "$@"
+        rm -f "$TMP_INSTALL"
+      elif [ -x /opt/hermit/install.sh ]; then
+        rm -f "$TMP_INSTALL"
+        echo "⚠ Could not fetch latest installer from GitHub; falling back to /opt/hermit/install.sh."
+        sudo /opt/hermit/install.sh --yes "$@"
+      else
+        rm -f "$TMP_INSTALL"
+        echo "❌ Failed to download installer and /opt/hermit/install.sh not found."
+        exit 1
+      fi
     fi
     ;;
   env|info)
     sudo cat /etc/hermit/env
+    ;;
+  passwd|password)
+    NEW_PASS="${2:-}"
+    if [ -z "$NEW_PASS" ]; then
+      read -r -s -p "New admin password: " NEW_PASS
+      echo ""
+      read -r -s -p "Confirm new password: " CONFIRM_PASS
+      echo ""
+      if [ "$NEW_PASS" != "$CONFIRM_PASS" ]; then
+        echo "❌ Passwords do not match."
+        exit 1
+      fi
+    fi
+    NEW_PASS=$(echo "$NEW_PASS" | tr -d '[:space:]')
+    if [ -z "$NEW_PASS" ]; then
+      echo "❌ Password cannot be empty."
+      exit 1
+    fi
+    sudo bash -c "
+      set -euo pipefail
+      ENV_FILE='/etc/hermit/env'
+      TMP_ENV=\$(mktemp)
+      grep -v '^HERMIT_BASIC_AUTH_PASS=' \"\$ENV_FILE\" > \"\$TMP_ENV\" || true
+      printf 'HERMIT_BASIC_AUTH_PASS=%s\n' \"\$1\" >> \"\$TMP_ENV\"
+      chmod 0600 \"\$TMP_ENV\"
+      mv \"\$TMP_ENV\" \"\$ENV_FILE\"
+    " -- "$NEW_PASS"
+    sudo systemctl restart hermit.service
+    echo "✓ Admin password updated and Hermit restarted."
     ;;
   uninstall)
     echo "Stopping Hermit and cleaning up network resources..."
@@ -364,6 +468,14 @@ case "${1:-}" in
     sudo rm -f /etc/systemd/system/hermit.service
     sudo systemctl daemon-reload
     sudo nft delete table inet hermit_host 2>/dev/null || true
+    for iface in dns_h+ loc+ vh+ wg+; do
+      sudo iptables -D INPUT -i "$iface" -j ACCEPT 2>/dev/null || true
+      sudo iptables -D FORWARD -i "$iface" -j ACCEPT 2>/dev/null || true
+      sudo iptables -D FORWARD -o "$iface" -j ACCEPT 2>/dev/null || true
+      sudo ip6tables -D INPUT -i "$iface" -j ACCEPT 2>/dev/null || true
+      sudo ip6tables -D FORWARD -i "$iface" -j ACCEPT 2>/dev/null || true
+      sudo ip6tables -D FORWARD -o "$iface" -j ACCEPT 2>/dev/null || true
+    done
     for ns in /var/run/netns/hermit_*; do
       [ -e "$ns" ] && sudo ip netns del "$(basename "$ns")" 2>/dev/null || true
     done
@@ -372,7 +484,7 @@ case "${1:-}" in
     ;;
   *)
     echo "Hermit Native CLI"
-    echo "Usage: hermit <status|logs|start|stop|restart|update|env|uninstall>"
+    echo "Usage: hermit <status|logs|start|stop|restart|update|passwd|env|uninstall>"
     ;;
 esac
 EOF
@@ -382,7 +494,7 @@ echo "✓ Installed CLI helper at $CLI_SCRIPT"
 PORT=$(grep -E "^PORT=" "$ENV_FILE" | cut -d'=' -f2 || echo "3000")
 USER=$(grep -E "^HERMIT_BASIC_AUTH_USER=" "$ENV_FILE" | cut -d'=' -f2 || echo "admin")
 PASS=$(grep -E "^HERMIT_BASIC_AUTH_PASS=" "$ENV_FILE" | cut -d'=' -f2 || echo "")
-TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+TAILSCALE_IP=$(PATH="$INSTALL_ROOT/bin:$PATH" tailscale ip -4 2>/dev/null || echo "")
 
 echo ""
 echo "========================================="

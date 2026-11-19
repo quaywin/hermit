@@ -561,8 +561,28 @@ defmodule Hermit.Dns.ServerCacheTest do
 
   test "DNS cache delete_domain invalidates scoped entries" do
     profile_id = 9998
-    Hermit.Dns.Cache.store(profile_id, true, "sub.smart.com", :A, <<1, 1>>, "resolved", "1.1.1.1", 60)
-    Hermit.Dns.Cache.store(profile_id, false, "sub.smart.com", :A, <<2, 2>>, "smart_routed", "2.2.2.2", 60)
+
+    Hermit.Dns.Cache.store(
+      profile_id,
+      true,
+      "sub.smart.com",
+      :A,
+      <<1, 1>>,
+      "resolved",
+      "1.1.1.1",
+      60
+    )
+
+    Hermit.Dns.Cache.store(
+      profile_id,
+      false,
+      "sub.smart.com",
+      :A,
+      <<2, 2>>,
+      "smart_routed",
+      "2.2.2.2",
+      60
+    )
 
     Hermit.Dns.Cache.delete_domain("*.smart.com")
     assert Hermit.Dns.Cache.lookup(profile_id, true, "sub.smart.com", :A) == :error

@@ -74,20 +74,8 @@
       </div>
     </header>
 
-    <!-- Navigation Tabs -->
-    <div class="flex border-b border-base-300 space-x-8 mb-6">
-      <button
-        phx-click="set_tab"
-        phx-value-tab="overview"
-        class={"pb-4 text-xs font-medium uppercase tracking-wider border-b-2 transition-colors cursor-pointer " <> if(@active_tab == :overview, do: "border-[#3ecf8e] text-base-content", else: "border-transparent text-base-content/60 hover:text-base-content")}
-      >
-        Overview
-      </button>
-    </div>
-
-    <!-- Active Tab: Overview -->
-    <div class={if @active_tab != :overview, do: "hidden"}>
-      <!-- Connection Details Status Section -->
+    <!-- Connection Details Status Section -->
+    <div class="space-y-8">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <!-- Inbound Connection Status Card -->
         <%= if @pair.inbound_module == Hermit.Vpn.Inbound.Proxy do %>

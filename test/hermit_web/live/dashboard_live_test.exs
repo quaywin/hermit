@@ -52,7 +52,7 @@ defmodule HermitWeb.DashboardLiveTest do
     assert html =~ "Active VPN Tunnels"
 
     # Open Modal
-    view |> element("button[phx-click=open_create_modal]") |> render_click()
+    view |> element("#deploy-tunnel-btn") |> render_click()
 
     # 1. Test validation error
     invalid_form = %{
@@ -195,7 +195,7 @@ defmodule HermitWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, ~p"/")
 
     # Open Modal
-    view |> element("button[phx-click=open_create_modal]") |> render_click()
+    view |> element("#deploy-tunnel-btn") |> render_click()
 
     # Try to deploy a new pair (pair_id: new_t) using the same outbound_profile
     form_data = %{

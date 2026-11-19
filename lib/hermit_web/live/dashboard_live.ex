@@ -45,6 +45,8 @@ defmodule HermitWeb.DashboardLive do
      |> assign(outbound_profiles: outbound_profiles)
      |> assign(total_endpoints: total_endpoints)
      |> assign(active_endpoints: active_endpoints)
+     |> assign(has_pairs: pairs != [])
+     |> assign(pair_ids: MapSet.new(pairs, & &1.id))
      |> assign(active_pair_ids: active_pair_ids)
      |> assign(active_tunnels: active_tunnels)
      |> assign(dns_summary: dns_summary)
@@ -234,8 +236,12 @@ defmodule HermitWeb.DashboardLive do
         MapSet.delete(current_active_ids, state.id)
       end
 
+    pair_ids = MapSet.put(socket.assigns[:pair_ids] || MapSet.new(), state.id)
+
     {:noreply,
      socket
+     |> assign(has_pairs: true)
+     |> assign(pair_ids: pair_ids)
      |> assign(error_tunnels: updated_errors)
      |> assign(active_pair_ids: active_pair_ids)
      |> assign(active_tunnels: MapSet.size(active_pair_ids))
@@ -247,11 +253,14 @@ defmodule HermitWeb.DashboardLive do
     current_errors = socket.assigns[:error_tunnels] || []
     updated_errors = Enum.reject(current_errors, &(&1.id == id))
 
+    pair_ids = MapSet.delete(socket.assigns[:pair_ids] || MapSet.new(), id)
     current_active_ids = socket.assigns[:active_pair_ids] || MapSet.new()
     active_pair_ids = MapSet.delete(current_active_ids, id)
 
     {:noreply,
      socket
+     |> assign(has_pairs: MapSet.size(pair_ids) > 0)
+     |> assign(pair_ids: pair_ids)
      |> assign(error_tunnels: updated_errors)
      |> assign(active_pair_ids: active_pair_ids)
      |> assign(active_tunnels: MapSet.size(active_pair_ids))

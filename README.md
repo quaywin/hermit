@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="priv/static/images/screenshot.png" alt="Hermit Dashboard Preview" width="100%" />
+  <img src="docs/screenshot.png" alt="Hermit Dashboard Preview" width="100%" />
 </p>
 
 ---
@@ -43,8 +43,9 @@ curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | su
 ```
 
 ### What the installer handles automatically:
-* Installs required Linux runtime networking dependencies (`nftables`, `wireguard-tools`, `tailscale`, etc.).
-* Downloads and verifies the precompiled native release tarball for your CPU architecture.
+* Installs minimal Linux networking tools (`nftables`, `wireguard-tools`, `ethtool`, etc.) without installing host proxy services.
+* Isolates `tailscale`, `tailscaled`, and `3proxy` binaries under `/opt/hermit/bin/` so your host `/usr/local/bin` and system configuration remain clean.
+* Downloads and verifies the precompiled native release tarball (`SHA256SUMS`) for your CPU architecture.
 * Automatically migrates legacy database records and settings if upgrading from Docker (`~/.hermit/storage` $\rightarrow$ `/var/lib/hermit`).
 * Sets up and starts `hermit.service` via `systemd` under `/opt/hermit`.
 * Creates the global `hermit` CLI helper.

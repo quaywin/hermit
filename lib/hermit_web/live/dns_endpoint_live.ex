@@ -11,7 +11,7 @@ defmodule HermitWeb.DnsEndpointLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      :timer.send_interval(1000, self(), :tick)
+      :timer.send_interval(3000, self(), :tick)
     end
 
     endpoints = get_endpoints()
@@ -222,43 +222,49 @@ defmodule HermitWeb.DnsEndpointLive do
        )}
     else
       case endpoint |> DnsEndpoint.changeset(%{enabled: enabled}) |> Hermit.Repo.update() do
-      {:ok, updated} ->
-        DnsEndpoint.clear_cache()
+        {:ok, updated} ->
+          DnsEndpoint.clear_cache()
 
-        if enabled do
-          Task.start(fn ->
-            case Hermit.Vpn.DnsSupervisor.start_dns(updated.id, updated.inbound_profile_id) do
-              {:ok, _} -> :ok
-              {:error, reason} -> Logger.error("Failed to start DNS Endpoint: #{inspect(reason)}")
-            end
-          end)
-        else
-          config = DnsConfig.get_for_endpoint(endpoint_id)
-          {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
-
-          if config.tailscale_override_dns do
+          if enabled do
             Task.start(fn ->
-              DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
+              case Hermit.Vpn.DnsSupervisor.start_dns(updated.id, updated.inbound_profile_id) do
+                {:ok, _} ->
+                  :ok
+
+                {:error, reason} ->
+                  Logger.error("Failed to start DNS Endpoint: #{inspect(reason)}")
+              end
+            end)
+          else
+            config = DnsConfig.get_for_endpoint(endpoint_id)
+            {_, ts_ip, _} = DnsWorker.get_status(endpoint_id)
+
+            if config.tailscale_override_dns do
+              Task.start(fn ->
+                DnsWorker.clear_tailscale_dns_config(endpoint.inbound_profile, config, ts_ip)
+              end)
+            end
+
+            DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
+
+            Task.start(fn ->
+              Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
             end)
           end
 
-          DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_override_dns: false})
+          {:noreply,
+           socket
+           |> put_flash(
+             :info,
+             "DNS Endpoint #{if enabled, do: "activated", else: "deactivated"}."
+           )
+           |> assign(endpoints: get_endpoints())
+           |> update_all_dns_statuses()}
 
-          Task.start(fn ->
-            Hermit.Vpn.DnsSupervisor.stop_dns(endpoint_id)
-          end)
-        end
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "DNS Endpoint #{if enabled, do: "activated", else: "deactivated"}.")
-         |> assign(endpoints: get_endpoints())
-         |> update_all_dns_statuses()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to toggle Endpoint status.")}
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to toggle Endpoint status.")}
+      end
     end
-  end
   end
 
   @impl true

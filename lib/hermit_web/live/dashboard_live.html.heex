@@ -10,13 +10,8 @@
       </p>
     </div>
     <div class="mt-4 md:mt-0 flex flex-wrap items-center gap-3">
-      <.link
-        navigate={~p"/dns/endpoints"}
-        class="btn btn-ghost border border-base-300 rounded-[6px] text-xs font-semibold uppercase tracking-wider px-3.5 py-2 cursor-pointer flex items-center gap-1.5"
-      >
-        <.icon name="hero-adjustments-horizontal" class="size-4" /> Endpoints
-      </.link>
       <button
+        id="deploy-tunnel-btn"
         phx-click="open_create_modal"
         class="btn btn-primary rounded-[6px] text-xs font-semibold uppercase tracking-wider px-4 py-2 cursor-pointer flex items-center gap-2 w-full sm:w-auto justify-center"
       >
@@ -380,7 +375,7 @@
                 <button
                   phx-click="delete"
                   phx-value-id={pair.id}
-                  data-confirm="Are you sure you want to permanently delete this VPN Pair and remove all associated containers?"
+                  data-confirm="Are you sure you want to permanently delete this tunnel and its network namespace & config files?"
                   class="btn btn-xs btn-error btn-outline rounded-[4px] cursor-pointer font-medium text-xs px-2.5"
                 >
                   Delete
@@ -389,6 +384,38 @@
             </td>
           </tr>
         </tbody>
+        <tfoot :if={not @has_pairs} id="empty-tunnels-tfoot">
+          <tr>
+            <td colspan="6" class="py-12 text-center">
+              <p class="text-sm font-semibold text-base-content">No VPN Tunnels deployed yet</p>
+              <p class="text-xs text-base-content/60 mt-1 max-w-md mx-auto">
+                Quick start: 1) Add a Tailscale Inbound → 2) Add a WireGuard Outbound → 3) Deploy your first Tunnel.
+              </p>
+              <div class="flex flex-wrap items-center justify-center gap-2 mt-4">
+                <.link
+                  navigate={~p"/inbounds"}
+                  class="btn btn-ghost btn-sm border border-base-300 rounded-[6px] text-xs"
+                >
+                  1. Inbounds
+                </.link>
+                <.link
+                  navigate={~p"/outbounds"}
+                  class="btn btn-ghost btn-sm border border-base-300 rounded-[6px] text-xs"
+                >
+                  2. Outbounds
+                </.link>
+                <button
+                  type="button"
+                  id="empty-state-deploy-tunnel-btn"
+                  phx-click="open_create_modal"
+                  class="btn btn-primary btn-sm rounded-[6px] text-xs font-semibold text-white"
+                >
+                  3. Deploy Tunnel
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   </div>

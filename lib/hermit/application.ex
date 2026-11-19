@@ -211,9 +211,8 @@ defmodule Hermit.Application do
 
       try do
         System.cmd("sysctl", ["-w", "net.ipv4.ip_forward=1"])
-        System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"])
-        System.cmd("sysctl", ["-w", "net.ipv4.conf.all.rp_filter=2"])
-        System.cmd("sysctl", ["-w", "net.ipv4.conf.default.rp_filter=2"])
+        preserve_ipv6_default_ra()
+        System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"], stderr_to_stdout: true)
 
         # Setup host network rules using nftables (fallback to iptables only if nftables fails)
         case setup_nftables_host() do
@@ -221,7 +220,7 @@ defmodule Hermit.Application do
             :ok
 
           _ ->
-            setup_iptables_host()
+            setup_iptables_host(true)
         end
       rescue
         e ->
@@ -262,10 +261,10 @@ defmodule Hermit.Application do
       add rule inet hermit_host input iifname "dns_h*" accept
       add rule inet hermit_host input iifname "loc*" accept
       add rule inet hermit_host input iifname "vh*" accept
-      add rule inet hermit_host forward ip saddr 100.64.0.0/10 accept
-      add rule inet hermit_host forward ip daddr 100.64.0.0/10 accept
+      add rule inet hermit_host forward iifname { "dns_h*", "loc*", "vh*" } ip saddr 100.64.0.0/10 accept
+      add rule inet hermit_host forward oifname { "dns_h*", "loc*", "vh*" } ip daddr 100.64.0.0/10 accept
       add rule inet hermit_host forward tcp flags syn tcp option maxseg size set rt mtu
-      add rule inet hermit_host postrouting ip saddr 100.64.0.0/10 masquerade
+      add rule inet hermit_host postrouting iifname { "dns_h*", "loc*", "vh*" } ip saddr 100.64.0.0/10 masquerade
       """
 
       tmp_path =
@@ -455,12 +454,12 @@ defmodule Hermit.Application do
     end
   end
 
-  def setup_iptables_host do
+  def setup_iptables_host(force \\ false) do
     interfaces = ["dns_h+", "loc+", "vh+", "wg+"]
     http_port = Hermit.Vpn.SniProxy.Server.http_port()
     https_port = Hermit.Vpn.SniProxy.Server.https_port()
 
-    if System.find_executable("iptables") do
+    if System.find_executable("iptables") and (force or has_ts_input_chain?("iptables")) do
       try do
         Enum.each(interfaces, fn iface ->
           ensure_iptables_rule("iptables", ["INPUT", "-i", iface, "-j", "ACCEPT"])
@@ -503,7 +502,7 @@ defmodule Hermit.Application do
       end
     end
 
-    if System.find_executable("ip6tables") do
+    if System.find_executable("ip6tables") and (force or has_ts_input_chain?("ip6tables")) do
       try do
         Enum.each(interfaces, fn iface ->
           ensure_iptables_rule("ip6tables", ["INPUT", "-i", iface, "-j", "ACCEPT"])
@@ -516,6 +515,35 @@ defmodule Hermit.Application do
     end
 
     :ok
+  end
+
+  defp has_ts_input_chain?(binary) do
+    case System.cmd(binary, ["-L", "ts-input", "-n"], stderr_to_stdout: true) do
+      {_, 0} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp preserve_ipv6_default_ra do
+    case System.cmd("ip", ["-6", "route", "show", "default"], stderr_to_stdout: true) do
+      {out, 0} ->
+        case Regex.run(~r/\bdev\s+(\S+)/, out) do
+          [_, iface] ->
+            System.cmd("sysctl", ["-w", "net.ipv6.conf.#{iface}.accept_ra=2"],
+              stderr_to_stdout: true
+            )
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   defp ensure_iptables_nat_rule(binary, [chain | rest]) do

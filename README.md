@@ -4,15 +4,15 @@
 
 <p align="center">
   <strong>The Self-Hosted All-in-One Network & Privacy Gateway</strong><br>
-  Encrypted Ad-Blocking DNS (DoH / Tailscale) + Multi-Tunnel VPN Mesh Orchestrator.
+  Tailscale Mesh Ad-Blocking DNS + Multi-Tunnel VPN Mesh Orchestrator.
 </p>
 
 <p align="center">
   <a href="https://github.com/quaywin/hermit/releases"><img src="https://img.shields.io/github/v/release/quaywin/hermit?color=emerald" alt="Release"></a>
   <a href="https://github.com/quaywin/hermit/blob/main/LICENSE"><img src="https://img.shields.io/github/license/quaywin/hermit.svg" alt="License"></a>
-  <a href="https://elixir-lang.org"><img src="https://img.shields.io/badge/language-Elixir%201.20-purple.svg" alt="Language"></a>
+  <a href="https://elixir-lang.org"><img src="https://img.shields.io/badge/language-Elixir%201.19-purple.svg" alt="Language"></a>
   <a href="https://phoenixframework.org"><img src="https://img.shields.io/badge/framework-Phoenix%20LiveView-orange.svg" alt="Framework"></a>
-  <a href="https://github.com/quaywin/hermit/pkgs/container/hermit"><img src="https://img.shields.io/badge/docker-multi--arch%20(amd64%2Farm64)-blue.svg" alt="Docker Multi-Arch"></a>
+  <a href="https://github.com/quaywin/hermit/releases/latest"><img src="https://img.shields.io/badge/platform-Linux%20native%20(amd64%20%7C%20arm64)-blue.svg" alt="Native Linux"></a>
 </p>
 
 <p align="center">
@@ -23,82 +23,62 @@
 
 ## ⚡ What is Hermit?
 
-**Hermit** turns any Linux machine or cheap VPS into a private, high-performance security hub for all your personal devices:
+**Hermit** turns any Linux machine or cheap VPS (Debian, Ubuntu, Raspberry Pi OS 64-bit) into a private, high-performance security hub for all your personal devices:
 
-1. 🛡️ **Encrypted DNS & Ad-Blocking Control Plane**: A self-hosted alternative to NextDNS / Control D / AdGuard Home. Filter ads, malware, and trackers with built-in blocklists (AdGuard, GoodbyeAds, Adult filters) and custom routing rules. Deploy via secure **DNS-over-HTTPS (DoH)**, **Android Private DNS**, **Apple `.mobileconfig` (1-click install)**, or dedicated **Tailscale Mesh DNS Nodes**.
+1. 🛡️ **Tailscale Mesh DNS & Ad-Blocking Control Plane**: Filter ads, malware, and trackers across your private Tailnet with built-in blocklists (AdGuard, GoodbyeAds, Adult filters) and custom domain routing rules running inside isolated network namespaces.
 2. 🌐 **Multi-Tunnel VPN Orchestrator**: Pair incoming connections (**Tailscale nodes**, **SOCKS5/HTTP proxies**) with outgoing VPN gateways (**WireGuard**, **Host Direct**) running in completely **isolated Linux network namespaces (`netns`)**. Zero port conflicts, zero route leaks, and zero impact on your host network.
 3. 🔀 **Domain-Based Split Tunneling (Smart DNS & SNI Proxy)**: Route specific geo-restricted domains (`netflix.com`, `*.openai.com`, etc.) through designated VPN tunnels automatically without needing an Exit Node or installing VPN clients on your device. Zero SSL certificate errors, zero battery drain.
 4. 📊 **Real-Time Web Dashboard**: Built with Phoenix LiveView. Monitor 24-hour DNS telemetry, query volume, blocked threats, throughput, ping latencies, and device status with real-time updates and zero polling overhead.
 
 ---
 
-## 🚀 Quick Start (1-Minute Setup)
+## 🚀 Quick Start (Remote 1-Line Installer)
 
-Hermit is distributed as a multi-arch Docker image supporting both **x86_64 (`amd64`)** and **ARM64 (`arm64`)** (Apple Silicon, AWS Graviton, Raspberry Pi, Oracle Cloud ARM, etc.).
+Hermit runs as a high-performance, native Linux systemd service on **x86_64 (`amd64`)** and **ARM64 (`arm64`)** (Raspberry Pi 64-bit, AWS Graviton, Oracle Cloud ARM, Debian/Ubuntu VPS).
 
-### Option A: Automated 1-Line Installer (Recommended)
-
-The automated script checks prerequisites, prepares persistent storage (`~/.hermit/storage`), generates secure random credentials, sets up Docker permissions, and installs the global `hermit` CLI shortcut:
+To install or upgrade Hermit on any Linux server remotely:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | sudo bash
 ```
+
+### What the installer handles automatically:
+* Installs required Linux runtime networking dependencies (`nftables`, `wireguard-tools`, `tailscale`, etc.).
+* Downloads and verifies the precompiled native release tarball for your CPU architecture.
+* Automatically migrates legacy database records and settings if upgrading from Docker (`~/.hermit/storage` $\rightarrow$ `/var/lib/hermit`).
+* Sets up and starts `hermit.service` via `systemd` under `/opt/hermit`.
+* Creates the global `hermit` CLI helper.
 
 Once completed, the terminal outputs your access details:
 * **Web Dashboard**: `http://<your-server-ip>:3000` (or `http://localhost:3000`)
 * **Default Username**: `admin`
-* **Password**: *Randomly generated and printed in your terminal (saved at `~/.hermit/env`)*
+* **Password**: *Printed in your terminal (stored securely in `/etc/hermit/env`)*
 
 ---
 
-### Option B: Docker Compose (Manual Setup)
+### Non-Interactive / Automation Flag (`-y`)
 
-If you prefer managing files yourself:
+For automated server deployments (Ansible, Cloud-init, CI/CD), pass `-y` to skip all prompts and use defaults/existing settings:
 
-1. **Create directories and configuration**:
-   ```bash
-   mkdir -p ~/.hermit/storage
-   
-   cat <<EOF > ~/.hermit/env
-   SECRET_KEY_BASE=$(openssl rand -base64 48 | tr -d '\n')
-   PHX_HOST=localhost
-   HERMIT_PORT=3000
-   HERMIT_BASIC_AUTH_USER=admin
-   HERMIT_BASIC_AUTH_PASS=choose_your_password
-
-   # Resource limits & BEAM schedulers (tune based on server CPU / RAM)
-   HERMIT_CPUS=1.5
-   HERMIT_MEM_LIMIT=1024m
-   ERL_FLAGS=+S 2:2
-   EOF
-   ```
-
-2. **Download `docker-compose.yml`**:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/docker-compose.yml -o ~/.hermit/docker-compose.yml
-   ```
-
-3. **Start Hermit**:
-   ```bash
-   docker compose -f ~/.hermit/docker-compose.yml up -d
-   ```
+```bash
+curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | sudo bash -s -- -y
+```
 
 ---
 
 ## 🎯 Common Use Cases & How It Works
 
-### Use Case 1: Protect Devices with Encrypted Ad-Blocking DNS (DoH)
+### Use Case 1: Tailnet-Wide Ad-Blocking DNS
 
-Stop ads, tracking, and telemetry on all your phones, laptops, and home browsers without installing client apps:
+Stop ads, trackers, and malicious domains across your entire Tailscale network without configuring individual devices or dealing with SSL certificates:
 
 1. Open Hermit Web Dashboard $\rightarrow$ Click **Endpoints** in the sidebar.
-2. An Endpoint is pre-created with default ad-blocking filters enabled.
-3. Click the 📖 **Setup Guide** button next to the DoH URL:
-   * **Android**: Copy your hostname $\rightarrow$ Go to *Settings > Network & internet > Private DNS* $\rightarrow$ Paste hostname.
-   * **iPhone / iPad / Mac**: Click **Download Apple Profile (`.mobileconfig`)** $\rightarrow$ Tap *Install* in Settings.
-   * **Chrome / Brave / Edge**: Go to *Settings > Privacy and security > Security > Use secure DNS* $\rightarrow$ Select *Custom* and paste your DoH URL.
-   * **Firefox**: Go to *Settings > Privacy & Security > DNS over HTTPS* $\rightarrow$ Select *Max Protection* $\rightarrow$ Paste your DoH URL.
-4. Watch blocked requests appear in real-time on your **Dashboard**!
+2. An Endpoint is pre-created with default ad-blocking filters enabled. Assign it a Tailscale Auth Key.
+3. Hermit boots an isolated Tailscale node (e.g. `100.x.y.z`) running Smart Ad-Blocking DNS.
+4. In your [Tailscale Admin Console → DNS](https://login.tailscale.com/admin/dns):
+   * Under **Nameservers**, add Hermit's Tailscale IP as a Global Nameserver.
+   * Enable **Override local DNS** if you want all devices in your tailnet protected automatically.
+5. Watch blocked queries appear in real-time on your **Dashboard**!
 
 ---
 
@@ -132,7 +112,7 @@ Stream geo-restricted media (e.g. Netflix US, BBC iPlayer) or unblock services (
 
 ```mermaid
 flowchart LR
-    Client["Client (Phone / TV / PC)\n(Only sets Hermit DNS)"] -->|1. Query netflix.com| DNS["Hermit Smart DNS\n(:53 / DoH)"]
+    Client["Client (Phone / TV / PC)\n(Only sets Hermit DNS)"] -->|1. Query netflix.com| DNS["Hermit Smart DNS\n(Tailscale Mesh Node)"]
     DNS -->|2. Returns Hermit IP| Client
     Client -->|3. HTTPS port 443\n(TLS ClientHello)| SNI["Transparent SNI Proxy\n(Ports 443 / 80)"]
     subgraph Tunnel ["Isolated Tunnel Netns"]
@@ -154,7 +134,7 @@ flowchart LR
 2. In the unified **Routing Targets (Split-Tunnel)** box, enter your targets:
    * **Domains** (e.g. `*.netflix.com, *.openai.com`): Automatically intercepted via Smart DNS & SNI Proxy.
    * **IP Subnets** (e.g. `192.168.1.0/24, 10.0.0.0/8`): Automatically advertised via Tailscale Subnet Router.
-3. Configure your device or home router to use Hermit's DNS.
+3. Set Hermit's Tailscale DNS Endpoint IP as your Tailscale Nameserver (MagicDNS) or device DNS.
 4. Enjoy transparent domain-level split tunneling with **zero client VPN apps** and **zero SSL certificate errors**!
 
 > [!TIP]
@@ -173,13 +153,14 @@ flowchart LR
 The installer creates a lightweight `hermit` CLI helper on your server:
 
 ```bash
-hermit status    # View container status, uptime, and port mappings
-hermit logs      # Follow live container logs
-hermit restart   # Restart Hermit container
-hermit update    # Pull latest image and seamlessly upgrade
-hermit env       # View web credentials and environment variables
-hermit stop      # Stop Hermit container
-hermit start     # Start Hermit container
+hermit status    # View service status, uptime, and memory usage
+hermit logs      # Follow live systemd journal logs
+hermit restart   # Restart Hermit service
+hermit update    # Download latest release and seamlessly upgrade
+hermit env       # View web credentials and environment variables (/etc/hermit/env)
+hermit stop      # Stop Hermit service
+hermit start     # Start Hermit service
+hermit uninstall # Safely uninstall Hermit service and binaries
 ```
 
 ---
@@ -189,12 +170,12 @@ hermit start     # Start Hermit container
 Hermit preserves all your database records, tokens, and active tunnel states across upgrades:
 
 * **1-Click Web Upgrade (Zero Terminal)**:
-  Navigate to **Settings** (`/settings`) on the web dashboard. When an update is released, click **[Upgrade]** — Hermit pulls the latest image and restarts seamlessly in ~10 seconds.
+  Navigate to **Settings** (`/settings`) on the web dashboard. When an update is released, click **[Upgrade]** — Hermit downloads the new binary and restarts seamlessly in ~5 seconds.
 * **Terminal Upgrade**:
   ```bash
   hermit update
   # or re-run the 1-line installer:
-  curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | sudo bash
   ```
 
 ---
@@ -204,18 +185,17 @@ Hermit preserves all your database records, tokens, and active tunnel states acr
 <details>
 <summary><strong>Port Reference & Firewall Guide</strong></summary>
 
-When running in standard Production Mode (`network_mode: host`):
+When running Hermit natively on Linux:
 
 | Port / Protocol | Service | Description |
 | :--- | :--- | :--- |
-| **`3000/tcp`** | Web Dashboard & DoH | Phoenix LiveView Web UI and DoH resolver (`/dns-query/:token`). Customizable via `HERMIT_PORT`. |
+| **`3000/tcp`** | Web Dashboard | Phoenix LiveView Web UI (`/`). Customizable via `HERMIT_PORT`. |
 | **`443/tcp, 80/tcp`** | Smart DNS SNI Proxy | Transparent SNI proxy for domain-based split tunneling (Zero-crypto raw TCP streaming). |
 | **`Dynamic UDP`** | Tailscale Inbounds | **Zero-config**: Automatically allocates free ephemeral ports (`41642-41700`) for direct P2P connections. |
-| **`53/udp, tcp`** | Port 53 DNS | Standard DNS resolver (optional fallback or for LAN router upstream). |
 
 > [!TIP]
-> **Co-existing with Host Tailscale & Services**:
-> Because each VPN pair and DNS node runs in an isolated Linux network namespace (`netns`), Hermit will **never conflict** with your host's Tailscale daemon (`41641/udp`) or interrupt your SSH sessions.
+> **Zero Host DNS Conflicts**:
+> Hermit does **not** bind to host port 53 by default. Smart DNS resolvers run inside isolated Tailscale node namespaces, completely eliminating conflicts with `systemd-resolved` or existing host DNS servers. Hermit will also **never conflict** with your host's Tailscale daemon (`41641/udp`) or interrupt your SSH sessions.
 </details>
 
 <details>
@@ -267,21 +247,22 @@ To develop or modify Hermit locally with live code reload:
 ```bash
 git clone https://github.com/quaywin/hermit.git
 cd hermit
-docker compose -f docker-compose.dev.yml up -d
+mix setup
+mix phx.server
 ```
 The Phoenix server will reload code changes incrementally in `< 0.5s`.
 </details>
 
 ---
 
-## 💡 Why Network Namespaces (`netns`) & Docker?
+## 💡 Why Network Namespaces (`netns`) & Native Systemd?
 
 Running multiple VPN tunnels simultaneously on a single Linux machine normally creates severe routing table conflicts (e.g., conflicting `default` gateways and overlapping subnet routes).
 
-Hermit solves this by assigning every connection pair its own **Linux Network Namespace (`netns`)** and **`nftables`** rules:
+Hermit solves this natively by assigning every connection pair its own **Linux Network Namespace (`netns`)** and **`nftables`** rules:
 * Each tunnel has its own independent virtual network interfaces and routing table.
-* The container runs with `privileged: true` solely to manage namespaces and network interfaces.
-* Your host operating system remains clean and unaffected.
+* The native systemd service (`hermit.service`) runs directly with standard Linux network capabilities, eliminating Docker virtualization overhead.
+* Your host operating system's routing tables and interfaces remain 100% clean and unaffected.
 
 ---
 

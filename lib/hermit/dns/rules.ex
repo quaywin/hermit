@@ -89,20 +89,27 @@ defmodule Hermit.Dns.Rules do
       proxy_pair_id = Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
 
       if is_binary(domain) and String.trim(domain) != "" do
-        norm_domain = domain |> String.trim() |> String.downcase()
-
-        clean_domain =
-          if String.starts_with?(norm_domain, "*."),
-            do: String.slice(norm_domain, 2..-1//1),
-            else: norm_domain
+        domain_items =
+          domain
+          |> String.split([",", "\n", "\r", " "], trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.map(&String.downcase/1)
+          |> Enum.reject(&(&1 == ""))
 
         entry = {action, value, proxy_pair_id}
 
-        if clean_domain != norm_domain do
-          [{norm_domain, entry}, {clean_domain, entry}]
-        else
-          [{norm_domain, entry}]
-        end
+        Enum.flat_map(domain_items, fn norm_domain ->
+          clean_domain =
+            if String.starts_with?(norm_domain, "*."),
+              do: String.slice(norm_domain, 2..-1//1),
+              else: norm_domain
+
+          if clean_domain != norm_domain do
+            [{norm_domain, entry}, {clean_domain, entry}]
+          else
+            [{norm_domain, entry}]
+          end
+        end)
       else
         []
       end

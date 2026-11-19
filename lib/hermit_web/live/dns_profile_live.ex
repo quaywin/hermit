@@ -423,11 +423,21 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   @impl true
-  def handle_event("add_custom_rule", %{"domain" => domain, "action" => action} = params, socket) do
+  def handle_event(
+        "add_custom_rule",
+        %{"domain" => raw_domain, "action" => action} = params,
+        socket
+      ) do
     profile = socket.assigns.selected_profile
     custom_rules = profile.custom_rules || []
 
-    domain = String.trim(domain) |> String.downcase()
+    domains =
+      raw_domain
+      |> String.split([",", "\n", "\r", " "], trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.map(&String.downcase/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
 
     value =
       if action in ["redirect", "forward_proxy", "forward_dns"],
@@ -442,27 +452,33 @@ defmodule HermitWeb.DnsProfileLive do
     proxy_pair_id = if proxy_pair_id == "", do: nil, else: proxy_pair_id
 
     cond do
-      domain == "" ->
+      domains == [] ->
         {:noreply, put_flash(socket, :error, "Domain cannot be empty.")}
 
       action in ["redirect", "forward_proxy", "forward_dns"] and (is_nil(value) or value == "") ->
         {:noreply, put_flash(socket, :error, "Target value cannot be empty.")}
 
       true ->
-        new_rule = %{
-          "domain" => domain,
-          "action" => action,
-          "value" => value,
-          "proxy_pair_id" => proxy_pair_id
-        }
+        domain_set = MapSet.new(domains)
+        filtered_rules = Enum.reject(custom_rules, &MapSet.member?(domain_set, &1["domain"]))
 
-        updated_rules = Enum.reject(custom_rules, &(&1["domain"] == domain)) ++ [new_rule]
+        new_rules =
+          Enum.map(domains, fn d ->
+            %{
+              "domain" => d,
+              "action" => action,
+              "value" => value,
+              "proxy_pair_id" => proxy_pair_id
+            }
+          end)
+
+        updated_rules = filtered_rules ++ new_rules
 
         case update_profile(
                socket,
                profile,
                %{custom_rules: updated_rules},
-               "Custom rule for #{domain} added."
+               "Custom rule(s) for #{Enum.join(domains, ", ")} added."
              ) do
           {:noreply, new_socket} ->
             {:noreply,

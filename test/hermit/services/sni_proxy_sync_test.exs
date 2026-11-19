@@ -120,4 +120,37 @@ defmodule Hermit.Services.SniProxySyncTest do
     assert {:ok, "wg_us"} = SniProxy.match("video.nflxvideo.net")
     assert {:ok, "wg_us"} = SniProxy.match("assets.nflxext.com")
   end
+
+  test "sync_all_routes/0 and Rules.precompile correctly split comma-separated domains" do
+    _profile =
+      %DnsConfig{}
+      |> DnsConfig.changeset(%{
+        name: "BBC Profile",
+        upstream_dns: "1.1.1.1",
+        custom_rules: [
+          %{"domain" => "*.bbc.co.uk, bbc.co.uk", "action" => "route_tunnel", "value" => "wg_uk"}
+        ]
+      })
+      |> Hermit.Repo.insert!()
+
+    on_exit(fn ->
+      SniProxy.unregister_pair("wg_uk")
+    end)
+
+    SniProxy.sync_all_routes()
+
+    # Verify both wildcard and apex domains match in SniProxy
+    assert {:ok, "wg_uk"} = SniProxy.match("bbc.co.uk")
+    assert {:ok, "wg_uk"} = SniProxy.match("www.bbc.co.uk")
+    assert {:ok, "wg_uk"} = SniProxy.match("news.bbc.co.uk")
+
+    # Verify Rules.precompile and Rules.match handle it
+    rules_map =
+      Rules.precompile([
+        %{"domain" => "*.bbc.co.uk, bbc.co.uk", "action" => "route_tunnel", "value" => "wg_uk"}
+      ])
+
+    assert {"route_tunnel", "wg_uk", _} = Rules.match("bbc.co.uk", rules_map)
+    assert {"route_tunnel", "wg_uk", _} = Rules.match("www.bbc.co.uk", rules_map)
+  end
 end

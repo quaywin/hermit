@@ -176,7 +176,12 @@ defmodule Hermit.Vpn.SniProxy do
                 domain = Map.get(rule, "domain") || Map.get(rule, :domain)
 
                 if is_binary(domain) and String.trim(domain) != "" do
-                  norm = String.downcase(String.trim(domain))
+                  domain_items =
+                    domain
+                    |> String.split([",", "\n", "\r", " "], trim: true)
+                    |> Enum.map(&String.trim/1)
+                    |> Enum.map(&String.downcase/1)
+                    |> Enum.reject(&(&1 == ""))
 
                   case action do
                     act when act in ["route_tunnel", "smart_route"] ->
@@ -185,13 +190,17 @@ defmodule Hermit.Vpn.SniProxy do
                           Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
 
                       if is_binary(pair_id) and pair_id != "" do
-                        Map.put(inner_acc, norm, pair_id)
+                        Enum.reduce(domain_items, inner_acc, fn norm, m_acc ->
+                          Map.put(m_acc, norm, pair_id)
+                        end)
                       else
                         inner_acc
                       end
 
                     act when act in ["block", "bypass"] ->
-                      Map.delete(inner_acc, norm)
+                      Enum.reduce(domain_items, inner_acc, fn norm, m_acc ->
+                        Map.delete(m_acc, norm)
+                      end)
 
                     _ ->
                       inner_acc

@@ -91,13 +91,22 @@ defmodule HermitWeb.DnsRulesLive do
   @impl true
   def handle_event("add_custom_rule", params, socket) do
     config = socket.assigns.config
-    domain = String.trim(params["domain"] || "") |> String.downcase()
+    raw_domain = params["domain"] || ""
+
+    domains =
+      raw_domain
+      |> String.split([",", "\n", "\r", " "], trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.map(&String.downcase/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
     action = params["action"]
     value = params["value"]
     proxy_pair_id = params["proxy_pair_id"]
 
     cond do
-      domain == "" ->
+      domains == [] ->
         {:noreply, put_flash(socket, :error, "Domain cannot be empty.")}
 
       action in ["redirect", "forward_dns", "route_tunnel"] and (is_nil(value) or value == "") ->
@@ -112,21 +121,25 @@ defmodule HermitWeb.DnsRulesLive do
 
       true ->
         existing_rules = config.custom_rules || []
+        domain_set = MapSet.new(domains)
 
-        # Remove old rule for this domain if exists
+        # Remove old rule for these domains if exists
         filtered_rules =
           Enum.reject(existing_rules, fn r ->
-            (r["domain"] || r[:domain]) == domain
+            MapSet.member?(domain_set, r["domain"] || r[:domain])
           end)
 
-        new_rule = %{
-          "domain" => domain,
-          "action" => action,
-          "value" => if(action in ["block", "bypass"], do: nil, else: value),
-          "proxy_pair_id" => if(action == "forward_dns", do: proxy_pair_id, else: nil)
-        }
+        new_rules =
+          Enum.map(domains, fn d ->
+            %{
+              "domain" => d,
+              "action" => action,
+              "value" => if(action in ["block", "bypass"], do: nil, else: value),
+              "proxy_pair_id" => if(action == "forward_dns", do: proxy_pair_id, else: nil)
+            }
+          end)
 
-        updated_rules = [new_rule | filtered_rules]
+        updated_rules = new_rules ++ filtered_rules
 
         case DnsConfig.update_global_rules(updated_rules) do
           {:ok, updated_config} ->
@@ -137,7 +150,7 @@ defmodule HermitWeb.DnsRulesLive do
              |> assign(custom_rule_domain: "")
              |> assign(custom_rule_value: "")
              |> assign(custom_rule_proxy_pair_id: "")
-             |> put_flash(:info, "Rule for #{domain} added successfully.")}
+             |> put_flash(:info, "Rule(s) for #{Enum.join(domains, ", ")} added successfully.")}
 
           {:error, changeset} ->
             {:noreply,

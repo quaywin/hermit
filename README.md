@@ -192,12 +192,11 @@ When running Hermit natively on Linux:
 | Port / Protocol | Service | Description |
 | :--- | :--- | :--- |
 | **`3000/tcp`** | Web Dashboard | Phoenix LiveView Web UI (`/`). Customizable via `HERMIT_PORT`. |
-| **`443/tcp, 80/tcp`** | Smart DNS SNI Proxy | Transparent SNI proxy for domain-based split tunneling (Zero-crypto raw TCP streaming). |
 | **`Dynamic UDP`** | Tailscale Inbounds | **Zero-config**: Automatically allocates free ephemeral ports (`41642-41700`) for direct P2P connections. |
 
 > [!TIP]
-> **Zero Host DNS Conflicts**:
-> Hermit does **not** bind to host port 53 by default. Smart DNS resolvers run inside isolated Tailscale node namespaces, completely eliminating conflicts with `systemd-resolved` or existing host DNS servers. Hermit will also **never conflict** with your host's Tailscale daemon (`41641/udp`) or interrupt your SSH sessions.
+> **Zero Host Port Conflicts (No Port 53, 80, or 443 Conflicts)**:
+> Hermit does **not** bind to host port 53, 80, or 443 by default. DNS resolvers and SNI proxy redirection run inside isolated Tailscale network namespaces (with internal SNI listeners on dedicated ports `8080/8443`), completely eliminating conflicts with `systemd-resolved`, existing host DNS, or web servers (Nginx, Caddy, Apache). Hermit will also **never conflict** with your host's Tailscale daemon (`41641/udp`) or interrupt your SSH sessions.
 </details>
 
 <details>

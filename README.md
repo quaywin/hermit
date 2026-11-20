@@ -115,12 +115,12 @@ Stream geo-restricted media (e.g. Netflix US, BBC iPlayer) or unblock services (
 flowchart LR
     Client["Client (Phone / TV / PC)\n(Only sets Hermit DNS)"] -->|1. Query netflix.com| DNS["Hermit Smart DNS\n(Tailscale Mesh Node)"]
     DNS -->|2. Returns Hermit IP| Client
-    Client -->|3. HTTPS port 443\n(TLS ClientHello)| SNI["Transparent SNI Proxy\n(Ports 443 / 80)"]
+    Client -->|"3. HTTPS port 443\n(TLS ClientHello)"| SNI["Transparent SNI Proxy\n(Ports 443 / 80)"]
     subgraph Tunnel ["Isolated Tunnel Netns"]
-        SNI -->|4. SOCKS5 Relay| SOCKS["microsocks Daemon"]
+        SNI -->|4. SOCKS5 Relay| SOCKS["3proxy Daemon"]
         SOCKS -->|5. WireGuard Outbound| Target["US WireGuard Gateway\n(netflix.com)"]
     end
-    Client -.->|Normal traffic (e.g. google.com)\nDirect local ISP connection| Internet["Direct Internet"]
+    Client -.->|"Normal traffic (e.g. google.com)\nDirect local ISP connection"| Internet["Direct Internet"]
 ```
 
 #### Why Smart DNS is Faster & Better than a Full Exit Node:
@@ -131,16 +131,17 @@ flowchart LR
 * 🔋 **Zero Battery Drain & Zero Client Apps**: Smart TVs, Apple TVs, gaming consoles, and mobile devices only need Hermit DNS configured (or Tailscale connected with Exit Node **OFF**).
 
 #### How to Configure:
-1. Open your tunnel's detail page on Hermit.
-2. In the unified **Routing Targets (Split-Tunnel)** box, enter your targets:
-   * **Domains** (e.g. `*.netflix.com, *.openai.com`): Automatically intercepted via Smart DNS & SNI Proxy.
-   * **IP Subnets** (e.g. `192.168.1.0/24, 10.0.0.0/8`): Automatically advertised via Tailscale Subnet Router.
+1. Deploy your Tunnel pair (e.g. Tailscale Inbound + WireGuard Outbound) on the **Dashboard** (`/`).
+2. Route domains or streaming services through the tunnel:
+   * **1-Click Smart DNS Services** (`/dns/services`): Select popular platforms (Netflix, OpenAI / ChatGPT, BBC iPlayer, etc.) and set action to **Route to Tunnel** $\rightarrow$ select your tunnel pair. All associated CDN and static asset domains are routed automatically.
+   * **Custom Domain Rules** (`/dns/rules`): Add custom domain patterns (e.g. `*.openai.com`, `example.com`) and choose **Route to Tunnel** $\rightarrow$ select your tunnel pair.
+   * *(Optional)* **IP Subnet Routing**: To route private LAN or VPC subnets (e.g. `192.168.1.0/24`), enter them under **Advertised Subnets** in the tunnel's settings.
 3. Set Hermit's Tailscale DNS Endpoint IP as your Tailscale Nameserver (MagicDNS) or device DNS.
 4. Enjoy transparent domain-level split tunneling with **zero client VPN apps** and **zero SSL certificate errors**!
 
 > [!TIP]
 > **Common Domain Sets for Popular Services (Include Asset & CDN Domains)**:
-> Major streaming and AI platforms serve static files, images, and video feeds from separate CDN domains. For full coverage without broken styles or missing assets:
+> Major streaming and AI platforms serve static files, images, and video feeds from separate CDN domains. The built-in **Smart DNS Services** catalog handles this automatically, but for manual custom rules:
 > * **BBC (UK)**: `*.bbc.co.uk, *.bbci.co.uk, *.bbc.com` *(covers main portal, iPlayer, iChef image CDN, and static file CDN)*.
 > * **OpenAI / ChatGPT**: `*.openai.com, *.chatgpt.com, *.oaistatic.com, *.oaiusercontent.com`.
 > * **Netflix**: `*.netflix.com, *.nflxvideo.net, *.nflximg.net, *.nflxext.com`.

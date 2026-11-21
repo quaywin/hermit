@@ -141,6 +141,12 @@ defmodule Hermit.Dns.PacketTest do
     assert Packet.qtype_to_string(:SRV) == "SRV"
     assert Packet.qtype_to_string(:CAA) == "CAA"
     assert Packet.qtype_to_string(:ANY) == "ANY"
+    assert Packet.qtype_to_string(:DNSKEY) == "DNSKEY"
+    assert Packet.qtype_to_string(:ds) == "DS"
+    assert Packet.qtype_to_string(48) == "TYPE_48"
+    assert Packet.qtype_to_string("A") == "A"
+    assert Packet.qtype_to_string(nil) == "UNKNOWN"
+    assert Packet.qtype_to_string({:unknown, 99}) == "TYPE_99"
 
     # Test parse query with TYPE_65 (HTTPS)
     qname = <<6>> <> "google" <> <<3>> <> "com" <> <<0>>

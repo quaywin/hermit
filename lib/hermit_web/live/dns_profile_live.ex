@@ -643,8 +643,8 @@ defmodule HermitWeb.DnsProfileLive do
           pattern_fallback_str
         ])
         |> Enum.map(&to_log_struct/1)
-        |> Enum.sort_by(& &1.timestamp, :desc)
-        |> Enum.uniq_by(fn log -> {log.timestamp, log.domain, log.client_ip} end)
+        |> Enum.sort_by(& &1.timestamp, {:desc, DateTime})
+        |> Enum.uniq_by(fn log -> {log.timestamp, log.domain, log.qtype, log.client_ip} end)
         |> Enum.take(200)
     end
   end

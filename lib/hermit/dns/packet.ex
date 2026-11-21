@@ -171,6 +171,11 @@ defmodule Hermit.Dns.Packet do
   def qtype_to_string(:CAA), do: "CAA"
   def qtype_to_string(:ANY), do: "ANY"
   def qtype_to_string({:unknown, val}), do: "TYPE_#{val}"
+  def qtype_to_string(atom) when is_atom(atom) and not is_nil(atom),
+    do: Atom.to_string(atom) |> String.upcase()
+  def qtype_to_string(val) when is_integer(val), do: "TYPE_#{val}"
+  def qtype_to_string(str) when is_binary(str), do: str
+  def qtype_to_string(_), do: "UNKNOWN"
 
   @doc """
   Builds a raw DNS query packet from a transaction ID and a query record.

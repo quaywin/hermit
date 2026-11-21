@@ -27,6 +27,32 @@ defmodule Hermit.Dns.Telemetry do
   end
 
   @doc """
+  Ensures that the telemetry handler is attached.
+  Self-healing mechanism in case the handler was ever detached.
+  """
+  def ensure_attached do
+    handlers = :telemetry.list_handlers([:hermit, :dns, :query])
+
+    if not Enum.any?(handlers, fn h -> h.id == "hermit-dns-queries" end) do
+      case :telemetry.attach(
+             "hermit-dns-queries",
+             [:hermit, :dns, :query],
+             &__MODULE__.handle_event/4,
+             nil
+           ) do
+        :ok ->
+          Logger.info("Telemetry: Attached 'hermit-dns-queries' handler.")
+
+        {:error, :already_exists} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Telemetry: Failed to attach 'hermit-dns-queries' handler: #{inspect(reason)}")
+      end
+    end
+  end
+
+  @doc """
   Returns a 24-hour summary of DNS metrics (total queries, blocked queries, block rate, and hourly series).
   Fast and memory-efficient: reads directly from the RAM ETS metrics table with SQLite fallback.
   """
@@ -121,13 +147,8 @@ defmodule Hermit.Dns.Telemetry do
       ])
     end
 
-    # 4. Attach the telemetry handler
-    :telemetry.attach(
-      "hermit-dns-queries",
-      [:hermit, :dns, :query],
-      &__MODULE__.handle_event/4,
-      nil
-    )
+    # 4. Attach the telemetry handler safely
+    ensure_attached()
 
     # 5. Schedule periodic sync and prune every 60 seconds
     :erlang.send_after(60_000, self(), :periodic_prune)
@@ -158,175 +179,201 @@ defmodule Hermit.Dns.Telemetry do
     if state.log_buffer == [] do
       {:noreply, state}
     else
-      logs_to_flush = Enum.reverse(state.log_buffer)
+      try do
+        logs_to_flush = Enum.reverse(state.log_buffer)
 
-      # 1. Bulk insert to ETS
-      ets_entries =
-        Enum.flat_map(logs_to_flush, fn {log_data, config_id, _, _} ->
-          pair_id = log_data["pair_id"]
-          counter = System.unique_integer([:monotonic])
+        # 1. Bulk insert to ETS
+        ets_entries =
+          Enum.flat_map(logs_to_flush, fn {log_data, config_id, _, _} ->
+            pair_id = log_data["pair_id"]
+            counter = System.unique_integer([:monotonic])
 
-          cfg_key = if is_nil(config_id), do: "fallback", else: config_id
-          pair_key = if pair_id in [nil, ""], do: "fallback", else: pair_id
+            cfg_key = if is_nil(config_id), do: "fallback", else: config_id
+            pair_key = if pair_id in [nil, ""], do: "fallback", else: pair_id
 
-          [
-            {{pair_key, counter}, log_data},
-            {{cfg_key, counter}, log_data}
+            [
+              {{pair_key, counter}, log_data},
+              {{cfg_key, counter}, log_data}
+            ]
+          end)
+
+        :ets.insert(@dns_log_table, ets_entries)
+
+        # 2. Hourly stats metrics
+        Enum.each(logs_to_flush, fn {log_data, config_id, block_reason, blocklist_id} ->
+          hour_timestamp = div(log_data["timestamp"], 3600) * 3600
+          status = log_data["status"]
+
+          :ets.insert_new(@dns_metrics_table, {{config_id, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
+
+          is_blocked = if status == "blocked", do: 1, else: 0
+          is_ipv6_blocked = if block_reason == "ipv6", do: 1, else: 0
+
+          is_adguard =
+            if block_reason == "adguard" or
+                 (is_binary(block_reason) and
+                    (String.contains?(String.downcase(block_reason), "adguard") or
+                       not String.contains?(String.downcase(block_reason), [
+                         "goodbye",
+                         "adult",
+                         "custom_rule"
+                       ]))),
+               do: 1,
+               else: 0
+
+          is_goodbyeads =
+            if block_reason == "goodbyeads" or
+                 (is_binary(block_reason) and
+                    String.contains?(String.downcase(block_reason), "goodbye")),
+               do: 1,
+               else: 0
+
+          is_adult =
+            if block_reason == "adult" or
+                 (is_binary(block_reason) and
+                    String.contains?(String.downcase(block_reason), "adult")),
+               do: 1,
+               else: 0
+
+          is_custom = if block_reason == "custom_rule", do: 1, else: 0
+
+          updates = [
+            {2, 1},
+            {3, is_blocked},
+            {4, is_ipv6_blocked},
+            {5, is_adguard},
+            {6, is_goodbyeads},
+            {7, is_adult},
+            {8, is_custom}
           ]
-        end)
 
-      :ets.insert(@dns_log_table, ets_entries)
+          :ets.update_counter(@dns_metrics_table, {config_id, hour_timestamp}, updates)
 
-      # 2. Hourly stats metrics
-      Enum.each(logs_to_flush, fn {log_data, config_id, block_reason, blocklist_id} ->
-        hour_timestamp = div(log_data["timestamp"], 3600) * 3600
-        status = log_data["status"]
-
-        :ets.insert_new(@dns_metrics_table, {{config_id, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
-
-        is_blocked = if status == "blocked", do: 1, else: 0
-        is_ipv6_blocked = if block_reason == "ipv6", do: 1, else: 0
-
-        is_adguard =
-          if block_reason == "adguard" or
-               (is_binary(block_reason) and
-                  (String.contains?(String.downcase(block_reason), "adguard") or
-                     not String.contains?(String.downcase(block_reason), [
-                       "goodbye",
-                       "adult",
-                       "custom_rule"
-                     ]))),
-             do: 1,
-             else: 0
-
-        is_goodbyeads =
-          if block_reason == "goodbyeads" or
-               (is_binary(block_reason) and
-                  String.contains?(String.downcase(block_reason), "goodbye")),
-             do: 1,
-             else: 0
-
-        is_adult =
-          if block_reason == "adult" or
-               (is_binary(block_reason) and
-                  String.contains?(String.downcase(block_reason), "adult")),
-             do: 1,
-             else: 0
-
-        is_custom = if block_reason == "custom_rule", do: 1, else: 0
-
-        updates = [
-          {2, 1},
-          {3, is_blocked},
-          {4, is_ipv6_blocked},
-          {5, is_adguard},
-          {6, is_goodbyeads},
-          {7, is_adult},
-          {8, is_custom}
-        ]
-
-        :ets.update_counter(@dns_metrics_table, {config_id, hour_timestamp}, updates)
-
-        if is_integer(blocklist_id) and status == "blocked" do
-          :ets.insert_new(
-            @dns_metrics_table,
-            {{:blocklist, config_id, blocklist_id, hour_timestamp}, 0}
-          )
-
-          :ets.update_counter(
-            @dns_metrics_table,
-            {:blocklist, config_id, blocklist_id, hour_timestamp},
-            {2, 1}
-          )
-        end
-      end)
-
-      now = System.system_time(:second)
-
-      {cached_config_ids, last_config_fetch_at} =
-        if now - Map.get(state, :last_config_fetch_at, 0) >= 60 or
-             Map.get(state, :cached_config_ids, []) == [] do
-          ids =
-            try do
-              import Ecto.Query
-              Repo.all(from(d in Hermit.Vpn.DnsConfig, select: d.id))
-            rescue
-              _ -> Map.get(state, :cached_config_ids, [])
-            catch
-              _, _ -> Map.get(state, :cached_config_ids, [])
-            end
-
-          {ids, now}
-        else
-          {Map.get(state, :cached_config_ids, []), Map.get(state, :last_config_fetch_at, 0)}
-        end
-
-      # 3. Broadcast
-      if :erlang.whereis(Hermit.PubSub) != :undefined do
-        # Broadcast batch log theo profile
-        logs_to_flush
-        |> Enum.group_by(fn {_, config_id, _, _} -> config_id end)
-        |> Enum.each(fn {config_id, group} ->
-          logs = Enum.map(group, &elem(&1, 0))
-
-          if config_id do
-            Phoenix.PubSub.broadcast(
-              Hermit.PubSub,
-              "dns_logs_profile:#{config_id}",
-              {:dns_logs_batch, logs}
+          if is_integer(blocklist_id) and status == "blocked" do
+            :ets.insert_new(
+              @dns_metrics_table,
+              {{:blocklist, config_id, blocklist_id, hour_timestamp}, 0}
             )
-          else
-            # For fallback queries without specific config_id, broadcast to all cached profile subscribers
-            Enum.each(cached_config_ids, fn cfg_id ->
-              Phoenix.PubSub.broadcast(
-                Hermit.PubSub,
-                "dns_logs_profile:#{cfg_id}",
-                {:dns_logs_batch, logs}
-              )
-            end)
+
+            :ets.update_counter(
+              @dns_metrics_table,
+              {:blocklist, config_id, blocklist_id, hour_timestamp},
+              {2, 1}
+            )
           end
         end)
 
-        # Broadcast batch log theo pair_id (chi gui dang batch de toi uu bang thong va DOM rendering)
-        logs_to_flush
-        |> Enum.group_by(fn {log_data, _, _, _} -> log_data["pair_id"] end)
-        |> Enum.each(fn {pair_id, group} ->
-          logs = Enum.map(group, &elem(&1, 0))
-          Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_logs_batch, logs})
-        end)
-      end
+        now = System.system_time(:second)
 
-      {:noreply,
-       %{
-         state
-         | log_buffer: [],
-           cached_config_ids: cached_config_ids,
-           last_config_fetch_at: last_config_fetch_at
-       }}
+        {cached_config_ids, last_config_fetch_at} =
+          if now - Map.get(state, :last_config_fetch_at, 0) >= 60 or
+               Map.get(state, :cached_config_ids, []) == [] do
+            ids =
+              try do
+                import Ecto.Query
+                Repo.all(from(d in Hermit.Vpn.DnsConfig, select: d.id))
+              rescue
+                _ -> Map.get(state, :cached_config_ids, [])
+              catch
+                _, _ -> Map.get(state, :cached_config_ids, [])
+              end
+
+            {ids, now}
+          else
+            {Map.get(state, :cached_config_ids, []), Map.get(state, :last_config_fetch_at, 0)}
+          end
+
+        # 3. Broadcast
+        if :erlang.whereis(Hermit.PubSub) != :undefined do
+          # Broadcast batch log theo profile
+          logs_to_flush
+          |> Enum.group_by(fn {_, config_id, _, _} -> config_id end)
+          |> Enum.each(fn {config_id, group} ->
+            logs = Enum.map(group, &elem(&1, 0))
+
+            if config_id do
+              Phoenix.PubSub.broadcast(
+                Hermit.PubSub,
+                "dns_logs_profile:#{config_id}",
+                {:dns_logs_batch, logs}
+              )
+            else
+              # For fallback queries without specific config_id, broadcast to all cached profile subscribers
+              Enum.each(cached_config_ids, fn cfg_id ->
+                Phoenix.PubSub.broadcast(
+                  Hermit.PubSub,
+                  "dns_logs_profile:#{cfg_id}",
+                  {:dns_logs_batch, logs}
+                )
+              end)
+            end
+          end)
+
+          # Broadcast batch log theo pair_id (chi gui dang batch de toi uu bang thong va DOM rendering)
+          logs_to_flush
+          |> Enum.group_by(fn {log_data, _, _, _} -> log_data["pair_id"] end)
+          |> Enum.each(fn {pair_id, group} ->
+            logs = Enum.map(group, &elem(&1, 0))
+            Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_logs_batch, logs})
+          end)
+        end
+
+        {:noreply,
+         %{
+           state
+           | log_buffer: [],
+             cached_config_ids: cached_config_ids,
+             last_config_fetch_at: last_config_fetch_at
+         }}
+      rescue
+        e ->
+          Logger.warning(
+            "Telemetry: Error during flush_logs: #{Exception.format(:error, e, __STACKTRACE__)}"
+          )
+
+          {:noreply, %{state | log_buffer: []}}
+      catch
+        kind, reason ->
+          Logger.warning(
+            "Telemetry: Exit during flush_logs: #{Exception.format(kind, reason, __STACKTRACE__)}"
+          )
+
+          {:noreply, %{state | log_buffer: []}}
+      end
     end
   end
 
   @impl true
   def handle_info(:periodic_prune, state) do
-    # A. Prune raw logs in RAM
-    pair_ids = collect_pair_ids(@dns_log_table)
-
-    Enum.each(pair_ids, fn pair_id ->
-      prune_logs(pair_id)
-    end)
-
-    # B. Sync current in-memory metrics to SQLite
-    sync_metrics_to_db()
-
-    # C. Prune in-memory metrics older than 24 hours
-    cutoff_ram_time = System.system_time(:second) - 24 * 3600
-
-    :ets.select_delete(@dns_metrics_table, [
-      {{{:"$1", :"$2"}, :_, :_, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]},
-      {{{:blocklist, :"$1", :"$2", :"$3"}, :"$4"}, [{:<, :"$3", cutoff_ram_time}], [true]}
-    ])
-
     :erlang.send_after(60_000, self(), :periodic_prune)
+    ensure_attached()
+
+    try do
+      # A. Prune raw logs in RAM
+      pair_ids = collect_pair_ids(@dns_log_table)
+
+      Enum.each(pair_ids, fn pair_id ->
+        prune_logs(pair_id)
+      end)
+
+      # B. Sync current in-memory metrics to SQLite
+      sync_metrics_to_db()
+
+      # C. Prune in-memory metrics older than 24 hours
+      cutoff_ram_time = System.system_time(:second) - 24 * 3600
+
+      :ets.select_delete(@dns_metrics_table, [
+        {{{:"$1", :"$2"}, :_, :_, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]},
+        {{{:blocklist, :"$1", :"$2", :"$3"}, :"$4"}, [{:<, :"$3", cutoff_ram_time}], [true]}
+      ])
+    rescue
+      e ->
+        Logger.warning("Telemetry: Error during periodic_prune: #{inspect(e)}")
+    catch
+      kind, reason ->
+        Logger.warning("Telemetry: Exit during periodic_prune: #{inspect({kind, reason})}")
+    end
+
     {:noreply, state}
   end
 
@@ -362,75 +409,92 @@ defmodule Hermit.Dns.Telemetry do
   @doc """
   Telemetry handler callback.
   Processes DNS query logs asynchronously to prevent blocking the DNS server.
+  Wrapped with try/rescue so that under no circumstances does it raise and cause :telemetry to detach it.
   """
   def handle_event([:hermit, :dns, :query], measurements, metadata, _config) do
     if Map.get(metadata, :enable_query_logging, false) do
-      duration = Map.get(measurements, :duration)
-      profile_id = Map.get(metadata, :profile_id)
-      config_id = Map.get(metadata, :config_id)
-      client_ip = Map.get(metadata, :client_ip)
+      try do
+        duration = Map.get(measurements, :duration)
+        profile_id = Map.get(metadata, :profile_id)
+        config_id = Map.get(metadata, :config_id)
+        client_ip = Map.get(metadata, :client_ip)
 
-      domain = Map.get(metadata, :domain)
-      qtype = Map.get(metadata, :qtype)
-      status = Map.get(metadata, :status)
-      answer = Map.get(metadata, :answer)
-      resolver = Map.get(metadata, :resolver)
-      block_reason = Map.get(metadata, :block_reason)
-      blocklist_id = Map.get(metadata, :blocklist_id)
+        domain = Map.get(metadata, :domain)
+        qtype = Map.get(metadata, :qtype)
+        status = Map.get(metadata, :status)
+        answer = Map.get(metadata, :answer)
+        resolver = Map.get(metadata, :resolver)
+        block_reason = Map.get(metadata, :block_reason)
+        blocklist_id = Map.get(metadata, :blocklist_id)
 
-      pair_id = to_string(profile_id)
-      client_ip_str = Packet.ip_to_string(client_ip)
+        pair_id = if is_nil(profile_id), do: "", else: to_string(profile_id)
+        client_ip_str = Packet.ip_to_string(client_ip)
 
-      endpoint_id =
-        cond do
-          is_integer(profile_id) ->
-            profile_id
+        endpoint_id =
+          cond do
+            is_integer(profile_id) ->
+              profile_id
 
-          is_binary(profile_id) ->
-            case Integer.parse(profile_id) do
-              {id, ""} -> id
-              _ -> nil
-            end
+            is_binary(profile_id) ->
+              case Integer.parse(profile_id) do
+                {id, ""} -> id
+                _ -> nil
+              end
 
-          true ->
-            nil
-        end
+            true ->
+              nil
+          end
 
-      endpoint_name =
-        cond do
-          Map.get(metadata, :endpoint_name) ->
-            Map.get(metadata, :endpoint_name)
+        endpoint_name =
+          cond do
+            Map.get(metadata, :endpoint_name) ->
+              Map.get(metadata, :endpoint_name)
 
-          endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined ->
-            case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
-              [{_, name}] ->
-                name
+            endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined ->
+              case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
+                [{_, name}] ->
+                  name
 
-              _ ->
-                "Endpoint #{endpoint_id}"
-            end
+                _ ->
+                  "Endpoint #{endpoint_id}"
+              end
 
-          true ->
-            "Unknown Endpoint"
-        end
+            true ->
+              "Unknown Endpoint"
+          end
 
-      client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
+        client_name = Hermit.Vpn.DnsDeviceResolver.resolve_device(profile_id, client_ip_str)
 
-      log_data = %{
-        "pair_id" => pair_id,
-        "client_ip" => client_ip_str,
-        "client_name" => client_name || client_ip_str,
-        "endpoint_name" => endpoint_name,
-        "domain" => domain,
-        "type" => Packet.qtype_to_string(qtype),
-        "status" => status,
-        "answer" => answer,
-        "resolver" => resolver,
-        "duration_ms" => duration,
-        "timestamp" => System.system_time(:second)
-      }
+        log_data = %{
+          "pair_id" => pair_id,
+          "client_ip" => client_ip_str,
+          "client_name" => client_name || client_ip_str,
+          "endpoint_name" => endpoint_name,
+          "domain" => domain,
+          "type" => Packet.qtype_to_string(qtype),
+          "status" => status,
+          "answer" => answer,
+          "resolver" => resolver,
+          "duration_ms" => duration,
+          "timestamp" => System.system_time(:second)
+        }
 
-      GenServer.cast(__MODULE__, {:enqueue_log, log_data, config_id, block_reason, blocklist_id})
+        GenServer.cast(__MODULE__, {:enqueue_log, log_data, config_id, block_reason, blocklist_id})
+      rescue
+        e ->
+          Logger.warning(
+            "Telemetry: handle_event error (prevented detachment): #{Exception.format(:error, e, __STACKTRACE__)}"
+          )
+
+          :ok
+      catch
+        kind, reason ->
+          Logger.warning(
+            "Telemetry: handle_event exit (prevented detachment): #{Exception.format(kind, reason, __STACKTRACE__)}"
+          )
+
+          :ok
+      end
     end
 
     :ok

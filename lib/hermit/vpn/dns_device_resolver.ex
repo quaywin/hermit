@@ -13,28 +13,41 @@ defmodule Hermit.Vpn.DnsDeviceResolver do
   @not_found_ttl_seconds 300
   @profile_ttl_seconds 600
 
+  def resolve_device(nil, _client_ip), do: nil
+  def resolve_device(_profile_id, client_ip) when client_ip in [nil, ""], do: nil
+
   def resolve_device(profile_id, client_ip) do
-    now = System.system_time(:second)
+    if :ets.whereis(@table) != :undefined do
+      try do
+        now = System.system_time(:second)
 
-    case :ets.lookup(@table, {profile_id, client_ip}) do
-      [{_, :not_found, inserted_at}] when now - inserted_at < @not_found_ttl_seconds ->
-        nil
-
-      [{_, name, _inserted_at}] when name != :not_found ->
-        name
-
-      _ ->
-        case :ets.lookup(@table, {:is_tailscale, profile_id}) do
-          [{_, false, inserted_at}] when now - inserted_at < @profile_ttl_seconds ->
+        case :ets.lookup(@table, {profile_id, client_ip}) do
+          [{_, :not_found, inserted_at}] when now - inserted_at < @not_found_ttl_seconds ->
             nil
+
+          [{_, name, _inserted_at}] when name != :not_found ->
+            name
 
           _ ->
-            # Not in cache or is tailscale: mark :not_found temporarily to avoid duplicate casts,
-            # and trigger async resolution in background
-            :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
-            GenServer.cast(__MODULE__, {:trigger_update, profile_id})
-            nil
+            case :ets.lookup(@table, {:is_tailscale, profile_id}) do
+              [{_, false, inserted_at}] when now - inserted_at < @profile_ttl_seconds ->
+                nil
+
+              _ ->
+                # Not in cache or is tailscale: mark :not_found temporarily to avoid duplicate casts,
+                # and trigger async resolution in background
+                :ets.insert(@table, {{profile_id, client_ip}, :not_found, now})
+                GenServer.cast(__MODULE__, {:trigger_update, profile_id})
+                nil
+            end
         end
+      rescue
+        _ -> nil
+      catch
+        _, _ -> nil
+      end
+    else
+      nil
     end
   end
 

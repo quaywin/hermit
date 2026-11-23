@@ -214,6 +214,7 @@ defmodule Hermit.Application do
         System.cmd("sysctl", ["-w", "net.ipv4.ip_forward=1"])
         preserve_ipv6_default_ra()
         System.cmd("sysctl", ["-w", "net.ipv6.conf.all.forwarding=1"], stderr_to_stdout: true)
+        optimize_host_networking()
 
         # Setup host network rules using nftables (fallback to iptables only if nftables fails)
         case setup_nftables_host() do
@@ -460,7 +461,7 @@ defmodule Hermit.Application do
     http_port = Hermit.Vpn.SniProxy.Server.http_port()
     https_port = Hermit.Vpn.SniProxy.Server.https_port()
 
-    if System.find_executable("iptables") and (force or has_ts_input_chain?("iptables")) do
+    if System.find_executable("iptables") && (force or has_ts_input_chain?("iptables")) do
       try do
         Enum.each(interfaces, fn iface ->
           ensure_iptables_rule("iptables", ["INPUT", "-i", iface, "-j", "ACCEPT"])
@@ -503,7 +504,7 @@ defmodule Hermit.Application do
       end
     end
 
-    if System.find_executable("ip6tables") and (force or has_ts_input_chain?("ip6tables")) do
+    if System.find_executable("ip6tables") && (force or has_ts_input_chain?("ip6tables")) do
       try do
         Enum.each(interfaces, fn iface ->
           ensure_iptables_rule("ip6tables", ["INPUT", "-i", iface, "-j", "ACCEPT"])
@@ -535,6 +536,55 @@ defmodule Hermit.Application do
             System.cmd("sysctl", ["-w", "net.ipv6.conf.#{iface}.accept_ra=2"],
               stderr_to_stdout: true
             )
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp optimize_host_networking do
+    _ = System.cmd("modprobe", ["tcp_bbr"], stderr_to_stdout: true)
+
+    _ =
+      System.cmd(
+        "sysctl",
+        [
+          "-w",
+          "net.ipv4.tcp_slow_start_after_idle=0",
+          "net.ipv4.tcp_mtu_probing=1"
+        ],
+        stderr_to_stdout: true
+      )
+
+    _ =
+      System.cmd(
+        "sysctl",
+        [
+          "-w",
+          "net.core.default_qdisc=fq",
+          "net.ipv4.tcp_congestion_control=bbr"
+        ],
+        stderr_to_stdout: true
+      )
+
+    case System.cmd("ip", ["-o", "route", "get", "8.8.8.8"], stderr_to_stdout: true) do
+      {out, 0} ->
+        case Regex.run(~r/\bdev\s+(\S+)/, out) do
+          [_, iface] ->
+            _ =
+              System.cmd(
+                "ethtool",
+                ["-K", iface, "rx-udp-gro-forwarding", "on", "rx-gro-list", "off"],
+                stderr_to_stdout: true
+              )
+
+            :ok
 
           _ ->
             :ok

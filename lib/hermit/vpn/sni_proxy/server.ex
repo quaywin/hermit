@@ -82,8 +82,6 @@ defmodule Hermit.Vpn.SniProxy.Server do
       nodelay: true,
       backlog: 1024,
       buffer: 65_536,
-      recbuf: 65_536,
-      sndbuf: 65_536,
       keepalive: true,
       send_timeout: 10_000,
       send_timeout_close: true

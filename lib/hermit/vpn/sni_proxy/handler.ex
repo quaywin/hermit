@@ -113,8 +113,6 @@ defmodule Hermit.Vpn.SniProxy.Handler do
       active: false,
       nodelay: true,
       buffer: 65_536,
-      recbuf: 65_536,
-      sndbuf: 65_536,
       keepalive: true,
       send_timeout: 10_000,
       send_timeout_close: true
@@ -131,8 +129,6 @@ defmodule Hermit.Vpn.SniProxy.Handler do
                 :inet.setopts(
                   client_socket,
                   buffer: 65_536,
-                  recbuf: 65_536,
-                  sndbuf: 65_536,
                   nodelay: true,
                   keepalive: true,
                   send_timeout: 10_000,

@@ -298,4 +298,74 @@ defmodule Hermit.Vpn.PairDiagnostics do
         "Tailscale failed: #{inspect(reason)}"
     end
   end
+
+  @doc """
+  Parses Cloudflare `cdn-cgi/trace` key=value output into exit IP metadata.
+  """
+  def parse_cf_trace(body) when is_binary(body) do
+    data =
+      body
+      |> String.split("\n", trim: true)
+      |> Enum.reduce(%{}, fn line, acc ->
+        case String.split(line, "=", parts: 2) do
+          [k, v] -> Map.put(acc, String.trim(k), String.trim(v))
+          _ -> acc
+        end
+      end)
+
+    case Map.get(data, "ip") do
+      ip when is_binary(ip) and ip != "" ->
+        {:ok,
+         %{
+           ip: ip,
+           loc: Map.get(data, "loc", ""),
+           colo: Map.get(data, "colo", ""),
+           warp: Map.get(data, "warp", "off")
+         }}
+
+      _ ->
+        {:error, :invalid_trace}
+    end
+  end
+
+  def parse_cf_trace(_), do: {:error, :invalid_trace}
+
+  @doc """
+  Queries `https://1.1.1.1/cdn-cgi/trace` inside `hermit_wg_<pair_id>` to inspect
+  the active egress IP, country (`loc`), PoP (`colo`), and WARP status.
+  """
+  def fetch_exit_info(pair_id, outbound_module \\ nil) when is_binary(pair_id) do
+    if mock?() do
+      if outbound_module == Hermit.Vpn.Outbound.Warp do
+        {:ok, %{ip: "104.28.215.164", loc: "US", colo: "SJC", warp: "on"}}
+      else
+        {:ok, %{ip: "198.51.100.10", loc: "US", colo: "SEA", warp: "off"}}
+      end
+    else
+      wg_name = "hermit_wg_#{pair_id}"
+
+      with {:error, _} <- run_cf_trace(wg_name, ["-4"]) do
+        run_cf_trace(wg_name, [])
+      end
+    end
+  end
+
+  defp run_cf_trace(wg_name, extra_curl_args) do
+    args =
+      ["netns", "exec", wg_name, "curl"] ++
+        extra_curl_args ++ ["-s", "--max-time", "4", "https://1.1.1.1/cdn-cgi/trace"]
+
+    case System.cmd("ip", args, stderr_to_stdout: true) do
+      {output, 0} ->
+        case parse_cf_trace(output) do
+          {:ok, info} -> {:ok, info}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :unreachable}
+    end
+  rescue
+    _ -> {:error, :unreachable}
+  end
 end

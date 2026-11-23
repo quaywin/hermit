@@ -229,4 +229,90 @@ defmodule Hermit.Vpn.Outbound.WarpTest do
       refute MapSet.member?(WarpBridge.active_pairs(), pair_nl)
     end
   end
+
+  describe "RFC 7050 prefix extraction and retry fallback rotation" do
+    test "extract_nat64_prefix_from_ipv6/1 extracts /96 prefix from AAAA replies" do
+      assert {:ok, "2602:fc59:b0:64::/96"} =
+               Warp.extract_nat64_prefix_from_ipv6("2602:fc59:b0:64::c000:aa")
+
+      assert {:ok, "2a00:1098:2b::1:0:0/96"} =
+               Warp.extract_nat64_prefix_from_ipv6("[2a00:1098:2b::1:c000:ab]")
+
+      assert {:error, :invalid_ipv6} = Warp.extract_nat64_prefix_from_ipv6("invalid")
+    end
+
+    test "rotates ports and fallback NAT64 prefixes when retry_attempt increases" do
+      pair_id = "test_warp_retry_#{System.unique_integer([:positive])}"
+      dir = Path.expand("storage/#{pair_id}", File.cwd!())
+
+      on_exit(fn ->
+        Warp.cleanup(pair_id, dir)
+        File.rm_rf!(dir)
+      end)
+
+      assert {:ok, "wg0"} =
+               Warp.bootstrap(pair_id, dir, %{"region" => "us_fremont", "retry_attempt" => 0})
+
+      conf0 = File.read!(Path.join(dir, "wg0.conf"))
+      assert conf0 =~ "Endpoint = [2602:fc59:b0:64::a29f:c001]:2408"
+
+      assert {:ok, "wg0"} =
+               Warp.bootstrap(pair_id, dir, %{"region" => "us_fremont", "retry_attempt" => 1})
+
+      conf1 = File.read!(Path.join(dir, "wg0.conf"))
+      assert conf1 =~ "Endpoint = [2602:fc59:11:64::a29f:c005]:500"
+    end
+  end
+
+  describe "WarpBridge handshake parsing & auto-heal helpers" do
+    test "parses wg latest-handshakes output and rebuilds cleanly in mock mode" do
+      assert {:ok, 1_700_000_000} =
+               WarpBridge.parse_latest_handshake(
+                 "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\t1700000000\n"
+               )
+
+      assert :none =
+               WarpBridge.parse_latest_handshake(
+                 "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\t0\n"
+               )
+
+      assert :none = WarpBridge.parse_latest_handshake("")
+      assert length(WarpBridge.endpoints()) == 4
+      assert :ok = WarpBridge.rebuild_if_unhealthy("mock_trigger")
+
+      # Ensure trapped :EXIT messages from finished System.cmd ports do not crash WarpBridge
+      bridge_pid = Process.whereis(WarpBridge)
+      assert is_pid(bridge_pid)
+      dummy_port = Port.open({:spawn, "true"}, [:binary])
+      send(bridge_pid, {:EXIT, dummy_port, :normal})
+      assert Process.alive?(bridge_pid)
+      assert %MapSet{} = WarpBridge.active_pairs()
+    end
+  end
+
+  describe "PairDiagnostics Cloudflare trace parser & exit IP check" do
+    test "parses cf trace output and returns mock exit info by outbound type" do
+      trace = """
+      fl=21f123
+      ip=104.28.215.164
+      colo=SJC
+      loc=US
+      warp=on
+      """
+
+      assert {:ok, %{ip: "104.28.215.164", loc: "US", colo: "SJC", warp: "on"}} =
+               Hermit.Vpn.PairDiagnostics.parse_cf_trace(trace)
+
+      assert {:error, :invalid_trace} = Hermit.Vpn.PairDiagnostics.parse_cf_trace("colo=SJC\n")
+
+      assert {:ok, %{ip: "104.28.215.164", loc: "US", colo: "SJC", warp: "on"}} =
+               Hermit.Vpn.PairDiagnostics.fetch_exit_info("any_pair", Warp)
+
+      assert {:ok, %{ip: "198.51.100.10", loc: "US", colo: "SEA", warp: "off"}} =
+               Hermit.Vpn.PairDiagnostics.fetch_exit_info(
+                 "any_pair",
+                 Hermit.Vpn.Outbound.WireGuard
+               )
+    end
+  end
 end

@@ -171,6 +171,8 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
                 )
             end
 
+            apply_tcp_optimizations(wg_name)
+
             {:ok, "wg0"}
           else
             {:error, reason} ->
@@ -591,6 +593,41 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         {:ok, :skipped}
       end
     end
+  end
+
+  defp apply_tcp_optimizations(wg_name) do
+    _ =
+      System.cmd(
+        "ip",
+        [
+          "netns",
+          "exec",
+          wg_name,
+          "sysctl",
+          "-w",
+          "net.ipv4.tcp_slow_start_after_idle=0",
+          "net.ipv4.tcp_mtu_probing=1"
+        ],
+        stderr_to_stdout: true
+      )
+
+    _ =
+      System.cmd(
+        "ip",
+        [
+          "netns",
+          "exec",
+          wg_name,
+          "sysctl",
+          "-w",
+          "net.ipv4.tcp_congestion_control=bbr"
+        ],
+        stderr_to_stdout: true
+      )
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp add_wireguard_link(host_if_name, nil) do

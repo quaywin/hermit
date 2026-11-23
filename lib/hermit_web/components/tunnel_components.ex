@@ -442,6 +442,8 @@ defmodule HermitWeb.TunnelComponents do
   attr :id, :string, required: true
   attr :pair, :map, required: true
   attr :wg_info, :map, required: true
+  attr :exit_info, :any, default: nil
+  attr :checking_exit_ip, :boolean, default: false
 
   def outbound_gateway_card(assigns) do
     ~H"""
@@ -625,6 +627,45 @@ defmodule HermitWeb.TunnelComponents do
               </code>
             </div>
           <% end %>
+
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-2 mt-2 border-t border-base-300/40">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-base-content/60 font-medium">Exit IP:</span>
+              <%= cond do %>
+                <% @checking_exit_ip -> %>
+                  <span class="text-xs text-base-content/50 italic">Checking...</span>
+                <% match?({:ok, _}, @exit_info) -> %>
+                  <% {:ok, info} = @exit_info %>
+                  <code class="bg-base-200 text-emerald-500 px-1.5 py-0.5 rounded-[4px] text-xs font-mono border border-base-300">
+                    {info.ip}
+                  </code>
+                  <%= if info.loc != "" do %>
+                    <span class="px-1.5 py-0.5 rounded-[4px] text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-mono">
+                      {info.loc}{if info.colo != "", do: " (#{info.colo})", else: ""}
+                    </span>
+                  <% end %>
+                  <%= if info.warp == "on" do %>
+                    <span class="px-1.5 py-0.5 rounded-[4px] text-[10px] font-semibold uppercase bg-[#f6821f]/10 text-[#f6821f] border border-[#f6821f]/30 font-mono">
+                      WARP ON
+                    </span>
+                  <% end %>
+                <% match?({:error, _}, @exit_info) -> %>
+                  <span class="text-xs text-base-content/50 italic">Unavailable</span>
+                <% true -> %>
+                  <span class="text-xs text-base-content/40">-</span>
+              <% end %>
+            </div>
+            <%= if @pair.wg_status == :running and not @checking_exit_ip do %>
+              <button
+                type="button"
+                id="check-exit-ip-btn"
+                phx-click="check_exit_ip"
+                class="btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-xs px-2"
+              >
+                Check IP
+              </button>
+            <% end %>
+          </div>
         </div>
       </div>
     </div>

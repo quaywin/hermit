@@ -9,7 +9,14 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
 
   @bridge_ns "hermit_warp_v6_bridge"
   @bridge_if "wg_warp_br"
-  @warp_ipv4_endpoint "162.159.192.1:2408"
+  @warp_endpoints [
+    "162.159.192.1:2408",
+    "162.159.192.5:500",
+    "162.159.193.10:4500",
+    "162.159.192.1:1701"
+  ]
+  @health_check_interval_ms 60_000
+  @handshake_max_age_sec 180
 
   # --- Client API ---
 
@@ -23,12 +30,28 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
   def bridge_ns, do: @bridge_ns
 
   @doc """
+  Returns the ordered list of Cloudflare WARP IPv4 endpoints used for bridge failover.
+  """
+  def endpoints, do: @warp_endpoints
+
+  @doc """
   Ensures the IPv6 bridge namespace is up and registers `pair_id` as an active consumer.
   """
   def ensure_bridge(pair_id) when is_binary(pair_id) do
     case GenServer.whereis(__MODULE__) do
       nil -> {:error, :warp_bridge_not_running}
       pid -> GenServer.call(pid, {:ensure_bridge, pair_id}, 30_000)
+    end
+  end
+
+  @doc """
+  Rebuilds the shared IPv6 bridge on a rotated endpoint if it is unhealthy,
+  and triggers a WireGuard restart for any other active consumer pairs.
+  """
+  def rebuild_if_unhealthy(triggering_pair_id \\ nil) do
+    case GenServer.whereis(__MODULE__) do
+      nil -> {:error, :warp_bridge_not_running}
+      pid -> GenServer.call(pid, {:rebuild_if_unhealthy, triggering_pair_id}, 30_000)
     end
   end
 
@@ -54,12 +77,36 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
     end
   end
 
+  @doc """
+  Parses `wg show wg0 latest-handshakes` output and returns `{:ok, unix_ts}` or `:none`.
+  """
+  def parse_latest_handshake(output) when is_binary(output) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.find_value(:none, fn line ->
+      case String.split(String.trim(line)) do
+        [_peer, ts_str | _] ->
+          case Integer.parse(ts_str) do
+            {ts, ""} when ts > 0 -> {:ok, ts}
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  def parse_latest_handshake(_), do: :none
+
   # --- GenServer Callbacks ---
 
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    {:ok, %{active_pairs: MapSet.new(), bridge_ready?: false}}
+
+    {:ok,
+     %{active_pairs: MapSet.new(), bridge_ready?: false, endpoint_index: 0, health_timer: nil}}
   end
 
   @impl true
@@ -74,15 +121,53 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
         new_pairs = MapSet.put(state.active_pairs, pair_id)
         {:reply, {:ok, @bridge_ns}, %{state | active_pairs: new_pairs, bridge_ready?: true}}
 
-      bridge_healthy?() ->
+      state.bridge_ready? and bridge_healthy?() ->
         new_pairs = MapSet.put(state.active_pairs, pair_id)
-        {:reply, {:ok, @bridge_ns}, %{state | active_pairs: new_pairs, bridge_ready?: true}}
+        new_state = %{state | active_pairs: new_pairs} |> ensure_health_check_scheduled()
+        {:reply, {:ok, @bridge_ns}, new_state}
 
       true ->
-        case start_bridge() do
-          :ok ->
+        case start_bridge(state.endpoint_index) do
+          {:ok, used_index} ->
             new_pairs = MapSet.put(state.active_pairs, pair_id)
-            {:reply, {:ok, @bridge_ns}, %{state | active_pairs: new_pairs, bridge_ready?: true}}
+
+            new_state =
+              %{state | active_pairs: new_pairs, bridge_ready?: true, endpoint_index: used_index}
+              |> schedule_health_check()
+
+            {:reply, {:ok, @bridge_ns}, new_state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, %{state | bridge_ready?: false}}
+        end
+    end
+  end
+
+  @impl true
+  def handle_call({:rebuild_if_unhealthy, triggering_pair_id}, _from, state) do
+    cond do
+      mock?() ->
+        {:reply, :ok, state}
+
+      bridge_healthy?() ->
+        {:reply, :ok, state}
+
+      true ->
+        Logger.warning(
+          "WARP IPv6 bridge unhealthy; rebuilding with rotated Cloudflare endpoint..."
+        )
+
+        case start_bridge(state.endpoint_index + 1) do
+          {:ok, used_index} ->
+            state.active_pairs
+            |> Enum.reject(&(&1 == triggering_pair_id))
+            |> restart_consumer_pairs_async()
+
+            new_state =
+              %{state | bridge_ready?: true, endpoint_index: used_index}
+              |> schedule_health_check()
+
+            {:reply, :ok, new_state}
 
           {:error, reason} ->
             {:reply, {:error, reason}, %{state | bridge_ready?: false}}
@@ -94,19 +179,59 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
   def handle_call({:release_bridge, pair_id}, _from, state) do
     new_pairs = MapSet.delete(state.active_pairs, pair_id)
 
-    new_ready? =
-      if MapSet.size(new_pairs) == 0 and state.bridge_ready? do
-        if not mock?(), do: teardown_bridge()
-        false
+    {new_ready?, new_timer} =
+      if MapSet.size(new_pairs) == 0 do
+        cancel_health_check(state.health_timer)
+        if state.bridge_ready? and not mock?(), do: teardown_bridge()
+        {false, nil}
       else
-        state.bridge_ready?
+        {state.bridge_ready?, state.health_timer}
       end
 
-    {:reply, :ok, %{state | active_pairs: new_pairs, bridge_ready?: new_ready?}}
+    {:reply, :ok,
+     %{state | active_pairs: new_pairs, bridge_ready?: new_ready?, health_timer: new_timer}}
+  end
+
+  @impl true
+  def handle_info(:health_check, state) do
+    cond do
+      MapSet.size(state.active_pairs) == 0 or mock?() ->
+        {:noreply, %{state | health_timer: nil}}
+
+      bridge_healthy?() ->
+        {:noreply, schedule_health_check(state)}
+
+      true ->
+        Logger.warning("Periodic check detected unhealthy WARP IPv6 bridge; auto-healing...")
+
+        case start_bridge(state.endpoint_index + 1) do
+          {:ok, used_index} ->
+            state.active_pairs
+            |> MapSet.to_list()
+            |> restart_consumer_pairs_async()
+
+            new_state =
+              %{state | bridge_ready?: true, endpoint_index: used_index}
+              |> schedule_health_check()
+
+            {:noreply, new_state}
+
+          {:error, reason} ->
+            Logger.error("Failed to auto-heal WARP IPv6 bridge: #{inspect(reason)}")
+            {:noreply, schedule_health_check(%{state | bridge_ready?: false})}
+        end
+    end
+  end
+
+  @impl true
+  def handle_info({:EXIT, port, _reason}, state) when is_port(port) do
+    {:noreply, state}
   end
 
   @impl true
   def terminate(_reason, state) do
+    cancel_health_check(state.health_timer)
+
     if state.bridge_ready? and not mock?() do
       teardown_bridge()
     end
@@ -116,14 +241,43 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
 
   # --- Internal Bridge Lifecycle ---
 
-  defp start_bridge do
-    teardown_bridge()
-
+  defp start_bridge(start_index) do
     bridge_storage_dir = Path.join(storage_base_path(), "_warp_v6_bridge")
     File.mkdir_p!(bridge_storage_dir)
 
-    with {:ok, account} <- Hermit.Vpn.Outbound.Warp.ensure_account(bridge_storage_dir),
-         stripped_path = write_stripped_config(bridge_storage_dir, account),
+    case Hermit.Vpn.Outbound.Warp.ensure_account(bridge_storage_dir) do
+      {:ok, account} ->
+        count = length(@warp_endpoints)
+        base = rem(max(start_index, 0), count)
+
+        0..(count - 1)
+        |> Enum.reduce_while({:error, :no_endpoints}, fn offset, _acc ->
+          idx = rem(base + offset, count)
+          endpoint = Enum.at(@warp_endpoints, idx)
+
+          case start_bridge_with_endpoint(bridge_storage_dir, account, endpoint) do
+            :ok ->
+              {:halt, {:ok, idx}}
+
+            {:error, reason} ->
+              Logger.warning(
+                "WARP IPv6 bridge failed on endpoint #{endpoint}: #{inspect(reason)}"
+              )
+
+              teardown_bridge()
+              {:cont, {:error, reason}}
+          end
+        end)
+
+      {:error, reason} ->
+        {:error, {:warp_bridge_account_failed, reason}}
+    end
+  end
+
+  defp start_bridge_with_endpoint(bridge_storage_dir, account, endpoint) do
+    teardown_bridge()
+
+    with stripped_path = write_stripped_config(bridge_storage_dir, account, endpoint),
          {:ok, _} <- run_cmd("ip", ["netns", "add", @bridge_ns]),
          {:ok, _} <- run_cmd("ip", ["link", "add", @bridge_if, "type", "wireguard"]),
          {:ok, _} <- run_cmd("ip", ["link", "set", @bridge_if, "netns", @bridge_ns]),
@@ -149,7 +303,7 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
              "link",
              "set",
              "mtu",
-             "1380",
+             "1420",
              "dev",
              "wg0"
            ]),
@@ -232,18 +386,43 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
              "wg0"
            ]),
          :ok <- setup_bridge_dns(),
-         :ok <- verify_bridge_ipv6(3) do
-      Logger.info("WARP IPv6 bridge namespace #{@bridge_ns} is ready.")
+         :ok <- verify_bridge_ipv6(2) do
+      enable_udp_gro()
+      Logger.info("WARP IPv6 bridge namespace #{@bridge_ns} is ready via #{endpoint}.")
       :ok
     else
       {:error, reason} ->
-        Logger.error("Failed to start WARP IPv6 bridge: #{inspect(reason)}")
         teardown_bridge()
         {:error, {:warp_bridge_failed, reason}}
     end
   end
 
-  defp write_stripped_config(storage_dir, account) do
+  defp enable_udp_gro do
+    case run_cmd("ip", [
+           "netns",
+           "exec",
+           @bridge_ns,
+           "ethtool",
+           "-K",
+           "wg0",
+           "rx-udp-gro-forwarding",
+           "on",
+           "rx-gro-list",
+           "off"
+         ]) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "Could not enable UDP GRO forwarding on wg0 in #{@bridge_ns}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp write_stripped_config(storage_dir, account, endpoint) do
     stripped_path = Path.join(storage_dir, "wg_stripped.conf")
 
     content = """
@@ -253,7 +432,7 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
     [Peer]
     PublicKey = #{account["peer_public_key"]}
     AllowedIPs = 0.0.0.0/0, ::/0
-    Endpoint = #{@warp_ipv4_endpoint}
+    Endpoint = #{endpoint}
     PersistentKeepalive = 25
     """
 
@@ -304,12 +483,80 @@ defmodule Hermit.Vpn.Outbound.WarpBridge do
 
   defp bridge_healthy? do
     netns_exists?(@bridge_ns) and
-      case System.cmd("ip", ["netns", "exec", @bridge_ns, "ip", "link", "show", "wg0"],
-             stderr_to_stdout: true
-           ) do
-        {_, 0} -> true
-        _ -> false
-      end
+      match?(
+        {_, 0},
+        System.cmd("ip", ["netns", "exec", @bridge_ns, "ip", "link", "show", "wg0"],
+          stderr_to_stdout: true
+        )
+      ) and
+      (recent_handshake?() or bridge_ping_ok?())
+  end
+
+  defp recent_handshake? do
+    case System.cmd(
+           "ip",
+           ["netns", "exec", @bridge_ns, "wg", "show", "wg0", "latest-handshakes"],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        case parse_latest_handshake(output) do
+          {:ok, ts} -> System.system_time(:second) - ts <= @handshake_max_age_sec
+          :none -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp bridge_ping_ok? do
+    case System.cmd(
+           "ip",
+           [
+             "netns",
+             "exec",
+             @bridge_ns,
+             "ping",
+             "-6",
+             "-c",
+             "1",
+             "-W",
+             "2",
+             "2606:4700:4700::1111"
+           ],
+           stderr_to_stdout: true
+         ) do
+      {_, 0} -> true
+      _ -> false
+    end
+  end
+
+  defp restart_consumer_pairs_async(pair_ids) do
+    Enum.each(pair_ids, fn pair_id ->
+      Task.start(fn ->
+        Logger.info("Restarting WARP NAT64 consumer tunnel #{pair_id} after bridge rebuild")
+        Hermit.Vpn.PairWorker.restart_wg(pair_id)
+      end)
+    end)
+  end
+
+  defp ensure_health_check_scheduled(%{health_timer: nil} = state) do
+    schedule_health_check(state)
+  end
+
+  defp ensure_health_check_scheduled(state), do: state
+
+  defp schedule_health_check(state) do
+    cancel_health_check(state.health_timer)
+    timer = Process.send_after(self(), :health_check, @health_check_interval_ms)
+    %{state | health_timer: timer}
+  end
+
+  defp cancel_health_check(nil), do: :ok
+
+  defp cancel_health_check(timer) do
+    Process.cancel_timer(timer)
+    :ok
   end
 
   defp teardown_bridge do

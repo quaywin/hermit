@@ -395,4 +395,80 @@ defmodule HermitWeb.TunnelDetailLiveTest do
     Application.put_env(:hermit, :docker, original_docker_config)
     GenServer.stop(pid)
   end
+
+  test "renders Cloudflare WARP card with region and live Exit IP check", %{conn: conn} do
+    original_docker_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_docker_config
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    storage_dir = Path.expand("storage/warp_detail_test", File.cwd!())
+    File.rm_rf!(storage_dir)
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_docker_config)
+      Hermit.Vpn.Outbound.WarpBridge.release_bridge("warp_detail_test")
+      File.rm_rf!(storage_dir)
+    end)
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_warp_detail",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-warp-detail"}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_warp_detail",
+        type: "warp",
+        config: %{"region" => "us_fremont"}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: "warp_detail_test",
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      outbound_type: "warp",
+      outbound_config: %{"region" => "us_fremont"},
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    args = %{
+      id: "warp_detail_test",
+      ts_auth_key: "tskey-warp-detail",
+      outbound_type: "warp",
+      outbound_config: %{"region" => "us_fremont"}
+    }
+
+    {:ok, pid} = PairWorker.start_link(args)
+    Process.sleep(300)
+
+    {:ok, view, _html} = live(conn, ~p"/tunnels/warp_detail_test")
+    Process.sleep(100)
+
+    html = render(view)
+    assert html =~ "Cloudflare WARP"
+    assert html =~ "WARP Region:"
+    assert html =~ "US - California (Fremont)"
+    assert html =~ "Exit IP:"
+    assert html =~ "104.28.215.164"
+    assert html =~ "US (SJC)"
+    assert html =~ "WARP ON"
+
+    view |> element("#check-exit-ip-btn") |> render_click()
+    Process.sleep(50)
+    html = render(view)
+    assert html =~ "104.28.215.164"
+
+    GenServer.stop(pid)
+  end
 end

@@ -14,29 +14,56 @@ defmodule Hermit.Vpn.Outbound.Warp do
   @default_peer_public_key "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
   @cf_reg_url "https://api.cloudflareclient.com/v0a2158/reg"
 
+  @warp_fallback_targets [
+    {"162.159.192.1", 2408},
+    {"162.159.192.5", 500},
+    {"162.159.193.10", 4500},
+    {"162.159.192.1", 1701}
+  ]
+
   @regions [
-    %{id: "auto", label: "Auto (Nearest)", nat64_prefix: nil},
+    %{
+      id: "auto",
+      label: "Auto (Nearest)",
+      nat64_prefix: nil,
+      dns64: nil,
+      fallback_prefixes: []
+    },
     %{
       id: "us_fremont",
       label: "US - California (Fremont)",
-      nat64_prefix: "2602:fc59:b0:64::/96"
+      nat64_prefix: "2602:fc59:b0:64::/96",
+      dns64: "2602:fc59:b0:9e::64",
+      fallback_prefixes: ["2602:fc59:11:64::/96"]
     },
     %{
       id: "us_illinois",
       label: "US - Midwest (Illinois)",
-      nat64_prefix: "2602:fc59:11:64::/96"
+      nat64_prefix: "2602:fc59:11:64::/96",
+      dns64: "2602:fc59:11:1::64",
+      fallback_prefixes: ["2602:fc59:b0:64::/96"]
     },
     %{
       id: "nl_amsterdam",
       label: "Netherlands (Amsterdam)",
-      nat64_prefix: "2a00:1098:2b::1:0:0/96"
+      nat64_prefix: "2a00:1098:2b::1:0:0/96",
+      dns64: "2a00:1098:2b::1",
+      fallback_prefixes: []
     },
     %{
       id: "fi_helsinki",
       label: "Finland (Helsinki)",
-      nat64_prefix: "2a01:4f9:c010:3f02:64::/96"
+      nat64_prefix: "2a01:4f9:c010:3f02:64::/96",
+      dns64: "2a01:4f9:c010:3f02::1",
+      fallback_prefixes: []
     },
-    %{id: "custom", label: "Custom NAT64 Prefix", nat64_prefix: nil}
+    %{
+      id: "custom",
+      label: "Custom NAT64 Prefix",
+      nat64_prefix: nil,
+      dns64: nil,
+      fallback_prefixes: []
+    }
   ]
 
   @region_ids Enum.map(@regions, & &1.id)
@@ -138,6 +165,68 @@ defmodule Hermit.Vpn.Outbound.Warp do
       _ -> {:error, "Invalid NAT64 prefix or IPv4 address"}
     end
   end
+
+  @doc """
+  Extracts the `/96` NAT64 prefix by zeroing the bottom 32 bits of an IPv6 address
+  (such as an RFC 7050 `ipv4only.arpa` DNS64 response).
+  """
+  def extract_nat64_prefix_from_ipv6(ipv6_str) when is_binary(ipv6_str) do
+    trimmed =
+      ipv6_str
+      |> String.trim()
+      |> String.trim_leading("[")
+      |> String.trim_trailing("]")
+
+    case :inet.parse_ipv6strict_address(String.to_charlist(trimmed)) do
+      {:ok, {a, b, c, d, e, f, _g, _h}} ->
+        normalized = {a, b, c, d, e, f, 0, 0} |> :inet.ntoa() |> List.to_string()
+        {:ok, "#{normalized}/96"}
+
+      {:error, _} ->
+        {:error, :invalid_ipv6}
+    end
+  end
+
+  def extract_nat64_prefix_from_ipv6(_), do: {:error, :invalid_ipv6}
+
+  @doc """
+  Queries a DNS64 server for `ipv4only.arpa` (RFC 7050) to discover its active NAT64 `/96` prefix.
+  """
+  def discover_nat64_prefix(dns64_ip, netns \\ nil)
+
+  def discover_nat64_prefix(dns64_ip, netns) when is_binary(dns64_ip) and dns64_ip != "" do
+    if mock?() do
+      :error
+    else
+      args = ["+short", "+time=3", "+tries=1", "AAAA", "ipv4only.arpa", "@#{dns64_ip}"]
+
+      cmd_res =
+        if is_binary(netns) and netns != "" do
+          System.cmd("ip", ["netns", "exec", netns, "dig" | args], stderr_to_stdout: true)
+        else
+          System.cmd("dig", args, stderr_to_stdout: true)
+        end
+
+      case cmd_res do
+        {output, 0} ->
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.find_value(:error, fn line ->
+            case extract_nat64_prefix_from_ipv6(line) do
+              {:ok, prefix} -> {:ok, prefix}
+              _ -> nil
+            end
+          end)
+
+        _ ->
+          :error
+      end
+    end
+  rescue
+    _ -> :error
+  end
+
+  def discover_nat64_prefix(_, _), do: :error
 
   @doc """
   Generates an X25519 WireGuard keypair as `{private_key_b64, public_key_b64}`.
@@ -298,42 +387,38 @@ defmodule Hermit.Vpn.Outbound.Warp do
 
   @impl true
   def bootstrap(pair_id, storage_dir, config) do
-    with {:ok, {endpoint, mtu, needs_ipv6?}} <- resolve_endpoint_and_mtu(config),
+    region = get_region(config)
+    attempt = parse_retry_attempt(config)
+    needs_ipv6? = region != "auto"
+
+    with {:ok, bridge_ns} <- maybe_prepare_bridge(pair_id, needs_ipv6?, attempt),
+         {:ok, {endpoint, mtu}} <-
+           resolve_endpoint_and_mtu_or_release(pair_id, config, attempt, bridge_ns),
          :ok <- File.mkdir_p(storage_dir),
-         {:ok, account} <- ensure_account(storage_dir) do
+         {:ok, account} <- ensure_account_or_release(pair_id, storage_dir, bridge_ns) do
       wg_conf = build_wg_config(account, endpoint, mtu)
       wg_config_path = Path.join(storage_dir, "wg0.conf")
       File.write!(wg_config_path, wg_conf)
       File.chmod!(wg_config_path, 0o600)
 
-      wg_opts = %{
-        "wg_config" => wg_conf,
-        "block_ipv6" => Map.get(config, "block_ipv6") || Map.get(config, :block_ipv6) || false,
-        "use_tailscale_dns" =>
-          Map.get(config, "use_tailscale_dns") || Map.get(config, :use_tailscale_dns) || false
-      }
+      wg_opts =
+        %{
+          "wg_config" => wg_conf,
+          "block_ipv6" => Map.get(config, "block_ipv6") || Map.get(config, :block_ipv6) || false,
+          "use_tailscale_dns" =>
+            Map.get(config, "use_tailscale_dns") || Map.get(config, :use_tailscale_dns) || false
+        }
+        |> then(fn opts ->
+          if bridge_ns, do: Map.put(opts, "create_in_netns", bridge_ns), else: opts
+        end)
 
-      if needs_ipv6? and not host_has_ipv6?() do
-        case WarpBridge.ensure_bridge(pair_id) do
-          {:ok, bridge_ns} ->
-            case WireGuard.bootstrap(
-                   pair_id,
-                   storage_dir,
-                   Map.put(wg_opts, "create_in_netns", bridge_ns)
-                 ) do
-              {:ok, iface} ->
-                {:ok, iface}
+      case WireGuard.bootstrap(pair_id, storage_dir, wg_opts) do
+        {:ok, iface} ->
+          {:ok, iface}
 
-              {:error, reason} ->
-                WarpBridge.release_bridge(pair_id)
-                {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-      else
-        WireGuard.bootstrap(pair_id, storage_dir, wg_opts)
+        {:error, reason} ->
+          if bridge_ns, do: WarpBridge.release_bridge(pair_id)
+          {:error, reason}
       end
     end
   end
@@ -353,26 +438,67 @@ defmodule Hermit.Vpn.Outbound.Warp do
 
   # --- Private Helpers ---
 
-  defp resolve_endpoint_and_mtu(config) when is_map(config) do
-    region = Map.get(config, "region") || Map.get(config, :region) || "auto"
+  defp maybe_prepare_bridge(pair_id, true, attempt) do
+    if host_has_ipv6?() do
+      {:ok, nil}
+    else
+      if attempt > 0 do
+        _ = WarpBridge.rebuild_if_unhealthy(pair_id)
+      end
+
+      WarpBridge.ensure_bridge(pair_id)
+    end
+  end
+
+  defp maybe_prepare_bridge(_pair_id, false, _attempt), do: {:ok, nil}
+
+  defp resolve_endpoint_and_mtu_or_release(pair_id, config, attempt, bridge_ns) do
+    case resolve_endpoint_and_mtu(config, attempt, bridge_ns) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, _} = err ->
+        if bridge_ns, do: WarpBridge.release_bridge(pair_id)
+        err
+    end
+  end
+
+  defp ensure_account_or_release(pair_id, storage_dir, bridge_ns) do
+    case ensure_account(storage_dir) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, _} = err ->
+        if bridge_ns, do: WarpBridge.release_bridge(pair_id)
+        err
+    end
+  end
+
+  defp resolve_endpoint_and_mtu(config, attempt, bridge_ns) when is_map(config) do
+    region = get_region(config)
+
+    {ipv4, port} =
+      Enum.at(@warp_fallback_targets, rem(max(attempt, 0), length(@warp_fallback_targets)))
 
     cond do
       region == "auto" ->
-        {:ok, {"#{@default_warp_ipv4}:#{@default_warp_port}", "1380", false}}
+        {:ok, {"#{ipv4}:#{port}", "1380"}}
 
       region == "custom" ->
         prefix =
           Map.get(config, "custom_nat64_prefix") || Map.get(config, :custom_nat64_prefix)
 
-        with {:ok, endpoint} <- synthesize_nat64_endpoint(prefix) do
-          {:ok, {endpoint, "1280", true}}
+        with {:ok, endpoint} <- synthesize_nat64_endpoint(prefix, ipv4, port) do
+          {:ok, {endpoint, "1280"}}
         end
 
       true ->
         case Enum.find(@regions, &(&1.id == region)) do
-          %{nat64_prefix: prefix} when is_binary(prefix) ->
-            with {:ok, endpoint} <- synthesize_nat64_endpoint(prefix) do
-              {:ok, {endpoint, "1280", true}}
+          %{nat64_prefix: primary_prefix} = entry when is_binary(primary_prefix) ->
+            chosen_prefix = select_region_prefix(entry, attempt, bridge_ns)
+
+            with {:ok, endpoint} <- synthesize_nat64_endpoint(chosen_prefix, ipv4, port) do
+              {:ok, {endpoint, "1280"}}
             end
 
           _ ->
@@ -381,7 +507,49 @@ defmodule Hermit.Vpn.Outbound.Warp do
     end
   end
 
-  defp resolve_endpoint_and_mtu(_), do: resolve_endpoint_and_mtu(%{})
+  defp resolve_endpoint_and_mtu(_, attempt, bridge_ns) do
+    resolve_endpoint_and_mtu(%{}, attempt, bridge_ns)
+  end
+
+  defp select_region_prefix(%{nat64_prefix: primary}, 0, _bridge_ns), do: primary
+
+  defp select_region_prefix(
+         %{nat64_prefix: primary, dns64: dns64, fallback_prefixes: fallbacks},
+         attempt,
+         bridge_ns
+       ) do
+    discovered =
+      if attempt >= 2 do
+        case discover_nat64_prefix(dns64, bridge_ns) do
+          {:ok, prefix} -> prefix
+          _ -> nil
+        end
+      else
+        nil
+      end
+
+    if discovered do
+      discovered
+    else
+      candidates = [primary | fallbacks]
+      Enum.at(candidates, rem(attempt, length(candidates)))
+    end
+  end
+
+  defp get_region(config) when is_map(config) do
+    Map.get(config, "region") || Map.get(config, :region) || "auto"
+  end
+
+  defp get_region(_), do: "auto"
+
+  defp parse_retry_attempt(config) when is_map(config) do
+    case Map.get(config, "retry_attempt") || Map.get(config, :retry_attempt) do
+      val when is_integer(val) and val >= 0 -> val
+      _ -> 0
+    end
+  end
+
+  defp parse_retry_attempt(_), do: 0
 
   defp register_or_mock_account(opts) do
     if mock?() and not Keyword.has_key?(opts, :post_fn) do

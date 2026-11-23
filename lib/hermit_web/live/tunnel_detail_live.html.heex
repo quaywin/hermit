@@ -91,7 +91,13 @@
         <% end %>
 
         <!-- Outbound Gateway Status Card -->
-        <.outbound_gateway_card id={@id} pair={@pair} wg_info={@wg_info} />
+        <.outbound_gateway_card
+          id={@id}
+          pair={@pair}
+          wg_info={@wg_info}
+          exit_info={@exit_info}
+          checking_exit_ip={@checking_exit_ip}
+        />
       </div>
 
       <!-- Real-time Metrics Info Dashboard -->

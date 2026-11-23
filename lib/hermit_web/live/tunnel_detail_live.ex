@@ -29,6 +29,10 @@ defmodule HermitWeb.TunnelDetailLive do
          |> push_navigate(to: ~p"/")}
 
       pair ->
+        if connected?(socket) and pair.wg_status == :running do
+          send(self(), :check_exit_ip)
+        end
+
         {:ok,
          socket
          |> assign(id: id)
@@ -36,6 +40,8 @@ defmodule HermitWeb.TunnelDetailLive do
          |> assign(show_edit_modal: false)
          |> assign(form: nil)
          |> assign(active_tab: :overview)
+         |> assign(exit_info: nil)
+         |> assign(checking_exit_ip: false)
          |> assign_pair(pair)}
     end
   end
@@ -377,15 +383,62 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   @impl true
+  def handle_event("check_exit_ip", _params, socket) do
+    pair = socket.assigns[:pair]
+
+    if (pair && pair.wg_status == :running) and not socket.assigns.checking_exit_ip do
+      {:noreply, start_exit_ip_check(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info(:check_exit_ip, socket) do
+    pair = socket.assigns[:pair]
+
+    if (pair && pair.wg_status == :running) and not socket.assigns.checking_exit_ip do
+      {:noreply, start_exit_ip_check(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:exit_ip_result, id, res}, socket) do
+    if id == socket.assigns.id do
+      {:noreply, assign(socket, checking_exit_ip: false, exit_info: res)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
   def handle_info({:vpn_pair_updated, pair}, socket) do
     if pair.id == socket.assigns.id do
       current_use_dns = socket.assigns.use_tailscale_dns
+      prev_wg_status = socket.assigns[:pair] && socket.assigns.pair.wg_status
 
-      {:noreply,
-       socket
-       |> assign_pair(pair)
-       |> assign(use_tailscale_dns: current_use_dns)
-       |> assign(uptime: format_uptime(pair.started_at))}
+      socket =
+        socket
+        |> assign_pair(pair)
+        |> assign(use_tailscale_dns: current_use_dns)
+        |> assign(uptime: format_uptime(pair.started_at))
+
+      socket =
+        cond do
+          pair.wg_status == :running and prev_wg_status != :running ->
+            send(self(), :check_exit_ip)
+            socket
+
+          pair.wg_status != :running ->
+            assign(socket, exit_info: nil, checking_exit_ip: false)
+
+          true ->
+            socket
+        end
+
+      {:noreply, socket}
     else
       {:noreply, socket}
     end
@@ -565,6 +618,19 @@ defmodule HermitWeb.TunnelDetailLive do
     else
       nil
     end
+  end
+
+  defp start_exit_ip_check(socket) do
+    parent = self()
+    id = socket.assigns.id
+    outbound_module = socket.assigns.pair.outbound_module
+
+    Task.start(fn ->
+      res = Hermit.Vpn.PairDiagnostics.fetch_exit_info(id, outbound_module)
+      send(parent, {:exit_ip_result, id, res})
+    end)
+
+    assign(socket, checking_exit_ip: true)
   end
 
   defp stringify_keys(val), do: Hermit.stringify_keys(val)

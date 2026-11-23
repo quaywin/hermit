@@ -299,10 +299,14 @@ defmodule Hermit.Vpn.PairWorker do
           {:noreply, broadcast_update(error_state)}
 
         :ok ->
+          outbound_cfg =
+            (state.outbound_config || %{})
+            |> Map.put("retry_attempt", state.wg_retry_count)
+
           case state.outbound_module.bootstrap(
                  state.id,
                  state.storage_dir,
-                 state.outbound_config || %{}
+                 outbound_cfg
                ) do
             {:ok, iface} ->
               updated_state =
@@ -310,7 +314,6 @@ defmodule Hermit.Vpn.PairWorker do
                   state
                   | wg_status: :starting,
                     wg_error_reason: nil,
-                    wg_retry_count: 0,
                     outbound_if: iface
                 }
                 |> broadcast_update()
@@ -684,7 +687,7 @@ defmodule Hermit.Vpn.PairWorker do
           when bytes_received > 0 or state.outbound_module == Hermit.Vpn.Outbound.Local ->
             state =
               if state.wg_status != :running do
-                %{state | wg_status: :running, wg_error_reason: nil}
+                %{state | wg_status: :running, wg_error_reason: nil, wg_retry_count: 0}
                 |> sync_smart_routes_and_relayer()
                 |> broadcast_update()
               else
@@ -1136,6 +1139,10 @@ defmodule Hermit.Vpn.PairWorker do
       }
       |> broadcast_update()
       |> schedule_metrics_poll()
+
+    if state.outbound_module == Hermit.Vpn.Outbound.Warp do
+      maybe_schedule_wg_recovery(error_state)
+    end
 
     {:noreply, error_state}
   end

@@ -786,6 +786,8 @@ defmodule Hermit.Vpn.DnsWorker do
       when is_list(resolvers) and is_binary(dns_ip) and dns_ip != "" do
     existing_ips =
       Enum.map(resolvers, fn
+        %{"address" => addr} -> addr
+        %{address: addr} -> addr
         %{"addr" => addr} -> addr
         %{addr: addr} -> addr
         addr when is_binary(addr) -> addr
@@ -807,6 +809,8 @@ defmodule Hermit.Vpn.DnsWorker do
   def remove_resolver(resolvers, dns_ip) when is_list(resolvers) and is_binary(dns_ip) do
     resolvers
     |> Enum.map(fn
+      %{"address" => addr} -> addr
+      %{address: addr} -> addr
       %{"addr" => addr} -> addr
       %{addr: addr} -> addr
       addr when is_binary(addr) -> addr
@@ -816,6 +820,139 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   def remove_resolver(resolvers, _), do: resolvers
+
+  @doc """
+  Upserts a resolver object in `/dns/configuration` `nameservers` with `useWithExitNode: true`,
+  preserving all other nameservers and their settings.
+  """
+  def upsert_config_resolver(resolvers, dns_ip)
+      when is_list(resolvers) and is_binary(dns_ip) and dns_ip != "" do
+    normalized =
+      Enum.reduce(resolvers, [], fn item, acc ->
+        case normalize_config_resolver(item) do
+          nil -> acc
+          entry -> [entry | acc]
+        end
+      end)
+      |> Enum.reverse()
+
+    {updated, found?} =
+      Enum.map_reduce(normalized, false, fn entry, seen ->
+        if entry["address"] == dns_ip do
+          {Map.put(entry, "useWithExitNode", true), true}
+        else
+          {entry, seen}
+        end
+      end)
+
+    if found? do
+      updated
+    else
+      updated ++ [%{"address" => dns_ip, "useWithExitNode" => true}]
+    end
+  end
+
+  def upsert_config_resolver(resolvers, _), do: if(is_list(resolvers), do: resolvers, else: [])
+
+  @doc """
+  Removes a resolver entry matching `dns_ip` from `/dns/configuration` `nameservers`
+  while preserving all other resolvers and their `useWithExitNode` flags.
+  """
+  def remove_config_resolver(resolvers, nil), do: if(is_list(resolvers), do: resolvers, else: [])
+
+  def remove_config_resolver(resolvers, dns_ip)
+      when is_list(resolvers) and is_binary(dns_ip) do
+    resolvers
+    |> Enum.map(&normalize_config_resolver/1)
+    |> Enum.reject(fn entry -> is_nil(entry) or entry["address"] == dns_ip end)
+  end
+
+  def remove_config_resolver(resolvers, _), do: if(is_list(resolvers), do: resolvers, else: [])
+
+  @doc """
+  Builds an updated `/dns/configuration` payload that registers `dns_ip` with
+  `useWithExitNode: true` and enables `overrideLocalDNS: true`, preserving all
+  other fields (such as `splitDNS`, `searchPaths`, and `magicDNS`).
+  """
+  def build_updated_dns_configuration(current_config, dns_ip)
+      when is_map(current_config) and is_binary(dns_ip) and dns_ip != "" do
+    existing_nameservers =
+      case Map.get(current_config, "nameservers") do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    existing_prefs =
+      case Map.get(current_config, "preferences") do
+        prefs when is_map(prefs) -> prefs
+        _ -> %{}
+      end
+
+    current_config
+    |> Map.put("nameservers", upsert_config_resolver(existing_nameservers, dns_ip))
+    |> Map.put("preferences", Map.put(existing_prefs, "overrideLocalDNS", true))
+  end
+
+  @doc """
+  Builds an updated `/dns/configuration` payload that removes `target_ip` from
+  `nameservers` and disables `overrideLocalDNS` when no nameservers remain.
+  """
+  def build_cleared_dns_configuration(current_config, target_ip)
+      when is_map(current_config) and is_binary(target_ip) do
+    existing_nameservers =
+      case Map.get(current_config, "nameservers") do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    remaining = remove_config_resolver(existing_nameservers, target_ip)
+
+    existing_prefs =
+      case Map.get(current_config, "preferences") do
+        prefs when is_map(prefs) -> prefs
+        _ -> %{}
+      end
+
+    updated_prefs =
+      if Enum.empty?(remaining) do
+        Map.put(existing_prefs, "overrideLocalDNS", false)
+      else
+        existing_prefs
+      end
+
+    current_config
+    |> Map.put("nameservers", remaining)
+    |> Map.put("preferences", updated_prefs)
+  end
+
+  defp normalize_config_resolver(%{"address" => addr} = map)
+       when is_binary(addr) and addr != "" do
+    map
+  end
+
+  defp normalize_config_resolver(%{address: addr} = map) when is_binary(addr) and addr != "" do
+    map
+    |> Map.new(fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp normalize_config_resolver(%{"addr" => addr} = map) when is_binary(addr) and addr != "" do
+    map
+    |> Map.delete("addr")
+    |> Map.put("address", addr)
+  end
+
+  defp normalize_config_resolver(%{addr: addr} = map) when is_binary(addr) and addr != "" do
+    map
+    |> Map.new(fn {k, v} -> {to_string(k), v} end)
+    |> Map.delete("addr")
+    |> Map.put("address", addr)
+  end
+
+  defp normalize_config_resolver(addr) when is_binary(addr) and addr != "" do
+    %{"address" => addr}
+  end
+
+  defp normalize_config_resolver(_), do: nil
 
   def update_tailscale_dns_config(_dns_ip, profile, _dns_config) when is_nil(profile) do
     {:ok, :noop}
@@ -835,51 +972,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
         with {:ok, token} <- Hermit.Vpn.Inbound.Tailscale.get_api_token(auth_key),
              true <- is_binary(dns_ip) and dns_ip != "" do
-          Logger.info(
-            "Registering #{dns_ip} into Tailscale global nameservers (tailnet: #{tailnet})..."
-          )
-
-          dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
-          headers = [{"authorization", "Bearer #{token}"}]
-
-          current_resolvers =
-            case Req.get(dns_url, headers: headers) do
-              {:ok, %{status: 200, body: %{"dns" => resolvers}}} when is_list(resolvers) ->
-                resolvers
-
-              _ ->
-                []
-            end
-
-          new_resolvers = append_resolver(current_resolvers, dns_ip)
-          payload = %{"dns" => new_resolvers}
-
-          case Req.post(dns_url, json: payload, headers: headers) do
-            {:ok, %{status: 200}} ->
-              prefs_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
-              _ = Req.post(prefs_url, json: %{"overrideLocalDNS" => true}, headers: headers)
-
-              Logger.info("Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale.")
-              {:ok, :updated}
-
-            {:ok, %{status: 403, body: body}} ->
-              Logger.error(
-                "Failed to update Tailscale nameservers (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
-              )
-
-              {:error, {:http_error, 403, body}}
-
-            {:ok, %{status: status, body: body}} ->
-              Logger.error(
-                "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
-              )
-
-              {:error, {:http_error, status, body}}
-
-            {:error, reason} ->
-              Logger.error("Failed calling Tailscale DNS nameservers API: #{inspect(reason)}")
-              {:error, reason}
-          end
+          sync_tailscale_dns_via_api(dns_ip, tailnet, token)
         else
           {:error, reason} ->
             Logger.warning("Cannot update Tailscale DNS config: #{inspect(reason)}")
@@ -889,6 +982,107 @@ defmodule Hermit.Vpn.DnsWorker do
             Logger.warning("Cannot update Tailscale DNS config: DNS IP is empty or invalid")
             {:error, :empty_dns_ip}
         end
+    end
+  end
+
+  @doc false
+  def sync_tailscale_dns_via_api(dns_ip, tailnet, token, req_opts \\ []) do
+    Logger.info(
+      "Registering #{dns_ip} into Tailscale global nameservers with useWithExitNode=true (tailnet: #{tailnet})..."
+    )
+
+    headers = [{"authorization", "Bearer #{token}"}]
+    config_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/configuration"
+
+    case Req.get(config_url, Keyword.merge([headers: headers], req_opts)) do
+      {:ok, %{status: 200, body: current_config}} when is_map(current_config) ->
+        updated_config = build_updated_dns_configuration(current_config, dns_ip)
+
+        case Req.post(
+               config_url,
+               Keyword.merge([json: updated_config, headers: headers], req_opts)
+             ) do
+          {:ok, %{status: 200}} ->
+            Logger.info(
+              "Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale via /dns/configuration (useWithExitNode: true)."
+            )
+
+            {:ok, :updated}
+
+          {:ok, %{status: 403, body: body}} ->
+            Logger.error(
+              "Failed to update Tailscale DNS configuration (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+            )
+
+            {:error, {:http_error, 403, body}}
+
+          other ->
+            Logger.warning(
+              "Tailscale /dns/configuration POST returned #{inspect(other)}; falling back to legacy /dns/nameservers API."
+            )
+
+            sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts)
+        end
+
+      {:ok, %{status: 403, body: body}} ->
+        Logger.error(
+          "Failed to read Tailscale DNS configuration (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+        )
+
+        {:error, {:http_error, 403, body}}
+
+      other ->
+        Logger.warning(
+          "Tailscale /dns/configuration GET unavailable (#{inspect(other)}); falling back to legacy /dns/nameservers API."
+        )
+
+        sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts)
+    end
+  end
+
+  defp sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts) do
+    dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
+
+    current_resolvers =
+      case Req.get(dns_url, Keyword.merge([headers: headers], req_opts)) do
+        {:ok, %{status: 200, body: %{"dns" => resolvers}}} when is_list(resolvers) ->
+          resolvers
+
+        _ ->
+          []
+      end
+
+    new_resolvers = append_resolver(current_resolvers, dns_ip)
+    payload = %{"dns" => new_resolvers}
+
+    case Req.post(dns_url, Keyword.merge([json: payload, headers: headers], req_opts)) do
+      {:ok, %{status: 200}} ->
+        prefs_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
+
+        _ =
+          Req.post(
+            prefs_url,
+            Keyword.merge([json: %{"overrideLocalDNS" => true}, headers: headers], req_opts)
+          )
+
+        Logger.info("Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale.")
+        {:ok, :updated}
+
+      {:ok, %{status: 403, body: body}} ->
+        Logger.error(
+          "Failed to update Tailscale nameservers (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+        )
+
+        {:error, {:http_error, 403, body}}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}")
+
+        {:error, {:http_error, status, body}}
+
+      {:error, reason} ->
+        Logger.error("Failed calling Tailscale DNS nameservers API: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -922,59 +1116,7 @@ defmodule Hermit.Vpn.DnsWorker do
             target_ip = dns_ip || resolve_endpoint_tailscale_ip(dns_config, token, tailnet)
 
             if target_ip && target_ip != "" do
-              Logger.info(
-                "Deregistering #{target_ip} from Tailscale global nameservers (tailnet: #{tailnet})..."
-              )
-
-              dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
-              headers = [{"authorization", "Bearer #{token}"}]
-
-              current_resolvers =
-                case Req.get(dns_url, headers: headers) do
-                  {:ok, %{status: 200, body: %{"dns" => resolvers}}} when is_list(resolvers) ->
-                    resolvers
-
-                  _ ->
-                    []
-                end
-
-              remaining_resolvers = remove_resolver(current_resolvers, target_ip)
-              payload = %{"dns" => remaining_resolvers}
-
-              case Req.post(dns_url, json: payload, headers: headers) do
-                {:ok, %{status: 200}} ->
-                  if Enum.empty?(remaining_resolvers) do
-                    prefs_url =
-                      "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
-
-                    _ =
-                      Req.post(prefs_url,
-                        json: %{"overrideLocalDNS" => false},
-                        headers: headers
-                      )
-                  end
-
-                  Logger.info("Successfully deregistered DNS Node (#{target_ip}) from Tailscale.")
-                  {:ok, :cleared}
-
-                {:ok, %{status: 403, body: body}} ->
-                  Logger.error(
-                    "Failed to update Tailscale nameservers (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
-                  )
-
-                  {:error, {:http_error, 403, body}}
-
-                {:ok, %{status: status, body: body}} ->
-                  Logger.error(
-                    "Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}"
-                  )
-
-                  {:error, {:http_error, status, body}}
-
-                {:error, reason} ->
-                  Logger.error("Failed calling Tailscale DNS nameservers API: #{inspect(reason)}")
-                  {:error, reason}
-              end
+              clear_tailscale_dns_via_api(target_ip, tailnet, token)
             else
               Logger.info(
                 "No active Tailscale IP resolved for endpoint, skipping DNS deregistration."
@@ -987,6 +1129,109 @@ defmodule Hermit.Vpn.DnsWorker do
             Logger.warning("Cannot clear Tailscale DNS config: #{inspect(reason)}")
             {:ok, :noop}
         end
+    end
+  end
+
+  @doc false
+  def clear_tailscale_dns_via_api(target_ip, tailnet, token, req_opts \\ []) do
+    Logger.info(
+      "Deregistering #{target_ip} from Tailscale global nameservers (tailnet: #{tailnet})..."
+    )
+
+    headers = [{"authorization", "Bearer #{token}"}]
+    config_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/configuration"
+
+    case Req.get(config_url, Keyword.merge([headers: headers], req_opts)) do
+      {:ok, %{status: 200, body: current_config}} when is_map(current_config) ->
+        updated_config = build_cleared_dns_configuration(current_config, target_ip)
+
+        case Req.post(
+               config_url,
+               Keyword.merge([json: updated_config, headers: headers], req_opts)
+             ) do
+          {:ok, %{status: 200}} ->
+            Logger.info(
+              "Successfully deregistered DNS Node (#{target_ip}) from Tailscale via /dns/configuration."
+            )
+
+            {:ok, :cleared}
+
+          {:ok, %{status: 403, body: body}} ->
+            Logger.error(
+              "Failed to update Tailscale DNS configuration (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+            )
+
+            {:error, {:http_error, 403, body}}
+
+          other ->
+            Logger.warning(
+              "Tailscale /dns/configuration POST returned #{inspect(other)}; falling back to legacy /dns/nameservers API."
+            )
+
+            clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts)
+        end
+
+      {:ok, %{status: 403, body: body}} ->
+        Logger.error(
+          "Failed to read Tailscale DNS configuration (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+        )
+
+        {:error, {:http_error, 403, body}}
+
+      other ->
+        Logger.warning(
+          "Tailscale /dns/configuration GET unavailable (#{inspect(other)}); falling back to legacy /dns/nameservers API."
+        )
+
+        clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts)
+    end
+  end
+
+  defp clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts) do
+    dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
+
+    current_resolvers =
+      case Req.get(dns_url, Keyword.merge([headers: headers], req_opts)) do
+        {:ok, %{status: 200, body: %{"dns" => resolvers}}} when is_list(resolvers) ->
+          resolvers
+
+        _ ->
+          []
+      end
+
+    remaining_resolvers = remove_resolver(current_resolvers, target_ip)
+    payload = %{"dns" => remaining_resolvers}
+
+    case Req.post(dns_url, Keyword.merge([json: payload, headers: headers], req_opts)) do
+      {:ok, %{status: 200}} ->
+        if Enum.empty?(remaining_resolvers) do
+          prefs_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
+
+          _ =
+            Req.post(
+              prefs_url,
+              Keyword.merge([json: %{"overrideLocalDNS" => false}, headers: headers], req_opts)
+            )
+        end
+
+        Logger.info("Successfully deregistered DNS Node (#{target_ip}) from Tailscale.")
+        {:ok, :cleared}
+
+      {:ok, %{status: 403, body: body}} ->
+        Logger.error(
+          "Failed to update Tailscale nameservers (HTTP 403 Forbidden): #{inspect(body)}. Please ensure your Tailscale OAuth Client has the 'dns' scope (read/write) enabled in Tailscale Admin Console."
+        )
+
+        {:error, {:http_error, 403, body}}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("Failed to update Tailscale nameservers (HTTP #{status}): #{inspect(body)}")
+
+        {:error, {:http_error, status, body}}
+
+      {:error, reason} ->
+        Logger.error("Failed calling Tailscale DNS nameservers API: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 

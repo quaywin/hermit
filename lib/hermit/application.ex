@@ -39,6 +39,7 @@ defmodule Hermit.Application do
              {Registry, keys: :unique, name: Hermit.Vpn.Registry},
              {Hermit.Vpn.SubnetPool, []},
              {Hermit.Vpn.PortAllocator, []},
+             {Hermit.Vpn.Outbound.WarpBridge, []},
              {Hermit.Vpn.DynamicSupervisor, []},
              {Hermit.Vpn.DnsSupervisor, []},
              {Task.Supervisor, name: Hermit.Vpn.SniProxy.TaskSupervisor},

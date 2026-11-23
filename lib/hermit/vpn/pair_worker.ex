@@ -242,7 +242,12 @@ defmodule Hermit.Vpn.PairWorker do
     # Allow OS kernel to clean up netns and interfaces
     Process.sleep(1000)
 
-    updated_state = broadcast_update(%{state | ts_port: nil})
+    updated_state =
+      state
+      |> reload_outbound_from_db()
+      |> Map.put(:ts_port, nil)
+      |> broadcast_update()
+
     {:noreply, updated_state, {:continue, :bootstrap}}
   end
 
@@ -254,7 +259,12 @@ defmodule Hermit.Vpn.PairWorker do
     # Allow OS kernel to clean up netns and interfaces
     Process.sleep(1000)
 
-    updated_state = broadcast_update(%{state | ts_port: nil})
+    updated_state =
+      state
+      |> reload_outbound_from_db()
+      |> Map.put(:ts_port, nil)
+      |> broadcast_update()
+
     {:noreply, updated_state, {:continue, :bootstrap_wg}}
   end
 
@@ -266,9 +276,11 @@ defmodule Hermit.Vpn.PairWorker do
       File.mkdir_p!(state.storage_dir)
       File.mkdir_p!(Path.join(state.storage_dir, "tailscale"))
 
-      resolved_content = PairDiagnostics.resolve_endpoint_in_config(state.wg_config_content)
-      File.write!(state.wg_config_path, resolved_content)
-      File.chmod!(state.wg_config_path, 0o600)
+      if is_binary(state.wg_config_content) and String.trim(state.wg_config_content) != "" do
+        resolved_content = PairDiagnostics.resolve_endpoint_in_config(state.wg_config_content)
+        File.write!(state.wg_config_path, resolved_content)
+        File.chmod!(state.wg_config_path, 0o600)
+      end
 
       conflict_check =
         case Hermit.Repo.get(Hermit.Vpn.VpnPair, state.id) do
@@ -1014,9 +1026,12 @@ defmodule Hermit.Vpn.PairWorker do
 
     try do
       File.mkdir_p!(updated_state.storage_dir)
-      resolved_content = PairDiagnostics.resolve_endpoint_in_config(new_wg_config)
-      File.write!(updated_state.wg_config_path, resolved_content)
-      File.chmod!(updated_state.wg_config_path, 0o600)
+
+      if is_binary(new_wg_config) and String.trim(new_wg_config) != "" do
+        resolved_content = PairDiagnostics.resolve_endpoint_in_config(new_wg_config)
+        File.write!(updated_state.wg_config_path, resolved_content)
+        File.chmod!(updated_state.wg_config_path, 0o600)
+      end
 
       updated_state = broadcast_update(updated_state)
 
@@ -1320,5 +1335,50 @@ defmodule Hermit.Vpn.PairWorker do
     e ->
       Logger.warning("Error in sync_smart_routes_and_relayer for #{state.id}: #{inspect(e)}")
       state
+  end
+
+  defp reload_outbound_from_db(state) do
+    case Hermit.Repo.get(Hermit.Vpn.VpnPair, state.id) do
+      nil ->
+        state
+
+      pair ->
+        pair = Hermit.Repo.preload(pair, [:outbound_profile])
+
+        {outbound_type, outbound_config} =
+          cond do
+            pair.outbound_config && map_size(pair.outbound_config) > 0 ->
+              profile_cfg = (pair.outbound_profile && pair.outbound_profile.config) || %{}
+              merged = Map.merge(profile_cfg, pair.outbound_config)
+
+              {pair.outbound_type || (pair.outbound_profile && pair.outbound_profile.type) ||
+                 "wireguard", merged}
+
+            pair.outbound_profile ->
+              {pair.outbound_profile.type, pair.outbound_profile.config || %{}}
+
+            true ->
+              {"wireguard", %{}}
+          end
+
+        wg_config_content =
+          if outbound_type == "wireguard" do
+            Map.get(outbound_config, "wg_config") ||
+              Map.get(outbound_config, :wg_config) ||
+              state.wg_config_content
+          else
+            nil
+          end
+
+        %{
+          state
+          | outbound_profile_id: pair.outbound_profile_id || state.outbound_profile_id,
+            outbound_module: Pairs.outbound_module_for(outbound_type),
+            outbound_config: outbound_config,
+            wg_config_content: wg_config_content
+        }
+    end
+  rescue
+    _ -> state
   end
 end

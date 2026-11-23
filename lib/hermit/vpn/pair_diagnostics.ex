@@ -60,7 +60,20 @@ defmodule Hermit.Vpn.PairDiagnostics do
   end
 
   def diagnose_wg_handshake_failure(state) do
-    config_content = state.wg_config_content || ""
+    config_content =
+      case state.wg_config_content do
+        content when is_binary(content) and content != "" ->
+          content
+
+        _ ->
+          path = Map.get(state, :wg_config_path)
+
+          if is_binary(path) and File.exists?(path) do
+            File.read!(path)
+          else
+            ""
+          end
+      end
 
     endpoint_host =
       case Regex.run(~r/^\s*Endpoint\s*=\s*(\[[^\]]+\]|[^:\s]+)\s*:\s*\d+/mi, config_content) do
@@ -89,10 +102,25 @@ defmodule Hermit.Vpn.PairDiagnostics do
         nil
       end
 
+    bare_endpoint_ip =
+      if is_binary(endpoint_ip) do
+        endpoint_ip
+        |> String.trim_leading("[")
+        |> String.trim_trailing("]")
+      else
+        nil
+      end
+
+    skip_host_ping? =
+      Map.get(state, :outbound_module) == Hermit.Vpn.Outbound.Warp and
+        is_binary(bare_endpoint_ip) and String.contains?(bare_endpoint_ip, ":")
+
     ping_ok =
-      if endpoint_ip && not mock?() do
+      if bare_endpoint_ip && not mock?() && not skip_host_ping? do
         try do
-          case System.cmd("ping", ["-c", "1", "-W", "1", endpoint_ip], stderr_to_stdout: true) do
+          case System.cmd("ping", ["-c", "1", "-W", "1", bare_endpoint_ip],
+                 stderr_to_stdout: true
+               ) do
             {_, 0} -> true
             _ -> false
           end

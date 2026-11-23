@@ -163,7 +163,10 @@ defmodule HermitWeb.OutboundLive do
     profile_keys = [
       "wg_config",
       "local_ip",
-      "host_ip"
+      "host_ip",
+      "region",
+      "custom_nat64_prefix",
+      "block_ipv6"
     ]
 
     Enum.each(pairs, fn pair ->

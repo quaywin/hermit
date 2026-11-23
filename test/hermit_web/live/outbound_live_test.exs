@@ -119,4 +119,154 @@ defmodule HermitWeb.OutboundLiveTest do
     assert html =~ "Outbound Profile deleted"
     refute html =~ "Mullvad WG US Updated"
   end
+
+  test "creates, validates custom prefix, edits, and deletes a Cloudflare WARP profile", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/outbounds")
+
+    view |> element("button[phx-click=open_create_modal]") |> render_click()
+
+    # Switch type to warp
+    html =
+      view
+      |> form("#outbound-profile-form", %{
+        "outbound_profile" => %{
+          "name" => "WARP US",
+          "type" => "warp"
+        }
+      })
+      |> render_change()
+
+    assert html =~ "US - California (Fremont)"
+
+    # Switch region to custom so custom_nat64_prefix input renders
+    view
+    |> form("#outbound-profile-form", %{
+      "outbound_profile" => %{
+        "name" => "WARP US",
+        "type" => "warp",
+        "config" => %{"region" => "custom"}
+      }
+    })
+    |> render_change()
+
+    # Validate invalid custom prefix
+    html =
+      view
+      |> form("#outbound-profile-form", %{
+        "outbound_profile" => %{
+          "name" => "WARP US",
+          "type" => "warp",
+          "config" => %{
+            "region" => "custom",
+            "custom_nat64_prefix" => "bad-prefix"
+          }
+        }
+      })
+      |> render_change()
+
+    assert html =~ "valid IPv6 /96 prefix"
+
+    # Switch region back to us_fremont and submit
+    view
+    |> form("#outbound-profile-form", %{
+      "outbound_profile" => %{
+        "name" => "WARP US Fremont",
+        "type" => "warp",
+        "config" => %{
+          "region" => "us_fremont"
+        }
+      }
+    })
+    |> render_change()
+
+    valid_warp = %{
+      "outbound_profile" => %{
+        "name" => "WARP US Fremont",
+        "type" => "warp",
+        "config" => %{
+          "region" => "us_fremont",
+          "block_ipv6" => "false"
+        }
+      }
+    }
+
+    html =
+      view
+      |> form("#outbound-profile-form", valid_warp)
+      |> render_submit()
+
+    assert html =~ "Outbound Profile created successfully"
+    assert html =~ "WARP US Fremont"
+    assert html =~ "Cloudflare WARP — US - California (Fremont)"
+
+    profile =
+      Hermit.Repo.one!(from(p in Hermit.Vpn.OutboundProfile, where: p.name == "WARP US Fremont"))
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_for_warp_outbound",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-warp-1"}
+      })
+
+    {:ok, _vpn_pair} =
+      Hermit.Repo.insert(%Hermit.Vpn.VpnPair{
+        pair_id: "test_linked_warp_pair",
+        inbound_profile_id: inbound_profile.id,
+        outbound_profile_id: profile.id,
+        outbound_type: "warp",
+        status: "stopped",
+        wg_status: "stopped",
+        ts_status: "stopped",
+        outbound_config: %{
+          "region" => "us_fremont",
+          "use_tailscale_dns" => true
+        }
+      })
+
+    # Edit WARP profile region to nl_amsterdam
+    html =
+      view
+      |> element("#edit-outbound-#{profile.id}")
+      |> render_click()
+
+    assert html =~ "Edit Outbound Profile"
+
+    edit_warp = %{
+      "outbound_profile" => %{
+        "name" => "WARP NL Amsterdam",
+        "type" => "warp",
+        "config" => %{
+          "region" => "nl_amsterdam",
+          "block_ipv6" => "false"
+        }
+      }
+    }
+
+    html =
+      view
+      |> form("#edit-outbound-profile-form", edit_warp)
+      |> render_submit()
+
+    assert html =~ "Outbound Profile updated successfully"
+    assert html =~ "Cloudflare WARP — Netherlands (Amsterdam)"
+
+    updated_pair = Hermit.Repo.get!(Hermit.Vpn.VpnPair, "test_linked_warp_pair")
+    assert updated_pair.outbound_config["region"] == "nl_amsterdam"
+    assert updated_pair.outbound_config["use_tailscale_dns"] == true
+
+    Hermit.Repo.delete_all(
+      from(p in Hermit.Vpn.VpnPair, where: p.pair_id == "test_linked_warp_pair")
+    )
+
+    html =
+      view
+      |> element("#delete-outbound-#{profile.id}")
+      |> render_click()
+
+    assert html =~ "Outbound Profile deleted"
+    refute html =~ "WARP NL Amsterdam"
+  end
 end

@@ -53,6 +53,8 @@
                 <%= case profile.type do %>
                   <% "wireguard" -> %>
                     <span>WireGuard Configuration Payload</span>
+                  <% "warp" -> %>
+                    <span>Cloudflare WARP — {Hermit.Vpn.Outbound.Warp.region_label(profile.config)}</span>
                   <% "local" -> %>
                     <span>Local Network (Host NAT)</span>
                   <% _ -> %>
@@ -131,7 +133,7 @@
             <.input
               field={f[:type]}
               type="select"
-              options={[{"WireGuard", "wireguard"}]}
+              options={[{"WireGuard", "wireguard"}, {"Cloudflare WARP", "warp"}]}
               class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
             />
           </div>
@@ -148,7 +150,7 @@
                     placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."
                     required
                     class="w-full bg-base-100 border-base-300 text-base-content focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e] font-mono text-xs rounded-[4px] p-2.5"
-                  ><%= Phoenix.HTML.Form.input_value(f, :config)["wg_config"] %></textarea>
+                  ><%= (Phoenix.HTML.Form.input_value(f, :config) || %{})["wg_config"] %></textarea>
                 </div>
                 <div class="flex items-center gap-2 mt-2">
                   <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
@@ -173,6 +175,66 @@
                     Block/Reject IPv6 Forwarding (Recommended for IPv4-only VPNs)
                   </label>
                 </div>
+              </div>
+            <% "warp" -> %>
+              <% cfg = Phoenix.HTML.Form.input_value(f, :config) || %{} %>
+              <% selected_region = Map.get(cfg, "region") || Map.get(cfg, :region) || "auto" %>
+              <% custom_prefix =
+                Map.get(cfg, "custom_nat64_prefix") || Map.get(cfg, :custom_nat64_prefix) || "" %>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                    Region
+                  </label>
+                  <select
+                    name="outbound_profile[config][region]"
+                    class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                  >
+                    <%= for {label, id} <- Hermit.Vpn.Outbound.Warp.region_options() do %>
+                      <option value={id} selected={selected_region == id}>{label}</option>
+                    <% end %>
+                  </select>
+                </div>
+                <%= if selected_region == "custom" do %>
+                  <div class="space-y-1.5">
+                    <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                      Custom NAT64 /96 Prefix
+                    </label>
+                    <input
+                      type="text"
+                      name="outbound_profile[config][custom_nat64_prefix]"
+                      value={custom_prefix}
+                      placeholder="e.g., 2602:fc59:b0:64::/96"
+                      class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-xs rounded-[4px]"
+                    />
+                  </div>
+                <% end %>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
+                  <input
+                    type="checkbox"
+                    id="create_block_ipv6_warp"
+                    name="outbound_profile[config][block_ipv6]"
+                    value="true"
+                    checked={Map.get(cfg, "block_ipv6", "false") in [true, "true"]}
+                    class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle rounded-[4px]"
+                  />
+                  <label
+                    for="create_block_ipv6_warp"
+                    class="text-xs font-medium text-base-content/70 cursor-pointer"
+                  >
+                    Block/Reject IPv6 Forwarding (Recommended for IPv4-only clients)
+                  </label>
+                </div>
+                <p class="text-[11px] text-base-content/50 leading-relaxed">
+                  Free Cloudflare WARP keys register automatically on first boot and persist per tunnel. IPv4-only hosts automatically use an isolated IPv6 bridge for NAT64 regions.
+                </p>
+                <%= if error_msg = f[:config].errors |> List.first() do %>
+                  <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
+                    <.icon name="hero-exclamation-circle" class="size-4 text-error" />
+                    {HermitWeb.CoreComponents.translate_error(error_msg)}
+                  </p>
+                <% end %>
               </div>
             <% "local" -> %>
               <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
@@ -287,7 +349,11 @@
             <.input
               field={f[:type]}
               type="select"
-              options={[{"WireGuard", "wireguard"}, {"Local Network (Host NAT)", "local"}]}
+              options={[
+                {"WireGuard", "wireguard"},
+                {"Cloudflare WARP", "warp"},
+                {"Local Network (Host NAT)", "local"}
+              ]}
               class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
             />
           </div>
@@ -329,6 +395,66 @@
                     Block/Reject IPv6 Forwarding (Recommended for IPv4-only VPNs)
                   </label>
                 </div>
+                <%= if error_msg = f[:config].errors |> List.first() do %>
+                  <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
+                    <.icon name="hero-exclamation-circle" class="size-4 text-error" />
+                    {HermitWeb.CoreComponents.translate_error(error_msg)}
+                  </p>
+                <% end %>
+              </div>
+            <% "warp" -> %>
+              <% cfg = Phoenix.HTML.Form.input_value(f, :config) || %{} %>
+              <% selected_region = Map.get(cfg, "region") || Map.get(cfg, :region) || "auto" %>
+              <% custom_prefix =
+                Map.get(cfg, "custom_nat64_prefix") || Map.get(cfg, :custom_nat64_prefix) || "" %>
+              <div class="space-y-4 bg-base-200 p-4 border border-base-300 rounded-[8px]">
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                    Region
+                  </label>
+                  <select
+                    name="outbound_profile[config][region]"
+                    class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                  >
+                    <%= for {label, id} <- Hermit.Vpn.Outbound.Warp.region_options() do %>
+                      <option value={id} selected={selected_region == id}>{label}</option>
+                    <% end %>
+                  </select>
+                </div>
+                <%= if selected_region == "custom" do %>
+                  <div class="space-y-1.5">
+                    <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                      Custom NAT64 /96 Prefix
+                    </label>
+                    <input
+                      type="text"
+                      name="outbound_profile[config][custom_nat64_prefix]"
+                      value={custom_prefix}
+                      placeholder="e.g., 2602:fc59:b0:64::/96"
+                      class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-xs rounded-[4px]"
+                    />
+                  </div>
+                <% end %>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="hidden" name="outbound_profile[config][block_ipv6]" value="false" />
+                  <input
+                    type="checkbox"
+                    id="edit_block_ipv6_warp"
+                    name="outbound_profile[config][block_ipv6]"
+                    value="true"
+                    checked={Map.get(cfg, "block_ipv6", "false") in [true, "true"]}
+                    class="checkbox checkbox-xs checkbox-primary cursor-pointer align-middle rounded-[4px]"
+                  />
+                  <label
+                    for="edit_block_ipv6_warp"
+                    class="text-xs font-medium text-base-content/70 cursor-pointer"
+                  >
+                    Block/Reject IPv6 Forwarding (Recommended for IPv4-only clients)
+                  </label>
+                </div>
+                <p class="text-[11px] text-base-content/50 leading-relaxed">
+                  Free Cloudflare WARP keys register automatically on first boot and persist per tunnel. IPv4-only hosts automatically use an isolated IPv6 bridge for NAT64 regions.
+                </p>
                 <%= if error_msg = f[:config].errors |> List.first() do %>
                   <p class="mt-1.5 flex gap-2 items-center text-xs text-error">
                     <.icon name="hero-exclamation-circle" class="size-4 text-error" />

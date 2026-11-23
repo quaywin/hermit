@@ -473,7 +473,8 @@ defmodule HermitWeb.TunnelDetailLive do
     wg_content =
       Map.get(pair, :wg_config_content) || Map.get(pair, :wg_config) ||
         (is_map(pair.outbound_config) &&
-           (pair.outbound_config["wg_config"] || pair.outbound_config[:wg_config]))
+           (pair.outbound_config["wg_config"] || pair.outbound_config[:wg_config])) ||
+        read_wg_config_from_disk(pair)
 
     pair_id = Map.get(pair, :pair_id) || Map.get(pair, :id) || socket.assigns[:id]
 
@@ -552,6 +553,19 @@ defmodule HermitWeb.TunnelDetailLive do
   end
 
   def format_bytes(bytes), do: Hermit.format_bytes(bytes)
+
+  defp read_wg_config_from_disk(pair) do
+    path = Map.get(pair, :wg_config_path)
+
+    if is_binary(path) and File.exists?(path) do
+      case File.read(path) do
+        {:ok, content} when content != "" -> content
+        _ -> nil
+      end
+    else
+      nil
+    end
+  end
 
   defp stringify_keys(val), do: Hermit.stringify_keys(val)
 end

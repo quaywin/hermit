@@ -114,6 +114,13 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
                     {parsed_ns_ip, socks_port}
                   end
 
+                direct_dns_targets =
+                  if mock? do
+                    {"127.0.0.1", actual_http_port, actual_socks_port}
+                  else
+                    {ns_ip, http_port, socks_port}
+                  end
+
                 if :ets.info(:hermit_smart_routes) != :undefined do
                   :ets.insert(:hermit_smart_routes, {{:ports, pair_id}, actual_socks_port})
                   :ets.insert(:hermit_smart_routes, {{:direct_target, pair_id}, direct_target})
@@ -123,6 +130,11 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
                   :ets.insert(
                     :dns_proxy_cache,
                     {{:ports, pair_id}, {actual_http_port, actual_socks_port}}
+                  )
+
+                  :ets.insert(
+                    :dns_proxy_cache,
+                    {{:direct_targets, pair_id}, direct_dns_targets}
                   )
                 end
 
@@ -274,6 +286,7 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
 
     if :ets.info(:dns_proxy_cache) != :undefined do
       :ets.delete(:dns_proxy_cache, {:ports, state.pair_id})
+      :ets.delete(:dns_proxy_cache, {:direct_targets, state.pair_id})
     end
 
     :ok
@@ -485,29 +498,12 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     netns_dns_dir = "/etc/netns/#{wg_name}"
     resolv_file = Path.join(netns_dns_dir, "resolv.conf")
 
-    case File.read(resolv_file) do
-      {:ok, content} ->
-        if String.contains?(content, "100.100.100.100") do
-          sanitized =
-            content
-            |> String.split("\n")
-            |> Enum.reject(&String.contains?(&1, "100.100.100.100"))
-            |> Enum.join("\n")
-
-          final =
-            if String.trim(sanitized) == "" do
-              "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
-            else
-              sanitized
-            end
-
-          File.write!(resolv_file, final)
-        end
-
-      _ ->
-        File.mkdir_p!(netns_dns_dir)
-        File.write!(resolv_file, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    unless File.exists?(resolv_file) do
+      File.mkdir_p!(netns_dns_dir)
+      File.write!(resolv_file, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
     end
+
+    :ok
   rescue
     _ -> :ok
   end
@@ -518,17 +514,60 @@ defmodule Hermit.Vpn.Inbound.Proxy.Relayer do
     :ok
   end
 
-  defp write_3proxy_config(storage_dir, listen_ip, socks_port, http_port) do
-    conf_path = Path.join(storage_dir, "3proxy.cfg")
+  @doc false
+  def build_3proxy_config(storage_dir, listen_ip, socks_port, http_port) do
+    nserver_lines =
+      storage_dir
+      |> resolve_3proxy_nservers()
+      |> Enum.map(&"nserver #{&1}")
+      |> Enum.join("\n")
 
-    content = """
+    """
+    #{nserver_lines}
     nscache 65536
     timeouts 1 5 30 60 180 1800 15 60
     auth none
     socks -p#{socks_port} -i#{listen_ip}
     proxy -n -p#{http_port} -i#{listen_ip}
     """
+  end
 
+  @doc false
+  def resolve_3proxy_nservers(storage_dir) do
+    wg_conf_path = Path.join(storage_dir, "wg0.conf")
+
+    configured =
+      case File.read(wg_conf_path) do
+        {:ok, content} ->
+          content
+          |> Hermit.Vpn.Outbound.WireGuard.parse_dns_servers()
+          |> Enum.filter(&valid_3proxy_nserver?/1)
+          |> Enum.uniq()
+
+        _ ->
+          []
+      end
+
+    if configured != [], do: configured, else: ["1.1.1.1", "8.8.8.8"]
+  end
+
+  defp valid_3proxy_nserver?(ip_str) when is_binary(ip_str) do
+    trimmed = String.trim(ip_str)
+
+    case :inet.parse_ipv4_address(String.to_charlist(trimmed)) do
+      {:ok, {100, 100, 100, 100}} -> false
+      {:ok, {127, _, _, _}} -> false
+      {:ok, {0, _, _, _}} -> false
+      {:ok, _} -> true
+      _ -> false
+    end
+  end
+
+  defp valid_3proxy_nserver?(_), do: false
+
+  defp write_3proxy_config(storage_dir, listen_ip, socks_port, http_port) do
+    conf_path = Path.join(storage_dir, "3proxy.cfg")
+    content = build_3proxy_config(storage_dir, listen_ip, socks_port, http_port)
     File.write!(conf_path, content)
     :ok
   end

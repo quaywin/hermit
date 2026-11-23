@@ -17,7 +17,7 @@ defmodule Hermit.Vpn.OutboundProfile do
     outbound_profile
     |> cast(attrs, [:name, :type, :config])
     |> validate_required([:name, :type])
-    |> validate_inclusion(:type, ["wireguard", "local"])
+    |> validate_inclusion(:type, ["wireguard", "warp", "local"])
     |> validate_config()
   end
 
@@ -50,6 +50,9 @@ defmodule Hermit.Vpn.OutboundProfile do
           changeset
         end
 
+      "warp" ->
+        validate_warp_config(changeset, config)
+
       "local" ->
         local_ip = Map.get(config, "local_ip") || Map.get(config, :local_ip)
         host_ip = Map.get(config, "host_ip") || Map.get(config, :host_ip)
@@ -73,6 +76,26 @@ defmodule Hermit.Vpn.OutboundProfile do
 
       false ->
         add_error(changeset, :config, "#{field} must be in CIDR format (e.g. 10.200.1.2/30)")
+    end
+  end
+
+  defp validate_warp_config(changeset, config) do
+    region = Map.get(config, "region") || Map.get(config, :region) || "auto"
+
+    if region in Hermit.Vpn.Outbound.Warp.valid_region_ids() do
+      if region == "custom" do
+        prefix =
+          Map.get(config, "custom_nat64_prefix") || Map.get(config, :custom_nat64_prefix)
+
+        case Hermit.Vpn.Outbound.Warp.validate_nat64_prefix(prefix) do
+          {:ok, _normalized} -> changeset
+          {:error, message} -> add_error(changeset, :config, message)
+        end
+      else
+        changeset
+      end
+    else
+      add_error(changeset, :config, "Invalid Cloudflare WARP region: #{region}")
     end
   end
 end

@@ -60,6 +60,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         mtu = parse_mtu(config_content)
 
         block_ipv6 = Map.get(config, "block_ipv6") in [true, "true"]
+        create_in_netns = Map.get(config, "create_in_netns") || Map.get(config, :create_in_netns)
 
         # Create unique interface names on the host (max 15 chars)
         unique_suffix =
@@ -79,8 +80,8 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
         # Execute network setup steps sequentially
         result =
           with {:ok, _info} <- Hermit.Vpn.Namespace.create_pair_namespace(pair_id),
-               {:ok, _} <- run_cmd("ip", ["link", "add", host_if_name, "type", "wireguard"]),
-               {:ok, _} <- run_cmd("ip", ["link", "set", host_if_name, "netns", wg_name]),
+               {:ok, _} <- add_wireguard_link(host_if_name, create_in_netns),
+               {:ok, _} <- move_link_to_netns(host_if_name, wg_name, create_in_netns),
                {:ok, _} <-
                  run_cmd("ip", [
                    "netns",
@@ -185,10 +186,7 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
             {:ok, "wg0"}
 
           {:error, reason} ->
-            case System.cmd("ip", ["link", "show", host_if_name], stderr_to_stdout: true) do
-              {_, 0} -> System.cmd("ip", ["link", "delete", host_if_name])
-              _ -> :ok
-            end
+            cleanup_temp_link(host_if_name, create_in_netns)
 
             Hermit.Vpn.Namespace.destroy_pair_namespace(pair_id)
             {:error, reason}
@@ -592,6 +590,61 @@ defmodule Hermit.Vpn.Outbound.WireGuard do
       else
         {:ok, :skipped}
       end
+    end
+  end
+
+  defp add_wireguard_link(host_if_name, nil) do
+    run_cmd("ip", ["link", "add", host_if_name, "type", "wireguard"])
+  end
+
+  defp add_wireguard_link(host_if_name, source_ns) when is_binary(source_ns) do
+    run_cmd("ip", [
+      "netns",
+      "exec",
+      source_ns,
+      "ip",
+      "link",
+      "add",
+      host_if_name,
+      "type",
+      "wireguard"
+    ])
+  end
+
+  defp move_link_to_netns(host_if_name, wg_name, nil) do
+    run_cmd("ip", ["link", "set", host_if_name, "netns", wg_name])
+  end
+
+  defp move_link_to_netns(host_if_name, wg_name, source_ns) when is_binary(source_ns) do
+    run_cmd("ip", [
+      "netns",
+      "exec",
+      source_ns,
+      "ip",
+      "link",
+      "set",
+      host_if_name,
+      "netns",
+      wg_name
+    ])
+  end
+
+  defp cleanup_temp_link(host_if_name, nil) do
+    case System.cmd("ip", ["link", "show", host_if_name], stderr_to_stdout: true) do
+      {_, 0} -> System.cmd("ip", ["link", "delete", host_if_name])
+      _ -> :ok
+    end
+  end
+
+  defp cleanup_temp_link(host_if_name, source_ns) when is_binary(source_ns) do
+    case System.cmd("ip", ["netns", "exec", source_ns, "ip", "link", "show", host_if_name],
+           stderr_to_stdout: true
+         ) do
+      {_, 0} ->
+        System.cmd("ip", ["netns", "exec", source_ns, "ip", "link", "delete", host_if_name])
+
+      _ ->
+        :ok
     end
   end
 

@@ -12,6 +12,7 @@ defmodule Hermit.Vpn.Pairs do
   def inbound_module_for(_), do: Hermit.Vpn.Inbound.Tailscale
 
   def outbound_module_for("wireguard"), do: Hermit.Vpn.Outbound.WireGuard
+  def outbound_module_for("warp"), do: Hermit.Vpn.Outbound.Warp
   def outbound_module_for("local"), do: Hermit.Vpn.Outbound.Local
   def outbound_module_for(_), do: Hermit.Vpn.Outbound.WireGuard
 

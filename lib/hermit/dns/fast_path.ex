@@ -173,23 +173,11 @@ defmodule Hermit.Dns.FastPath do
                 {act, val, nil}
             end
 
-          # 2.5 Match Smart Routed Domains (SNI Proxy) if not matched by custom rules
-          {action, redirect_val} =
-            if is_nil(action) and not is_internal do
-              case Hermit.Vpn.SniProxy.match(query.domain) do
-                {:ok, smart_pair_id} ->
-                  {"smart_route", smart_pair_id}
-
-                :nomatch ->
-                  {action, redirect_val}
-              end
-            else
-              {action, redirect_val}
-            end
-
-          # 3. Match dynamic blocklists using precomputed IDs & names map
+          # 2.5 Match dynamic blocklists before Smart Route so ads/trackers under
+          # wildcard smart-routed domains are still blocked (explicit custom rules
+          # like block/bypass/redirect/forward_* still take precedence).
           {action, redirect_val, block_reason, blocklist_id} =
-            if is_nil(action) do
+            if is_nil(action) or action == "smart_route" do
               {enabled_blocklist_ids, blocklist_names} = blocklist_meta
 
               matched_id =
@@ -203,10 +191,24 @@ defmodule Hermit.Dns.FastPath do
                 matched_name = Map.get(blocklist_names, matched_id, "blocklist")
                 {"block", nil, matched_name, matched_id}
               else
-                {nil, nil, nil, nil}
+                {action, redirect_val, block_reason, nil}
               end
             else
               {action, redirect_val, block_reason, nil}
+            end
+
+          # 3. Match Smart Routed Domains (SNI Proxy) if not matched by custom rules or blocklists
+          {action, redirect_val} =
+            if is_nil(action) and not is_internal do
+              case Hermit.Vpn.SniProxy.match(query.domain) do
+                {:ok, smart_pair_id} ->
+                  {"smart_route", smart_pair_id}
+
+                :nomatch ->
+                  {action, redirect_val}
+              end
+            else
+              {action, redirect_val}
             end
 
           case action do

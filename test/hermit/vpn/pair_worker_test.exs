@@ -966,6 +966,77 @@ defmodule Hermit.Vpn.PairWorkerTest do
     GenServer.stop(pid)
   end
 
+  test "starting and stopping worker with Cloudflare WARP NAT64 outbound" do
+    original_config = Application.get_env(:hermit, :docker)
+
+    Application.put_env(
+      :hermit,
+      :docker,
+      original_config
+      |> Keyword.put(:mock_error, nil)
+    )
+
+    storage_dir = Path.expand("storage/test_pair_warp_us", File.cwd!())
+    File.rm_rf!(storage_dir)
+
+    on_exit(fn ->
+      Application.put_env(:hermit, :docker, original_config)
+      Hermit.Vpn.Outbound.WarpBridge.release_bridge("test_pair_warp_us")
+      File.rm_rf!(storage_dir)
+    end)
+
+    args = %{
+      id: "test_pair_warp_us",
+      ts_auth_key: "tskey-warp-test",
+      outbound_type: "warp",
+      outbound_config: %{"region" => "us_fremont"}
+    }
+
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "test_inbound_ts_warp",
+        type: "tailscale",
+        config: %{"ts_auth_key" => args.ts_auth_key}
+      })
+
+    {:ok, outbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.OutboundProfile{
+        name: "test_outbound_warp_us",
+        type: "warp",
+        config: %{"region" => "us_fremont"}
+      })
+
+    vpn_pair = %Hermit.Vpn.VpnPair{
+      pair_id: args.id,
+      inbound_profile_id: inbound_profile.id,
+      outbound_profile_id: outbound_profile.id,
+      outbound_type: "warp",
+      outbound_config: %{"region" => "us_fremont"},
+      status: "running",
+      wg_status: "starting",
+      ts_status: "starting"
+    }
+
+    _ = Hermit.Repo.insert!(vpn_pair, on_conflict: :replace_all, conflict_target: :pair_id)
+
+    {:ok, pid} = PairWorker.start_link(args)
+    :ok = wait_until_status(pid, :running)
+
+    state = GenServer.call(pid, :get_state)
+    assert state.wg_status == :running
+    assert state.ts_status == :running
+    assert state.outbound_module == Hermit.Vpn.Outbound.Warp
+    assert state.outbound_if == "wg0"
+
+    wg_conf = File.read!(Path.join(storage_dir, "wg0.conf"))
+    assert wg_conf =~ "Endpoint = [2602:fc59:b0:64::a29f:c001]:2408"
+    assert wg_conf =~ "MTU = 1280"
+    assert MapSet.member?(Hermit.Vpn.Outbound.WarpBridge.active_pairs(), "test_pair_warp_us")
+
+    GenServer.stop(pid)
+    refute MapSet.member?(Hermit.Vpn.Outbound.WarpBridge.active_pairs(), "test_pair_warp_us")
+  end
+
   defp wait_until_status(pid, target_status, attempts \\ 300)
 
   defp wait_until_status(_pid, target_status, 0) do

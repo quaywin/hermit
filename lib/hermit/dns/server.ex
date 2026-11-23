@@ -348,6 +348,7 @@ defmodule Hermit.Dns.Server do
     else
       if :ets.info(:dns_proxy_cache) != :undefined do
         :ets.delete(:dns_proxy_cache, {:ports, pair_id})
+        :ets.delete(:dns_proxy_cache, {:direct_targets, pair_id})
       end
     end
 
@@ -358,6 +359,7 @@ defmodule Hermit.Dns.Server do
   def handle_info({:vpn_pair_deleted, pair_id}, state) do
     if :ets.info(:dns_proxy_cache) != :undefined do
       :ets.delete(:dns_proxy_cache, {:ports, pair_id})
+      :ets.delete(:dns_proxy_cache, {:direct_targets, pair_id})
     end
 
     {:noreply, state}
@@ -637,10 +639,10 @@ defmodule Hermit.Dns.Server do
         case action do
           "forward_dns" when not is_nil(redirect_val) ->
             if not is_nil(proxy_pair_id) and proxy_pair_id != "" do
-              {proxy_ports, state} = get_proxy_ports_for_pair(proxy_pair_id, state)
+              {proxy_targets, state} = get_proxy_ports_for_pair(proxy_pair_id, state)
 
-              case proxy_ports do
-                {:ok, http_port, socks5_port} ->
+              case proxy_targets do
+                {:ok, proxy_host, http_port, socks5_port} ->
                   case parse_upstreams(redirect_val) do
                     [] ->
                       Logger.error(
@@ -663,6 +665,7 @@ defmodule Hermit.Dns.Server do
                             packet,
                             query,
                             first_upstream,
+                            proxy_host,
                             socks5_port,
                             proxy_pair_id,
                             state
@@ -676,6 +679,7 @@ defmodule Hermit.Dns.Server do
                             packet,
                             query,
                             url,
+                            proxy_host,
                             http_port,
                             proxy_pair_id,
                             state
@@ -730,10 +734,10 @@ defmodule Hermit.Dns.Server do
 
             case first_upstream do
               {:udp, _} ->
-                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                {proxy_targets, state} = get_proxy_ports_for_pair(redirect_val, state)
 
-                case proxy_ports do
-                  {:ok, _http_port, socks5_port} when not is_nil(socks5_port) ->
+                case proxy_targets do
+                  {:ok, proxy_host, _http_port, socks5_port} when not is_nil(socks5_port) ->
                     async_forward_to_udp_proxy(
                       socket,
                       ip,
@@ -741,6 +745,7 @@ defmodule Hermit.Dns.Server do
                       packet,
                       query,
                       first_upstream,
+                      proxy_host,
                       socks5_port,
                       redirect_val,
                       state
@@ -774,10 +779,10 @@ defmodule Hermit.Dns.Server do
                 end
 
               {:doh, url} ->
-                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                {proxy_targets, state} = get_proxy_ports_for_pair(redirect_val, state)
 
-                case proxy_ports do
-                  {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
+                case proxy_targets do
+                  {:ok, proxy_host, http_port, _socks5_port} when not is_nil(http_port) ->
                     async_forward_to_proxy(
                       socket,
                       ip,
@@ -785,6 +790,7 @@ defmodule Hermit.Dns.Server do
                       packet,
                       query,
                       url,
+                      proxy_host,
                       http_port,
                       redirect_val,
                       state
@@ -820,10 +826,10 @@ defmodule Hermit.Dns.Server do
               _ ->
                 doh_url = "https://cloudflare-dns.com/dns-query"
 
-                {proxy_ports, state} = get_proxy_ports_for_pair(redirect_val, state)
+                {proxy_targets, state} = get_proxy_ports_for_pair(redirect_val, state)
 
-                case proxy_ports do
-                  {:ok, http_port, _socks5_port} when not is_nil(http_port) ->
+                case proxy_targets do
+                  {:ok, proxy_host, http_port, _socks5_port} when not is_nil(http_port) ->
                     async_forward_to_proxy(
                       socket,
                       ip,
@@ -831,6 +837,7 @@ defmodule Hermit.Dns.Server do
                       packet,
                       query,
                       doh_url,
+                      proxy_host,
                       http_port,
                       redirect_val,
                       state
@@ -881,23 +888,29 @@ defmodule Hermit.Dns.Server do
 
   defp get_proxy_ports_for_pair(pair_id, state) do
     if mock?() do
-      {{:ok, 8080, 1080}, state}
+      {{:ok, "127.0.0.1", 8080, 1080}, state}
     else
       ensure_proxy_cache_table_exists()
 
-      case :ets.lookup(:dns_proxy_cache, {:ports, pair_id}) do
-        [{_, {http_port, socks5_port}}] ->
-          {{:ok, http_port, socks5_port}, state}
+      case :ets.lookup(:dns_proxy_cache, {:direct_targets, pair_id}) do
+        [{_, {proxy_host, http_port, socks5_port}}] ->
+          {{:ok, proxy_host, http_port, socks5_port}, state}
 
         [] ->
-          # Fallback: if not in cache yet, read from disk and update cache
-          case read_proxy_ports_from_disk(pair_id) do
-            {:ok, http_port, socks5_port} ->
-              :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, socks5_port}})
-              {{:ok, http_port, socks5_port}, state}
+          case :ets.lookup(:dns_proxy_cache, {:ports, pair_id}) do
+            [{_, {http_port, socks5_port}}] ->
+              {{:ok, "127.0.0.1", http_port, socks5_port}, state}
 
-            {:error, reason} ->
-              {{:error, reason}, state}
+            [] ->
+              # Fallback: if not in cache yet, read from disk and update cache
+              case read_proxy_ports_from_disk(pair_id) do
+                {:ok, http_port, socks5_port} ->
+                  :ets.insert(:dns_proxy_cache, {{:ports, pair_id}, {http_port, socks5_port}})
+                  {{:ok, "127.0.0.1", http_port, socks5_port}, state}
+
+                {:error, reason} ->
+                  {{:error, reason}, state}
+              end
           end
       end
     end
@@ -952,10 +965,10 @@ defmodule Hermit.Dns.Server do
     end
   end
 
-  defp get_or_make_proxy_client(proxy_port, state) do
+  defp get_or_make_proxy_client(proxy_host, proxy_port, state) do
     ensure_proxy_cache_table_exists()
 
-    case :ets.lookup(:dns_proxy_cache, {:client, proxy_port}) do
+    case :ets.lookup(:dns_proxy_cache, {:client, proxy_host, proxy_port}) do
       [{_, client}] ->
         {client, state}
 
@@ -964,13 +977,13 @@ defmodule Hermit.Dns.Server do
           Req.new(
             connect_options: [
               protocols: [:http2, :http1],
-              proxy: {:http, "127.0.0.1", proxy_port, []}
+              proxy: {:http, proxy_host, proxy_port, []}
             ],
             retry: false,
             receive_timeout: 4000
           )
 
-        :ets.insert(:dns_proxy_cache, {{:client, proxy_port}, client})
+        :ets.insert(:dns_proxy_cache, {{:client, proxy_host, proxy_port}, client})
         {client, state}
     end
   end
@@ -998,12 +1011,13 @@ defmodule Hermit.Dns.Server do
          packet,
          query,
          doh_url,
+         proxy_host,
          proxy_port,
          pair_id,
          state
        ) do
-    {doh_client, state} = get_or_make_proxy_client(proxy_port, state)
-    proxy_url = "http://127.0.0.1:#{proxy_port}"
+    {doh_client, state} = get_or_make_proxy_client(proxy_host, proxy_port, state)
+    proxy_url = "#{proxy_host}:#{proxy_port}"
 
     server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
@@ -1069,11 +1083,11 @@ defmodule Hermit.Dns.Server do
          packet,
          query,
          udp_upstream,
+         socks5_ip,
          socks5_port,
          pair_id,
          state
        ) do
-    socks5_ip = "127.0.0.1"
     server_pid = state.server_pid
     <<_tx_id::16, _::binary>> = packet
 

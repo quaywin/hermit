@@ -10,6 +10,8 @@ defmodule Hermit.Dns.Cache do
   @eviction_batch_size 2_500
   @delete_chunk_size 1_000
   @prune_interval_ms 60_000
+  @stale_retention_seconds 6 * 3600
+  @refresh_cooldown_seconds 5
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -146,15 +148,40 @@ defmodule Hermit.Dns.Cache do
   end
 
   @doc """
-  Deletes expired entries from the cache.
+  Claims a short-lived refresh lock so only one background refresh runs per
+  `(profile_id, is_internal, domain, qtype)` within the cooldown window.
+  """
+  @spec claim_refresh?(integer(), boolean(), String.t(), atom()) :: boolean()
+  def claim_refresh?(profile_id, is_internal, domain, qtype) when is_boolean(is_internal) do
+    norm_domain = String.downcase(domain)
+    now = System.monotonic_time(:second)
+    key = {:_refresh, profile_id, is_internal, norm_domain, qtype}
+
+    case :ets.lookup(@dns_cache_table, key) do
+      [{^key, locked_until}] when now < locked_until ->
+        false
+
+      _ ->
+        :ets.insert(@dns_cache_table, {key, now + @refresh_cooldown_seconds})
+        true
+    end
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  Deletes expired entries from the cache beyond the stale retention window
+  and prunes expired optimistic refresh locks.
   """
   @spec prune_expired() :: :ok
   def prune_expired do
     now = System.monotonic_time(:second)
+    stale_cutoff = now - @stale_retention_seconds
 
     :ets.select_delete(@dns_cache_table, [
-      {{{:_, :_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]},
-      {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", now}], [true]}
+      {{{:_, :_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", stale_cutoff}], [true]},
+      {{{:_, :_, :_}, :_, :_, :_, :"$1"}, [{:<, :"$1", stale_cutoff}], [true]},
+      {{{:_refresh, :_, :_, :_, :_}, :"$1"}, [{:<, :"$1", now}], [true]}
     ])
 
     :ok
@@ -214,7 +241,8 @@ defmodule Hermit.Dns.Cache do
   def clear(profile_id) do
     :ets.select_delete(@dns_cache_table, [
       {{{profile_id, :_, :_, :_}, :_, :_, :_, :_}, [], [true]},
-      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]}
+      {{{profile_id, :_, :_}, :_, :_, :_, :_}, [], [true]},
+      {{{:_refresh, profile_id, :_, :_, :_}, :_}, [], [true]}
     ])
 
     :ok

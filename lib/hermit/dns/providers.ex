@@ -5,7 +5,7 @@ defmodule Hermit.Dns.Providers do
   """
 
   @default_upstream "76.76.2.2, 76.76.10.2"
-  @default_clean_bypass "76.76.2.0, 1.1.1.1"
+  @default_clean_bypass "1.1.1.1, 76.76.2.0"
 
   @providers [
     %{

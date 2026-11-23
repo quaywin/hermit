@@ -64,6 +64,8 @@ defmodule Hermit.Dns.Upstream do
     end
   end
 
+  def send_client_response(_socket, _ip, :background_refresh, _resp), do: :ok
+
   def send_client_response(socket, ip, port, resp) do
     if is_tuple(port) do
       GenServer.reply(port, {:ok, resp})
@@ -127,7 +129,10 @@ defmodule Hermit.Dns.Upstream do
 
     sorted_healthy =
       Enum.sort_by(healthy, fn upstream ->
-        Enum.find_index(upstreams_order, &(&1 == upstream)) || 999
+        {
+          Map.get(upstreams_map, upstream, 20),
+          Enum.find_index(upstreams_order, &(&1 == upstream)) || 999
+        }
       end)
 
     sorted_penalized =
@@ -160,14 +165,7 @@ defmodule Hermit.Dns.Upstream do
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
       start = System.monotonic_time()
 
-      case Req.post(doh_client,
-             url: url,
-             headers: [
-               {"content-type", "application/dns-message"},
-               {"accept", "application/dns-message"}
-             ],
-             body: packet
-           ) do
+      case do_doh_post(doh_client, url, packet) do
         {:ok, %{status: 200, body: resp_packet}} ->
           <<upstream_tx_id::16, _::binary>> = resp_packet
 
@@ -193,6 +191,26 @@ defmodule Hermit.Dns.Upstream do
           send(server_pid, {:doh_failure, tx_id, url})
       end
     end)
+  end
+
+  defp do_doh_post(doh_client, url, packet) do
+    headers = [
+      {"content-type", "application/dns-message"},
+      {"accept", "application/dns-message"}
+    ]
+
+    case Req.post(doh_client, url: url, headers: headers, body: packet) do
+      {:error, %Req.HTTPError{protocol: :http2}} ->
+        Req.post(
+          Req.new(finch: Hermit.Dns.FinchHttp1, retry: false, receive_timeout: 2000),
+          url: url,
+          headers: headers,
+          body: packet
+        )
+
+      result ->
+        result
+    end
   end
 
   def handle_failure(tx_id, state) do
@@ -242,68 +260,70 @@ defmodule Hermit.Dns.Upstream do
           :ets.insert(state.pending_table, {tx_id, updated_info})
           state
         else
-          is_internal = Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip)
+          if client_port != :background_refresh do
+            is_internal = Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip)
 
-          # Serve-Stale (RFC 8767) before returning SERVFAIL
-          case Cache.lookup(
-                 state.profile_id,
-                 is_internal,
-                 original_query.domain,
-                 original_query.qtype,
-                 true
-               ) do
-            {:stale, stale_packet, status, answer_log_info} ->
-              stale_packet = Packet.patch_stale_ttl(stale_packet, 30)
-              <<_::binary-size(2), rest_packet::binary>> = stale_packet
-              client_packet = original_tx_id <> rest_packet
-              send_client_response(state.socket, client_ip, client_port, client_packet)
+            # Serve-Stale (RFC 8767) before returning SERVFAIL
+            case Cache.lookup(
+                   state.profile_id,
+                   is_internal,
+                   original_query.domain,
+                   original_query.qtype,
+                   true
+                 ) do
+              {:stale, stale_packet, status, answer_log_info} ->
+                stale_packet = Packet.patch_stale_ttl(stale_packet, 30)
+                <<_::binary-size(2), rest_packet::binary>> = stale_packet
+                client_packet = original_tx_id <> rest_packet
+                send_client_response(state.socket, client_ip, client_port, client_packet)
 
-              :telemetry.execute(
-                [:hermit, :dns, :query],
-                %{duration: System.monotonic_time(:millisecond) - sent_at},
-                %{
-                  profile_id: state.profile_id,
-                  config_id: state.config.id,
-                  client_ip: client_ip,
-                  domain: original_query.domain,
-                  qtype: original_query.qtype,
-                  status: status,
-                  answer: "#{answer_log_info} (stale)",
-                  resolver: "Stale Cache Fallback",
-                  enable_query_logging: state.config.enable_query_logging
-                }
-              )
+                :telemetry.execute(
+                  [:hermit, :dns, :query],
+                  %{duration: System.monotonic_time(:millisecond) - sent_at},
+                  %{
+                    profile_id: state.profile_id,
+                    config_id: state.config.id,
+                    client_ip: client_ip,
+                    domain: original_query.domain,
+                    qtype: original_query.qtype,
+                    status: status,
+                    answer: "#{answer_log_info} (stale)",
+                    resolver: "Stale Cache Fallback",
+                    enable_query_logging: state.config.enable_query_logging
+                  }
+                )
 
-            _ ->
-              servfail = Packet.build_servfail(original_tx_id, original_query.query_record)
-              send_client_response(state.socket, client_ip, client_port, servfail)
+              _ ->
+                servfail = Packet.build_servfail(original_tx_id, original_query.query_record)
+                send_client_response(state.socket, client_ip, client_port, servfail)
 
-              Cache.store(
-                state.profile_id,
-                is_internal,
-                original_query.domain,
-                original_query.qtype,
-                servfail,
-                "resolved",
-                "SERVFAIL",
-                5
-              )
+                Cache.store(
+                  state.profile_id,
+                  is_internal,
+                  original_query.domain,
+                  original_query.qtype,
+                  servfail,
+                  "resolved",
+                  "SERVFAIL",
+                  5
+                )
 
-              :telemetry.execute(
-                [:hermit, :dns, :query],
-                %{duration: System.monotonic_time(:millisecond) - sent_at},
-                %{
-                  profile_id: state.profile_id,
-                  config_id: state.config.id,
-                  client_ip: client_ip,
-                  domain: original_query.domain,
-                  qtype: original_query.qtype,
-                  status: "resolved",
-                  answer: "SERVFAIL",
-                  resolver: "Failover Failure",
-                  enable_query_logging: state.config.enable_query_logging
-                }
-              )
+                :telemetry.execute(
+                  [:hermit, :dns, :query],
+                  %{duration: System.monotonic_time(:millisecond) - sent_at},
+                  %{
+                    profile_id: state.profile_id,
+                    config_id: state.config.id,
+                    client_ip: client_ip,
+                    domain: original_query.domain,
+                    qtype: original_query.qtype,
+                    status: "resolved",
+                    answer: "SERVFAIL",
+                    resolver: "Failover Failure",
+                    enable_query_logging: state.config.enable_query_logging
+                  }
+                )
+            end
           end
 
           :ets.delete(state.pending_table, tx_id)
@@ -340,7 +360,7 @@ defmodule Hermit.Dns.Upstream do
                 true -> "Blocked (Upstream Filter)"
               end
 
-            {extracted_ttl, "blocked", answer, "upstream_filter"}
+            {max(extracted_ttl, 300), "blocked", answer, "upstream_filter"}
 
           {:ok, %{ttl: extracted_ttl, ips: ips}} ->
             answer =

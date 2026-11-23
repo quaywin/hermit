@@ -733,6 +733,189 @@ defmodule Hermit.Dns.ServerCacheTest do
     end
   end
 
+  test "optimistic caching returns stale entry immediately and refreshes silently in background" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_Optimistic",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_optimistic"}
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    {:ok, mock_sock} = :gen_udp.open(0, [:binary, active: false])
+    {:ok, mock_port} = :inet.port(mock_sock)
+
+    mock_task =
+      Task.async(fn ->
+        case :gen_udp.recv(mock_sock, 0, 3000) do
+          {:ok, {ip, port, pkt}} ->
+            {:ok, q} = Packet.parse(pkt)
+            resp = Packet.build_a_response(q.id, q.query_record, "5.6.7.8")
+            :gen_udp.send(mock_sock, ip, port, resp)
+            :refreshed
+
+          _ ->
+            :timeout
+        end
+      end)
+
+    on_exit(fn ->
+      :gen_udp.close(mock_sock)
+    end)
+
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_endpoint(endpoint.id, %{
+        enabled: true,
+        upstream_dns: "127.0.0.1:#{mock_port}",
+        custom_rules: []
+      })
+
+    dns_port = 35362
+    {:ok, server_pid} = Server.start_link(profile_id: endpoint.id, port: dns_port)
+
+    try do
+      domain = "optimistic-test.com"
+      query_rec = {:dns_query, domain, 1, 1}
+      stale_resp = Packet.build_a_response(<<0, 0>>, query_rec, "1.2.3.4")
+
+      # Insert an entry that expired 10 seconds ago (within 6h stale retention) after Server init
+      expired_at = System.monotonic_time(:second) - 10
+
+      :ets.insert(
+        :dns_cache,
+        {{endpoint.id, false, domain, :A}, stale_resp, "resolved", "1.2.3.4", expired_at}
+      )
+
+      {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
+      qname = <<15>> <> "optimistic-test" <> <<3>> <> "com" <> <<0>>
+
+      query1 =
+        <<0x10, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
+          qname <> <<0, 1, 0, 1>>
+
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, dns_port, query1)
+      assert {:ok, {_addr, _port, resp1}} = :gen_udp.recv(client_sock, 1024, 1000)
+
+      # First query gets the stale IP immediately
+      assert Packet.extract_resolved_ips(resp1) == ["1.2.3.4"]
+
+      # Background refresh finishes silently and updates cache to 5.6.7.8
+      assert Task.await(mock_task, 2000) == :refreshed
+      Process.sleep(100)
+
+      query2 =
+        <<0x10, 0x02, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
+          qname <> <<0, 1, 0, 1>>
+
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, dns_port, query2)
+      assert {:ok, {_addr, _port, resp2}} = :gen_udp.recv(client_sock, 1024, 1000)
+      assert Packet.extract_resolved_ips(resp2) == ["5.6.7.8"]
+
+      :gen_udp.close(client_sock)
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
+
+  test "upstream blocked responses are cached for at least 300s" do
+    {:ok, profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "P_Test_Blocked_TTL",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "k_test_blocked_ttl"}
+      })
+
+    {:ok, endpoint} =
+      Hermit.Repo.insert(%Hermit.Vpn.DnsEndpoint{
+        name: "Endpoint for #{profile.name}",
+        inbound_profile_id: profile.id,
+        doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+      })
+
+    {:ok, mock_sock} = :gen_udp.open(0, [:binary, active: false])
+    {:ok, mock_port} = :inet.port(mock_sock)
+
+    mock_task =
+      Task.async(fn ->
+        case :gen_udp.recv(mock_sock, 0, 3000) do
+          {:ok, {ip, port, pkt}} ->
+            {:ok, q} = Packet.parse(pkt)
+            resp = Packet.build_a_response(q.id, q.query_record, "0.0.0.0")
+            :gen_udp.send(mock_sock, ip, port, resp)
+            :ok
+
+          _ ->
+            :timeout
+        end
+      end)
+
+    on_exit(fn ->
+      :gen_udp.close(mock_sock)
+    end)
+
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_endpoint(endpoint.id, %{
+        enabled: true,
+        upstream_dns: "127.0.0.1:#{mock_port}",
+        custom_rules: []
+      })
+
+    dns_port = 35363
+    {:ok, server_pid} = Server.start_link(profile_id: endpoint.id, port: dns_port)
+
+    try do
+      {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
+      domain = "blocked-ttl-test.com"
+      qname = <<16>> <> "blocked-ttl-test" <> <<3>> <> "com" <> <<0>>
+
+      query_pkt =
+        <<0x20, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
+          qname <> <<0, 1, 0, 1>>
+
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, dns_port, query_pkt)
+      assert {:ok, {_addr, _port, _resp}} = :gen_udp.recv(client_sock, 1024, 1000)
+      assert Task.await(mock_task, 1000) == :ok
+      Process.sleep(100)
+
+      now = System.monotonic_time(:second)
+      key = {endpoint.id, false, domain, :A}
+
+      assert [{^key, _pkt, "blocked", "0.0.0.0 (Upstream Filter)", expires_at}] =
+               :ets.lookup(:dns_cache, key)
+
+      assert expires_at - now >= 290
+      :gen_udp.close(client_sock)
+    after
+      if Process.alive?(server_pid) do
+        GenServer.stop(server_pid)
+      end
+    end
+  end
+
+  test "Upstream.sort_by_priority/3 orders healthy upstreams by lowest latency first" do
+    u1 = {:udp, {1, 1, 1, 1}}
+    u2 = {:udp, {76, 76, 2, 2}}
+    u3 = {:udp, {9, 9, 9, 9}}
+
+    upstreams_order = [u1, u2, u3]
+    upstreams_map = %{u1 => 45, u2 => 12, u3 => 2000}
+
+    assert Hermit.Dns.Upstream.sort_by_priority(upstreams_order, upstreams_order, upstreams_map) ==
+             [
+               u2,
+               u1,
+               u3
+             ]
+  end
+
   defp mock_timeout_loop(sock, parent_pid) do
     case :gen_udp.recv(sock, 0, 100) do
       {:ok, _} -> mock_timeout_loop(sock, parent_pid)

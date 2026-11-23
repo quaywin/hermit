@@ -65,7 +65,7 @@ defmodule Hermit.Dns.Server do
 
     doh_client =
       Req.new(
-        connect_options: [protocols: [:http2, :http1]],
+        finch: Hermit.Dns.Finch,
         retry: false,
         receive_timeout: 2000
       )
@@ -109,8 +109,8 @@ defmodule Hermit.Dns.Server do
       next_tx_id: 0
     }
 
-    # Start periodic timeout cleanup timer (every 1 second)
-    :erlang.send_after(1000, self(), :clean_timeouts)
+    # Start periodic timeout cleanup timer (every 500 ms)
+    :erlang.send_after(500, self(), :clean_timeouts)
 
     case try_bind_socket(state) do
       {:ok, new_state} ->
@@ -391,7 +391,7 @@ defmodule Hermit.Dns.Server do
               self(),
               state.profile_id,
               state.config.id,
-              state.config.enable_query_logging,
+              state.config.enable_query_logging and client_port != :background_refresh,
               client_ip,
               original_query,
               upstream,
@@ -446,7 +446,7 @@ defmodule Hermit.Dns.Server do
             self(),
             state.profile_id,
             state.config.id,
-            state.config.enable_query_logging,
+            state.config.enable_query_logging and client_port != :background_refresh,
             client_ip,
             original_query,
             upstream,
@@ -467,16 +467,16 @@ defmodule Hermit.Dns.Server do
   @impl true
   def handle_info(:clean_timeouts, state) do
     now = System.monotonic_time(:millisecond)
-    candidates = PendingQueries.expired_candidates(state.pending_table, now - 2000)
+    candidates = PendingQueries.expired_candidates(state.pending_table, now - 1000)
 
     new_state =
       Enum.reduce(candidates, state, fn {tx_id, sent_at, target_upstreams, current_index},
                                         acc_state ->
         timeout_limit =
           case elem(target_upstreams, current_index) do
-            {:doh, _} -> 4000
-            {:doh_proxy, _, _} -> 4000
-            _ -> 2000
+            {:doh, _} -> 2500
+            {:doh_proxy, _, _} -> 2500
+            _ -> 1000
           end
 
         if now - sent_at >= timeout_limit do
@@ -486,7 +486,7 @@ defmodule Hermit.Dns.Server do
         end
       end)
 
-    :erlang.send_after(1000, self(), :clean_timeouts)
+    :erlang.send_after(500, self(), :clean_timeouts)
     {:noreply, new_state}
   end
 
@@ -540,7 +540,14 @@ defmodule Hermit.Dns.Server do
 
   @impl true
   def handle_cast({:update_latency, upstream, latency}, state) do
-    upstreams_map = Map.put(state.upstreams_map, upstream, latency)
+    ema_latency =
+      case Map.get(state.upstreams_map, upstream) do
+        nil -> latency
+        prev when prev >= 2000 -> latency
+        prev -> round(prev * 0.7 + latency * 0.3)
+      end
+
+    upstreams_map = Map.put(state.upstreams_map, upstream, ema_latency)
 
     active_upstream =
       if map_size(upstreams_map) > 0 do
@@ -597,6 +604,34 @@ defmodule Hermit.Dns.Server do
       {:ok, resp} ->
         send_client_response(socket, ip, port, resp)
         state
+
+      {:ok, resp, :refresh} ->
+        send_client_response(socket, ip, port, resp)
+        is_internal = Hermit.Vpn.SniProxy.IpResolver.internal_ip?(ip)
+
+        if Cache.claim_refresh?(profile_id, is_internal, query.domain, query.qtype) do
+          target_upstreams =
+            case Rules.match(query.domain, state.custom_rules) do
+              {"bypass", _, _} ->
+                clean_upstreams = parse_upstreams(Hermit.Dns.Providers.clean_bypass_upstreams())
+                if clean_upstreams == [], do: upstreams, else: clean_upstreams
+
+              _ ->
+                upstreams
+            end
+
+          async_forward_to_upstream(
+            socket,
+            ip,
+            :background_refresh,
+            packet,
+            query,
+            target_upstreams,
+            state
+          )
+        else
+          state
+        end
 
       {:miss, matched_rule} ->
         {action, redirect_val, proxy_pair_id} =

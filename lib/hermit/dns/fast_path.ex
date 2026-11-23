@@ -45,6 +45,7 @@ defmodule Hermit.Dns.FastPath do
                client_ip
              ) do
           {:ok, resp} -> {:ok, resp}
+          {:ok, resp, :refresh} -> {:ok, resp}
           {:miss, _matched_rule} -> :miss
         end
 
@@ -88,8 +89,8 @@ defmodule Hermit.Dns.FastPath do
 
       {:ok, resp}
     else
-      # 1. Scoped cache lookup (O(1) ETS return without redundant checks)
-      case Cache.lookup(profile_id, is_internal, query.domain, query.qtype) do
+      # 1. Scoped cache lookup with Optimistic Caching (Stale-While-Revalidate)
+      case Cache.lookup(profile_id, is_internal, query.domain, query.qtype, true) do
         {:ok, cached_packet, status, answer_log_info} ->
           <<_old_id::binary-size(2), rest_packet::binary>> = cached_packet
           resp_packet = query.id <> rest_packet
@@ -101,17 +102,7 @@ defmodule Hermit.Dns.FastPath do
               answer_log_info
             end
 
-          block_reason =
-            if status == "blocked" do
-              cond do
-                String.contains?(answer_log_info, "IPv6") -> "ipv6"
-                String.contains?(answer_log_info, "Upstream Filter") -> "upstream_filter"
-                String.contains?(answer_log_info, "Custom") -> "custom_rule"
-                true -> nil
-              end
-            else
-              nil
-            end
+          block_reason = infer_block_reason(status, answer_log_info)
 
           :telemetry.execute(
             [:hermit, :dns, :query],
@@ -132,7 +123,41 @@ defmodule Hermit.Dns.FastPath do
 
           {:ok, resp_packet}
 
-        :error ->
+        {:stale, cached_packet, status, answer_log_info}
+        when status in ["resolved", "blocked"] and answer_log_info != "SERVFAIL" ->
+          stale_packet = Packet.patch_stale_ttl(cached_packet, 30)
+          <<_old_id::binary-size(2), rest_packet::binary>> = stale_packet
+          resp_packet = query.id <> rest_packet
+
+          cached_answer =
+            if status == "resolved" do
+              "#{answer_log_info} (optimistic)"
+            else
+              answer_log_info
+            end
+
+          block_reason = infer_block_reason(status, answer_log_info)
+
+          :telemetry.execute(
+            [:hermit, :dns, :query],
+            %{duration: 0},
+            %{
+              profile_id: profile_id,
+              config_id: config.id,
+              client_ip: client_ip,
+              domain: query.domain,
+              qtype: query.qtype,
+              status: status,
+              answer: cached_answer,
+              resolver: "Cache (Optimistic)",
+              block_reason: block_reason,
+              enable_query_logging: enable_query_logging
+            }
+          )
+
+          {:ok, resp_packet, :refresh}
+
+        _ ->
           # 2. Match custom rules once and reuse on :miss
           matched_rule = Rules.match(query.domain, custom_rules)
 
@@ -302,4 +327,15 @@ defmodule Hermit.Dns.FastPath do
       end
     end
   end
+
+  defp infer_block_reason("blocked", answer_log_info) do
+    cond do
+      String.contains?(answer_log_info, "IPv6") -> "ipv6"
+      String.contains?(answer_log_info, "Upstream Filter") -> "upstream_filter"
+      String.contains?(answer_log_info, "Custom") -> "custom_rule"
+      true -> nil
+    end
+  end
+
+  defp infer_block_reason(_status, _answer_log_info), do: nil
 end

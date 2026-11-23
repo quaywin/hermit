@@ -21,6 +21,16 @@ defmodule Hermit.Application do
          [
            [
              {Task.Supervisor, name: Hermit.Dns.TaskSupervisor},
+             {Finch,
+              name: Hermit.Dns.Finch,
+              pools: %{
+                default: [protocols: [:http2], count: 2, http2: [ping_interval: 25_000]]
+              }},
+             {Finch,
+              name: Hermit.Dns.FinchHttp1,
+              pools: %{
+                default: [protocols: [:http1], size: 32, count: 2]
+              }},
              {Hermit.Dns.Cache, []},
              {Hermit.Dns.Telemetry, []},
              {Hermit.Vpn.DnsDeviceResolver, []}

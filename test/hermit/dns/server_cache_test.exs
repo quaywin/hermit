@@ -712,7 +712,10 @@ defmodule Hermit.Dns.ServerCacheTest do
       {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
 
       qname = <<8>> <> "bypassed" <> <<7>> <> "example" <> <<3>> <> "com" <> <<0>>
-      query_pkt = <<0x42, 0x42, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> qname <> <<0, 1, 0, 1>>
+
+      query_pkt =
+        <<0x42, 0x42, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <>
+          qname <> <<0, 1, 0, 1>>
 
       :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, dns_port, query_pkt)
       assert {:ok, {_addr, _port, resp_pkt}} = :gen_udp.recv(client_sock, 1024, 3000)

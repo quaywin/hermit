@@ -24,7 +24,10 @@ defmodule Hermit.Dns.ProvidersTest do
              "https://freedns.controld.com/x-hagezi-pro"
 
     assert Providers.resolve_upstream("adguard", "family", :udp) == "94.140.14.15, 94.140.15.16"
-    assert Providers.resolve_upstream("cloudflare", "malware", :doh) == "https://security.cloudflare-dns.com/dns-query"
+
+    assert Providers.resolve_upstream("cloudflare", "malware", :doh) ==
+             "https://security.cloudflare-dns.com/dns-query"
+
     assert Providers.resolve_upstream("quad9", "ecs", :udp) == "9.9.9.11, 149.112.112.11"
   end
 
@@ -32,7 +35,10 @@ defmodule Hermit.Dns.ProvidersTest do
     assert Providers.detect("76.76.2.2, 76.76.10.2") == {"controld", "p2", :udp}
     assert Providers.detect("76.76.2.2   76.76.10.2") == {"controld", "p2", :udp}
     assert Providers.detect("https://freedns.controld.com/family") == {"controld", "family", :doh}
-    assert Providers.detect("https://freedns.controld.com/x-oisd") == {"controld_community", "x-oisd", :doh}
+
+    assert Providers.detect("https://freedns.controld.com/x-oisd") ==
+             {"controld_community", "x-oisd", :doh}
+
     assert Providers.detect("94.140.14.14,94.140.15.15") == {"adguard", "default", :udp}
     assert Providers.detect("1.1.1.1, 1.0.0.1") == {"cloudflare", "standard", :udp}
   end

@@ -55,7 +55,11 @@ defmodule HermitWeb.DnsProfileLiveTest do
     assert html =~ "76.76.2.2, 76.76.10.2"
 
     # Switch protocol to DoH for Control D Ads & Tracking
-    html = view |> element("button[phx-click=select_protocol][phx-value-protocol=doh]") |> render_click()
+    html =
+      view
+      |> element("button[phx-click=select_protocol][phx-value-protocol=doh]")
+      |> render_click()
+
     assert html =~ "https://freedns.controld.com/p2"
 
     # Switch provider to Control D Community Lists

@@ -740,8 +740,7 @@ defmodule HermitWeb.DnsProfileLive do
       end
 
     {total_queries, blocked_queries, ipv6_blocked_count, adguard_blocked, goodbyeads_blocked,
-     adult_blocked,
-     custom_blocked} =
+     adult_blocked, custom_blocked} =
       Enum.reduce(records, {0, 0, 0, 0, 0, 0, 0}, fn {_hour, t, b, i6, adg, gba, adt, cst},
                                                      {acc_t, acc_b, acc_i6, acc_adg, acc_gba,
                                                       acc_adt, acc_cst} ->

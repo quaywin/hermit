@@ -70,7 +70,8 @@ defmodule Hermit.Vpn.DnsWorkerTailscaleApiTest do
 
       assert_received {:http_call, "GET", "/api/v2/tailnet/my-tailnet/dns/configuration", nil}
 
-      assert_received {:http_call, "POST", "/api/v2/tailnet/my-tailnet/dns/configuration", payload}
+      assert_received {:http_call, "POST", "/api/v2/tailnet/my-tailnet/dns/configuration",
+                       payload}
 
       assert payload["nameservers"] == [
                %{"address" => "1.1.1.1", "useWithExitNode" => false},

@@ -7,8 +7,13 @@ defmodule HermitWeb.EndpointTest do
     old_phx_host = System.get_env("PHX_HOST")
 
     on_exit(fn ->
-      if old_check_origin, do: System.put_env("CHECK_ORIGIN", old_check_origin), else: System.delete_env("CHECK_ORIGIN")
-      if old_phx_host, do: System.put_env("PHX_HOST", old_phx_host), else: System.delete_env("PHX_HOST")
+      if old_check_origin,
+        do: System.put_env("CHECK_ORIGIN", old_check_origin),
+        else: System.delete_env("CHECK_ORIGIN")
+
+      if old_phx_host,
+        do: System.put_env("PHX_HOST", old_phx_host),
+        else: System.delete_env("PHX_HOST")
     end)
 
     :ok

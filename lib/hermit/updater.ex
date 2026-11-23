@@ -630,7 +630,6 @@ defmodule Hermit.Updater do
     end
   end
 
-
   defp restart_systemd_service do
     case System.cmd("systemctl", ["restart", "--no-block", @service_name], stderr_to_stdout: true) do
       {_, 0} -> :ok

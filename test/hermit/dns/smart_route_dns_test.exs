@@ -161,18 +161,22 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
   end
 
   test "blocklist takes precedence over wildcard Smart Route" do
-    blocklist_id = 999_001
+    blocklist_id = 105
 
-    if :ets.info(:dns_blocklists) == :undefined do
-      :ets.new(:dns_blocklists, [:named_table, :public, :set])
+    if :ets.info(:dns_blocklist_entries) == :undefined do
+      :ets.new(:dns_blocklist_entries, [:set, :public, :named_table, read_concurrency: true])
     end
 
-    :ets.insert(:dns_blocklists, {{blocklist_id, "ads.example.com"}, true})
+    if :ets.info(:dns_bloom_filter) != :undefined do
+      :ets.delete(:dns_bloom_filter, blocklist_id)
+    end
+
+    :ets.insert(:dns_blocklist_entries, {"ads.example.com", Bitwise.bsl(1, blocklist_id - 1)})
     Hermit.Dns.BlocklistLoader.clear_filter_cache()
 
     on_exit(fn ->
-      if :ets.info(:dns_blocklists) != :undefined do
-        :ets.delete(:dns_blocklists, {blocklist_id, "ads.example.com"})
+      if :ets.info(:dns_blocklist_entries) != :undefined do
+        :ets.delete(:dns_blocklist_entries, "ads.example.com")
       end
 
       Hermit.Dns.BlocklistLoader.clear_filter_cache()
@@ -192,7 +196,10 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
     qname = <<3>> <> "ads" <> <<7>> <> "example" <> <<3>> <> "com" <> <<0>>
     query_record = qname <> <<0, 1, 0, 1>>
     tx_id = <<0xAB, 0xCD>>
-    packet = tx_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> query_record
+
+    packet =
+      tx_id <> <<0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> query_record
+
     {:ok, query} = Packet.parse(packet)
 
     assert {:ok, resp} =

@@ -47,7 +47,9 @@ defmodule Hermit.Dns.Telemetry do
           :ok
 
         {:error, reason} ->
-          Logger.warning("Telemetry: Failed to attach 'hermit-dns-queries' handler: #{inspect(reason)}")
+          Logger.warning(
+            "Telemetry: Failed to attach 'hermit-dns-queries' handler: #{inspect(reason)}"
+          )
       end
     end
   end
@@ -314,7 +316,12 @@ defmodule Hermit.Dns.Telemetry do
           |> Enum.group_by(fn {log_data, _, _, _} -> log_data["pair_id"] end)
           |> Enum.each(fn {pair_id, group} ->
             logs = Enum.map(group, &elem(&1, 0))
-            Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_logs:#{pair_id}", {:dns_logs_batch, logs})
+
+            Phoenix.PubSub.broadcast(
+              Hermit.PubSub,
+              "dns_logs:#{pair_id}",
+              {:dns_logs_batch, logs}
+            )
           end)
         end
 
@@ -479,7 +486,10 @@ defmodule Hermit.Dns.Telemetry do
           "timestamp" => System.system_time(:second)
         }
 
-        GenServer.cast(__MODULE__, {:enqueue_log, log_data, config_id, block_reason, blocklist_id})
+        GenServer.cast(
+          __MODULE__,
+          {:enqueue_log, log_data, config_id, block_reason, blocklist_id}
+        )
       rescue
         e ->
           Logger.warning(

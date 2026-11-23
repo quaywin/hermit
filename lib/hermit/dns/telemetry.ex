@@ -67,7 +67,7 @@ defmodule Hermit.Dns.Telemetry do
       if :ets.info(@dns_metrics_table) != :undefined do
         :ets.tab2list(@dns_metrics_table)
         |> Enum.reduce(%{}, fn
-          {{_config_id, hour_ts}, total, blocked, _ipv6, _adg, _goodbye, _adult, _custom}, acc
+          {{_config_id, hour_ts}, total, blocked, _ipv6, _upstream, _custom}, acc
           when hour_ts >= cutoff ->
             Map.update(acc, hour_ts, {total, blocked}, fn {cur_tot, cur_blk} ->
               {cur_tot + total, cur_blk + blocked}
@@ -127,7 +127,6 @@ defmodule Hermit.Dns.Telemetry do
 
   @impl true
   def init(_opts) do
-    # 1. Create the shared ETS raw log table if not already created
     if :ets.info(@dns_log_table) == :undefined do
       :ets.new(@dns_log_table, [
         :ordered_set,
@@ -138,7 +137,6 @@ defmodule Hermit.Dns.Telemetry do
       ])
     end
 
-    # 2. Create the hourly metrics time-series table if not already created
     if :ets.info(@dns_metrics_table) == :undefined do
       :ets.new(@dns_metrics_table, [
         :set,
@@ -149,22 +147,18 @@ defmodule Hermit.Dns.Telemetry do
       ])
     end
 
-    # 4. Attach the telemetry handler safely
     ensure_attached()
 
-    # 5. Schedule periodic sync and prune every 60 seconds
     :erlang.send_after(60_000, self(), :periodic_prune)
-    # 6. Schedule periodic log flushing every 1 second
     :erlang.send_after(1000, self(), :flush_logs)
-    # 7. Schedule daily DB cleanup (once on boot after 5s, then every 24h)
     :erlang.send_after(5000, self(), :daily_db_cleanup)
 
     {:ok, %{log_buffer: [], cached_config_ids: [], last_config_fetch_at: 0}}
   end
 
   @impl true
-  def handle_cast({:enqueue_log, log_data, config_id, block_reason, blocklist_id}, state) do
-    log_buffer = [{log_data, config_id, block_reason, blocklist_id} | state.log_buffer]
+  def handle_cast({:enqueue_log, log_data, config_id, block_reason}, state) do
+    log_buffer = [{log_data, config_id, block_reason} | state.log_buffer]
     {:noreply, %{state | log_buffer: log_buffer}}
   end
 
@@ -186,7 +180,7 @@ defmodule Hermit.Dns.Telemetry do
 
         # 1. Bulk insert to ETS
         ets_entries =
-          Enum.flat_map(logs_to_flush, fn {log_data, config_id, _, _} ->
+          Enum.flat_map(logs_to_flush, fn {log_data, config_id, _} ->
             pair_id = log_data["pair_id"]
             counter = System.unique_integer([:monotonic])
 
@@ -202,67 +196,26 @@ defmodule Hermit.Dns.Telemetry do
         :ets.insert(@dns_log_table, ets_entries)
 
         # 2. Hourly stats metrics
-        Enum.each(logs_to_flush, fn {log_data, config_id, block_reason, blocklist_id} ->
+        Enum.each(logs_to_flush, fn {log_data, config_id, block_reason} ->
           hour_timestamp = div(log_data["timestamp"], 3600) * 3600
           status = log_data["status"]
 
-          :ets.insert_new(@dns_metrics_table, {{config_id, hour_timestamp}, 0, 0, 0, 0, 0, 0, 0})
+          :ets.insert_new(@dns_metrics_table, {{config_id, hour_timestamp}, 0, 0, 0, 0, 0})
 
           is_blocked = if status == "blocked", do: 1, else: 0
           is_ipv6_blocked = if block_reason == "ipv6", do: 1, else: 0
-
-          is_adguard =
-            if block_reason == "adguard" or
-                 (is_binary(block_reason) and
-                    (String.contains?(String.downcase(block_reason), "adguard") or
-                       not String.contains?(String.downcase(block_reason), [
-                         "goodbye",
-                         "adult",
-                         "custom_rule"
-                       ]))),
-               do: 1,
-               else: 0
-
-          is_goodbyeads =
-            if block_reason == "goodbyeads" or
-                 (is_binary(block_reason) and
-                    String.contains?(String.downcase(block_reason), "goodbye")),
-               do: 1,
-               else: 0
-
-          is_adult =
-            if block_reason == "adult" or
-                 (is_binary(block_reason) and
-                    String.contains?(String.downcase(block_reason), "adult")),
-               do: 1,
-               else: 0
-
+          is_upstream = if block_reason == "upstream_filter", do: 1, else: 0
           is_custom = if block_reason == "custom_rule", do: 1, else: 0
 
           updates = [
             {2, 1},
             {3, is_blocked},
             {4, is_ipv6_blocked},
-            {5, is_adguard},
-            {6, is_goodbyeads},
-            {7, is_adult},
-            {8, is_custom}
+            {5, is_upstream},
+            {6, is_custom}
           ]
 
           :ets.update_counter(@dns_metrics_table, {config_id, hour_timestamp}, updates)
-
-          if is_integer(blocklist_id) and status == "blocked" do
-            :ets.insert_new(
-              @dns_metrics_table,
-              {{:blocklist, config_id, blocklist_id, hour_timestamp}, 0}
-            )
-
-            :ets.update_counter(
-              @dns_metrics_table,
-              {:blocklist, config_id, blocklist_id, hour_timestamp},
-              {2, 1}
-            )
-          end
         end)
 
         now = System.system_time(:second)
@@ -272,7 +225,6 @@ defmodule Hermit.Dns.Telemetry do
                Map.get(state, :cached_config_ids, []) == [] do
             ids =
               try do
-                import Ecto.Query
                 Repo.all(from(d in Hermit.Vpn.DnsConfig, select: d.id))
               rescue
                 _ -> Map.get(state, :cached_config_ids, [])
@@ -287,9 +239,8 @@ defmodule Hermit.Dns.Telemetry do
 
         # 3. Broadcast
         if :erlang.whereis(Hermit.PubSub) != :undefined do
-          # Broadcast batch log theo profile
           logs_to_flush
-          |> Enum.group_by(fn {_, config_id, _, _} -> config_id end)
+          |> Enum.group_by(fn {_, config_id, _} -> config_id end)
           |> Enum.each(fn {config_id, group} ->
             logs = Enum.map(group, &elem(&1, 0))
 
@@ -300,7 +251,6 @@ defmodule Hermit.Dns.Telemetry do
                 {:dns_logs_batch, logs}
               )
             else
-              # For fallback queries without specific config_id, broadcast to all cached profile subscribers
               Enum.each(cached_config_ids, fn cfg_id ->
                 Phoenix.PubSub.broadcast(
                   Hermit.PubSub,
@@ -311,9 +261,8 @@ defmodule Hermit.Dns.Telemetry do
             end
           end)
 
-          # Broadcast batch log theo pair_id (chi gui dang batch de toi uu bang thong va DOM rendering)
           logs_to_flush
-          |> Enum.group_by(fn {log_data, _, _, _} -> log_data["pair_id"] end)
+          |> Enum.group_by(fn {log_data, _, _} -> log_data["pair_id"] end)
           |> Enum.each(fn {pair_id, group} ->
             logs = Enum.map(group, &elem(&1, 0))
 
@@ -356,22 +305,18 @@ defmodule Hermit.Dns.Telemetry do
     ensure_attached()
 
     try do
-      # A. Prune raw logs in RAM
       pair_ids = collect_pair_ids(@dns_log_table)
 
       Enum.each(pair_ids, fn pair_id ->
         prune_logs(pair_id)
       end)
 
-      # B. Sync current in-memory metrics to SQLite
       sync_metrics_to_db()
 
-      # C. Prune in-memory metrics older than 24 hours
       cutoff_ram_time = System.system_time(:second) - 24 * 3600
 
       :ets.select_delete(@dns_metrics_table, [
-        {{{:"$1", :"$2"}, :_, :_, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]},
-        {{{:blocklist, :"$1", :"$2", :"$3"}, :"$4"}, [{:<, :"$3", cutoff_ram_time}], [true]}
+        {{{:"$1", :"$2"}, :_, :_, :_, :_, :_}, [{:<, :"$2", cutoff_ram_time}], [true]}
       ])
     rescue
       e ->
@@ -386,22 +331,15 @@ defmodule Hermit.Dns.Telemetry do
 
   @impl true
   def handle_info(:daily_db_cleanup, state) do
-    # Prune SQLite database metrics older than 30 days
     cutoff_db_time = System.system_time(:second) - 30 * 24 * 3600
 
     try do
       Repo.delete_all(from(s in HourlyStat, where: s.hour_timestamp < ^cutoff_db_time))
-
-      Repo.delete_all(
-        from(s in Hermit.Dns.BlocklistHourlyStat, where: s.hour_timestamp < ^cutoff_db_time)
-      )
-
       Logger.info("Telemetry: Successfully pruned old SQLite metrics.")
     rescue
       e -> Logger.warning("Telemetry: Failed to prune old SQLite metrics: #{inspect(e)}")
     end
 
-    # Schedule next run in 24 hours
     :erlang.send_after(24 * 3600 * 1000, self(), :daily_db_cleanup)
     {:noreply, state}
   end
@@ -432,7 +370,6 @@ defmodule Hermit.Dns.Telemetry do
         answer = Map.get(metadata, :answer)
         resolver = Map.get(metadata, :resolver)
         block_reason = Map.get(metadata, :block_reason)
-        blocklist_id = Map.get(metadata, :blocklist_id)
 
         pair_id = if is_nil(profile_id), do: "", else: to_string(profile_id)
         client_ip_str = Packet.ip_to_string(client_ip)
@@ -459,11 +396,8 @@ defmodule Hermit.Dns.Telemetry do
 
             endpoint_id && :ets.info(:inbound_profiles_cache) != :undefined ->
               case :ets.lookup(:inbound_profiles_cache, {:endpoint_name, endpoint_id}) do
-                [{_, name}] ->
-                  name
-
-                _ ->
-                  "Endpoint #{endpoint_id}"
+                [{_, name}] -> name
+                _ -> "Endpoint #{endpoint_id}"
               end
 
             true ->
@@ -488,7 +422,7 @@ defmodule Hermit.Dns.Telemetry do
 
         GenServer.cast(
           __MODULE__,
-          {:enqueue_log, log_data, config_id, block_reason, blocklist_id}
+          {:enqueue_log, log_data, config_id, block_reason}
         )
       rescue
         e ->
@@ -522,32 +456,20 @@ defmodule Hermit.Dns.Telemetry do
         config_id = stat.dns_config_id
         hour_timestamp = stat.hour_timestamp
 
+        upstream =
+          stat.upstream_blocked_count + stat.adguard_blocked_count +
+            stat.goodbyeads_blocked_count + stat.adult_blocked_count
+
         record = {
           {config_id, hour_timestamp},
           stat.total_queries,
           stat.blocked_queries,
           stat.ipv6_blocked_count,
-          stat.adguard_blocked_count,
-          stat.goodbyeads_blocked_count,
-          stat.adult_blocked_count,
+          upstream,
           stat.custom_blocked_count
         }
 
         :ets.insert(@dns_metrics_table, record)
-      end)
-
-      # Restore blocklist stats
-      blocklist_stats =
-        Repo.all(
-          from(s in Hermit.Dns.BlocklistHourlyStat, where: s.hour_timestamp >= ^cutoff_time)
-        )
-
-      Enum.each(blocklist_stats, fn stat ->
-        :ets.insert(
-          @dns_metrics_table,
-          {{:blocklist, stat.dns_config_id, stat.dns_blocklist_id, stat.hour_timestamp},
-           stat.blocked_count}
-        )
       end)
 
       Logger.info(
@@ -566,7 +488,7 @@ defmodule Hermit.Dns.Telemetry do
 
       Repo.transaction(fn ->
         Enum.each(records, fn
-          {{config_id, hour_timestamp}, total, blocked, ipv6, adguard, goodbyeads, adult, custom}
+          {{config_id, hour_timestamp}, total, blocked, ipv6, upstream, custom}
           when is_integer(config_id) ->
             if MapSet.member?(active_ids_set, config_id) do
               stat_attrs = %{
@@ -575,15 +497,11 @@ defmodule Hermit.Dns.Telemetry do
                 total_queries: total,
                 blocked_queries: blocked,
                 ipv6_blocked_count: ipv6,
-                adguard_blocked_count: adguard,
-                goodbyeads_blocked_count: goodbyeads,
-                adult_blocked_count: adult,
+                upstream_blocked_count: upstream,
                 custom_blocked_count: custom
               }
 
-              changeset =
-                %HourlyStat{}
-                |> HourlyStat.changeset(stat_attrs)
+              changeset = %HourlyStat{} |> HourlyStat.changeset(stat_attrs)
 
               case Repo.insert(
                      changeset,
@@ -593,9 +511,7 @@ defmodule Hermit.Dns.Telemetry do
                           :total_queries,
                           :blocked_queries,
                           :ipv6_blocked_count,
-                          :adguard_blocked_count,
-                          :goodbyeads_blocked_count,
-                          :adult_blocked_count,
+                          :upstream_blocked_count,
                           :custom_blocked_count,
                           :updated_at
                         ]},
@@ -607,34 +523,6 @@ defmodule Hermit.Dns.Telemetry do
                 {:error, changeset} ->
                   Logger.warning(
                     "Telemetry: Failed to sync hourly metrics to SQLite: #{inspect(changeset.errors)}"
-                  )
-              end
-            end
-
-          {{:blocklist, config_id, blocklist_id, hour_timestamp}, count} ->
-            if MapSet.member?(active_ids_set, config_id) do
-              stat_attrs = %{
-                dns_config_id: config_id,
-                dns_blocklist_id: blocklist_id,
-                hour_timestamp: hour_timestamp,
-                blocked_count: count
-              }
-
-              changeset =
-                %Hermit.Dns.BlocklistHourlyStat{}
-                |> Hermit.Dns.BlocklistHourlyStat.changeset(stat_attrs)
-
-              case Repo.insert(
-                     changeset,
-                     on_conflict: {:replace, [:blocked_count, :updated_at]},
-                     conflict_target: [:dns_config_id, :dns_blocklist_id, :hour_timestamp]
-                   ) do
-                {:ok, _} ->
-                  :ok
-
-                {:error, changeset} ->
-                  Logger.warning(
-                    "Telemetry: Failed to sync blocklist hourly metrics to SQLite: #{inspect(changeset.errors)}"
                   )
               end
             end
@@ -654,7 +542,6 @@ defmodule Hermit.Dns.Telemetry do
 
   defp prune_logs(id) do
     pattern = {{id, :"$1"}, :_}
-    # counters are already in ascending order because of :ordered_set select
     counters = :ets.select(@dns_log_table, [{pattern, [], [:"$1"]}])
     count = length(counters)
 
@@ -662,7 +549,6 @@ defmodule Hermit.Dns.Telemetry do
       delete_count = count - @max_raw_logs
       max_deleted_counter = Enum.at(counters, delete_count - 1)
 
-      # Batch delete all records with counter <= max_deleted_counter using select_delete
       :ets.select_delete(@dns_log_table, [
         {{{id, :"$1"}, :_}, [{:"=<", :"$1", max_deleted_counter}], [true]}
       ])

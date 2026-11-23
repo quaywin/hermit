@@ -1,44 +1,27 @@
 defmodule Hermit.Dns.FastPath do
   @moduledoc """
   Lock-free local DNS resolution fast path (IPv6 blocking, ETS cache hits,
-  custom rules, Smart DNS routing, and blocklist filtering).
+  custom rules, and Smart DNS routing).
   """
 
   alias Hermit.Dns.Cache
-  alias Hermit.Dns.Filter
   alias Hermit.Dns.Packet
   alias Hermit.Dns.Rules
 
-  @spec precompute_blocklist_meta(map()) :: {[integer()], %{optional(integer()) => String.t()}}
-  def precompute_blocklist_meta(config) do
-    blocklists_list =
-      case config.blocklists do
-        %Ecto.Association.NotLoaded{} -> []
-        nil -> []
-        list when is_list(list) -> list
-      end
-
-    enabled = Enum.filter(blocklists_list, & &1.enabled)
-    enabled_ids = Enum.map(enabled, & &1.id)
-    names_map = Map.new(enabled, fn b -> {b.id, b.name} end)
-    {enabled_ids, names_map}
-  end
-
   @doc """
   Directly resolves a DNS query from the fast path (Cache hit, IPv6 block, Custom Rule block/redirect,
-  or Blocklist match) without message-passing or spawning tasks.
+  or Smart Route match) without message-passing or spawning tasks.
   Returns `{:ok, response_packet}` if resolved locally, or `:miss` if resolution requires upstream forwarding.
   """
   @spec resolve_fast_path(integer(), binary(), term()) :: {:ok, binary()} | :miss
   def resolve_fast_path(endpoint_id, packet, client_ip) do
     if :ets.info(:inbound_profiles_cache) != :undefined do
       case :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint_id}) do
-        [{_, {config, custom_rules, blocklist_meta}}] ->
-          parse_and_resolve(endpoint_id, config, custom_rules, blocklist_meta, packet, client_ip)
-
         [{_, {config, custom_rules}}] ->
-          blocklist_meta = precompute_blocklist_meta(config)
-          parse_and_resolve(endpoint_id, config, custom_rules, blocklist_meta, packet, client_ip)
+          parse_and_resolve(endpoint_id, config, custom_rules, packet, client_ip)
+
+        [{_, {config, custom_rules, _legacy}}] ->
+          parse_and_resolve(endpoint_id, config, custom_rules, packet, client_ip)
 
         _ ->
           :miss
@@ -50,14 +33,13 @@ defmodule Hermit.Dns.FastPath do
     _ -> :miss
   end
 
-  defp parse_and_resolve(endpoint_id, config, custom_rules, blocklist_meta, packet, client_ip) do
+  defp parse_and_resolve(endpoint_id, config, custom_rules, packet, client_ip) do
     case Packet.parse(packet) do
       {:ok, query} ->
         case resolve_with_rule(
                endpoint_id,
                config,
                custom_rules,
-               blocklist_meta,
                packet,
                query,
                client_ip
@@ -76,7 +58,6 @@ defmodule Hermit.Dns.FastPath do
         profile_id,
         config,
         custom_rules,
-        blocklist_meta,
         _packet,
         query,
         client_ip
@@ -124,9 +105,7 @@ defmodule Hermit.Dns.FastPath do
             if status == "blocked" do
               cond do
                 String.contains?(answer_log_info, "IPv6") -> "ipv6"
-                String.contains?(answer_log_info, "AdGuard") -> "adguard"
-                String.contains?(answer_log_info, "GoodbyeAds") -> "goodbyeads"
-                String.contains?(answer_log_info, "Adult") -> "adult"
+                String.contains?(answer_log_info, "Upstream Filter") -> "upstream_filter"
                 String.contains?(answer_log_info, "Custom") -> "custom_rule"
                 true -> nil
               end
@@ -173,31 +152,7 @@ defmodule Hermit.Dns.FastPath do
                 {act, val, nil}
             end
 
-          # 2.5 Match dynamic blocklists before Smart Route so ads/trackers under
-          # wildcard smart-routed domains are still blocked (explicit custom rules
-          # like block/bypass/redirect/forward_* still take precedence).
-          {action, redirect_val, block_reason, blocklist_id} =
-            if is_nil(action) or action == "smart_route" do
-              {enabled_blocklist_ids, blocklist_names} = blocklist_meta
-
-              matched_id =
-                if enabled_blocklist_ids != [] do
-                  Filter.match_any_ets_blocklist_cached?(query.domain, enabled_blocklist_ids)
-                else
-                  nil
-                end
-
-              if matched_id do
-                matched_name = Map.get(blocklist_names, matched_id, "blocklist")
-                {"block", nil, matched_name, matched_id}
-              else
-                {action, redirect_val, block_reason, nil}
-              end
-            else
-              {action, redirect_val, block_reason, nil}
-            end
-
-          # 3. Match Smart Routed Domains (SNI Proxy) if not matched by custom rules or blocklists
+          # 3. Match Smart Routed Domains (SNI Proxy) if not matched by custom rules
           {action, redirect_val} =
             if is_nil(action) and not is_internal do
               case Hermit.Vpn.SniProxy.match(query.domain) do
@@ -216,12 +171,7 @@ defmodule Hermit.Dns.FastPath do
               resp = Packet.build_nxdomain(query.id, query.query_record)
 
               answer_log_info =
-                case block_reason do
-                  "adult" -> "NXDOMAIN (Adult Filter)"
-                  "custom_rule" -> "NXDOMAIN (Custom Rule)"
-                  nil -> "NXDOMAIN"
-                  name -> "NXDOMAIN (#{name})"
-                end
+                if block_reason == "custom_rule", do: "NXDOMAIN (Custom Rule)", else: "NXDOMAIN"
 
               Cache.store(
                 profile_id,
@@ -247,7 +197,6 @@ defmodule Hermit.Dns.FastPath do
                   answer: answer_log_info,
                   resolver: "Local Filter",
                   block_reason: block_reason,
-                  blocklist_id: blocklist_id,
                   enable_query_logging: enable_query_logging
                 }
               )

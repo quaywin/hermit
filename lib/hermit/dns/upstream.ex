@@ -329,18 +329,31 @@ defmodule Hermit.Dns.Upstream do
     Task.Supervisor.start_child(Hermit.Dns.TaskSupervisor, fn ->
       GenServer.cast(server_pid, {:update_latency, upstream, duration})
 
-      {ttl, answer_log_info} =
-        case Packet.parse_response_metadata(packet, enable_query_logging) do
-          {:ok, extracted_ttl, ips} ->
-            if enable_query_logging do
-              answer = if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
-              {extracted_ttl, answer}
-            else
-              {extracted_ttl, "Resolved"}
-            end
+      {ttl, status, answer_log_info, block_reason} =
+        case Packet.classify_upstream_response(packet, enable_query_logging) do
+          {:ok, %{blocked?: true, ttl: extracted_ttl, rcode: rcode, null_ip_type: null_ip_type}} ->
+            answer =
+              cond do
+                null_ip_type == :ipv4 -> "0.0.0.0 (Upstream Filter)"
+                null_ip_type == :ipv6 -> ":: (Upstream Filter)"
+                rcode == 3 -> "NXDOMAIN (Upstream Filter)"
+                true -> "Blocked (Upstream Filter)"
+              end
+
+            {extracted_ttl, "blocked", answer, "upstream_filter"}
+
+          {:ok, %{ttl: extracted_ttl, ips: ips}} ->
+            answer =
+              if enable_query_logging do
+                if ips == [], do: "Resolved", else: Enum.join(ips, ", ")
+              else
+                "Resolved"
+              end
+
+            {extracted_ttl, "resolved", answer, nil}
 
           _ ->
-            {10, "Resolved"}
+            {10, "resolved", "Resolved", nil}
         end
 
       is_internal = Hermit.Vpn.SniProxy.IpResolver.internal_ip?(client_ip)
@@ -351,7 +364,7 @@ defmodule Hermit.Dns.Upstream do
         original_query.domain,
         original_query.qtype,
         packet,
-        "resolved",
+        status,
         answer_log_info,
         ttl
       )
@@ -373,9 +386,10 @@ defmodule Hermit.Dns.Upstream do
           client_ip: client_ip,
           domain: original_query.domain,
           qtype: original_query.qtype,
-          status: "resolved",
+          status: status,
           answer: answer_log_info,
           resolver: resolver_tag,
+          block_reason: block_reason,
           enable_query_logging: enable_query_logging
         }
       )

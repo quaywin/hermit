@@ -632,12 +632,12 @@ defmodule Hermit.Dns.ServerCacheTest do
     end
   end
 
-  test "DNS cache is cleared when an associated blocklist is updated" do
+  test "bypass custom rule forwards to clean_bypass_upstreams instead of filtered profile upstream" do
     {:ok, profile} =
       Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
-        name: "P_Test_Blocklist_Cache",
+        name: "P_Test_Bypass_Clean",
         type: "tailscale",
-        config: %{"ts_auth_key" => "k_test_blocklist"}
+        config: %{"ts_auth_key" => "k_test_bypass"}
       })
 
     {:ok, endpoint} =
@@ -647,45 +647,82 @@ defmodule Hermit.Dns.ServerCacheTest do
         doh_token: :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
       })
 
-    profile_id = endpoint.id
-    config = Hermit.Vpn.DnsConfig.get_for_endpoint(profile_id)
+    # Spin up two mock UDP upstreams: filtered (returns 0.0.0.0) and clean bypass (returns 9.9.9.9)
+    {:ok, filtered_sock} = :gen_udp.open(0, [:binary, active: false])
+    {:ok, filtered_port} = :inet.port(filtered_sock)
 
-    # Create a blocklist and associate it
-    {:ok, blocklist} =
-      Hermit.Repo.insert(%Hermit.Dns.Blocklist{
-        name: "Test List",
-        url: "priv/test_list.txt",
-        format: "domains",
-        enabled: true
+    {:ok, clean_sock} = :gen_udp.open(0, [:binary, active: false])
+    {:ok, clean_port} = :inet.port(clean_sock)
+
+    filtered_task =
+      Task.async(fn ->
+        case :gen_udp.recv(filtered_sock, 0, 3000) do
+          {:ok, {ip, port, pkt}} ->
+            {:ok, q} = Packet.parse(pkt)
+            resp = Packet.build_a_response(q.id, q.query_record, "0.0.0.0")
+            :gen_udp.send(filtered_sock, ip, port, resp)
+            :filtered_hit
+
+          _ ->
+            :timeout
+        end
+      end)
+
+    clean_task =
+      Task.async(fn ->
+        case :gen_udp.recv(clean_sock, 0, 3000) do
+          {:ok, {ip, port, pkt}} ->
+            {:ok, q} = Packet.parse(pkt)
+            resp = Packet.build_a_response(q.id, q.query_record, "9.9.9.9")
+            :gen_udp.send(clean_sock, ip, port, resp)
+            :clean_hit
+
+          _ ->
+            :timeout
+        end
+      end)
+
+    prev_bypass = Application.get_env(:hermit, :clean_bypass_upstreams)
+    Application.put_env(:hermit, :clean_bypass_upstreams, "127.0.0.1:#{clean_port}")
+
+    on_exit(fn ->
+      if is_nil(prev_bypass) do
+        Application.delete_env(:hermit, :clean_bypass_upstreams)
+      else
+        Application.put_env(:hermit, :clean_bypass_upstreams, prev_bypass)
+      end
+
+      :gen_udp.close(filtered_sock)
+      :gen_udp.close(clean_sock)
+    end)
+
+    {:ok, _config} =
+      Hermit.Vpn.DnsConfig.update_for_endpoint(endpoint.id, %{
+        enabled: true,
+        upstream_dns: "127.0.0.1:#{filtered_port}",
+        custom_rules: [
+          %{"domain" => "bypassed.example.com", "action" => "bypass", "value" => nil}
+        ]
       })
 
-    # Associate blocklist
-    {:ok, _config} = Hermit.Vpn.DnsConfig.update_blocklists(config, [blocklist.id])
-
-    # Start DNS server
-    port = 35361
-    {:ok, server_pid} = Server.start_link(profile_id: profile_id, port: port)
+    dns_port = 35361
+    {:ok, server_pid} = Server.start_link(profile_id: endpoint.id, port: dns_port)
 
     try do
-      domain = "blocklist-clear-test.com"
-      mock_response = <<1, 2, 3, 4>>
-      expires_at = System.monotonic_time(:second) + 100
+      {:ok, client_sock} = :gen_udp.open(0, [:binary, active: false])
 
-      :ets.insert(
-        :dns_cache,
-        {{profile_id, domain, :A}, mock_response, "resolved", "1.1.1.1", expires_at}
-      )
+      qname = <<8>> <> "bypassed" <> <<7>> <> "example" <> <<3>> <> "com" <> <<0>>
+      query_pkt = <<0x42, 0x42, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00>> <> qname <> <<0, 1, 0, 1>>
 
-      assert {:ok, ^mock_response, "resolved", "1.1.1.1"} =
-               Hermit.Dns.Cache.lookup(profile_id, domain, :A)
+      :ok = :gen_udp.send(client_sock, {127, 0, 0, 1}, dns_port, query_pkt)
+      assert {:ok, {_addr, _port, resp_pkt}} = :gen_udp.recv(client_sock, 1024, 3000)
 
-      # Trigger blocklist updated broadcast
-      Phoenix.PubSub.broadcast(Hermit.PubSub, "dns_blocklist", {:blocklist_updated, blocklist.id})
+      assert Packet.extract_resolved_ips(resp_pkt) == ["9.9.9.9"]
+      assert Task.await(clean_task, 1000) == :clean_hit
 
-      # Wait a tiny bit for GenServer to process PubSub message
-      Process.sleep(50)
-
-      assert Hermit.Dns.Cache.lookup(profile_id, domain, :A) == :error
+      # Shutdown filtered task cleanly
+      Task.shutdown(filtered_task, :brutal_kill)
+      :gen_udp.close(client_sock)
     after
       if Process.alive?(server_pid) do
         GenServer.stop(server_pid)

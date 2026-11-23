@@ -6,7 +6,7 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:name, :string, default: "Default DNS Profile")
     field(:enabled, :boolean, default: false)
     field(:block_ipv6, :boolean, default: false)
-    field(:upstream_dns, :string, default: "1.1.1.1, 8.8.8.8")
+    field(:upstream_dns, :string, default: Hermit.Dns.Providers.default_upstream())
     field(:custom_rules, {:array, :map}, default: [])
     field(:services, :map, default: %{})
     field(:tailscale_override_dns, :boolean, default: false)
@@ -18,12 +18,6 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:dns_endpoint_id, :integer, virtual: true)
 
     has_many(:dns_endpoints, Hermit.Vpn.DnsEndpoint, foreign_key: :dns_profile_id)
-
-    many_to_many(:blocklists, Hermit.Dns.Blocklist,
-      join_through: "dns_configs_blocklists",
-      join_keys: [dns_config_id: :id, dns_blocklist_id: :id],
-      on_replace: :delete
-    )
 
     timestamps()
   end
@@ -188,7 +182,7 @@ defmodule Hermit.Vpn.DnsConfig do
 
     cond do
       is_nil(endpoint) ->
-        %__MODULE__{blocklists: []}
+        %__MODULE__{}
 
       is_nil(endpoint.dns_profile_id) ->
         endpoint_dns_name = "DNS Profile for Endpoint #{endpoint_id}"
@@ -210,17 +204,15 @@ defmodule Hermit.Vpn.DnsConfig do
 
         Hermit.Vpn.DnsEndpoint.clear_cache()
 
-        new_config = Hermit.Repo.preload(new_config, :blocklists)
         %{new_config | dns_endpoint_id: endpoint_id}
 
       true ->
         case Hermit.Repo.get(__MODULE__, endpoint.dns_profile_id) do
           nil ->
-            config = get_global_config() |> Hermit.Repo.preload(:blocklists)
+            config = get_global_config()
             %{config | dns_endpoint_id: endpoint_id}
 
           config ->
-            config = Hermit.Repo.preload(config, :blocklists)
             %{config | dns_endpoint_id: endpoint_id}
         end
     end
@@ -233,7 +225,6 @@ defmodule Hermit.Vpn.DnsConfig do
 
     case config |> changeset(attrs) |> Hermit.Repo.update() do
       {:ok, updated} ->
-        updated = updated |> Hermit.Repo.preload(:blocklists)
         updated = %{updated | dns_endpoint_id: endpoint_id}
 
         if :erlang.whereis(Hermit.PubSub) != :undefined do
@@ -249,17 +240,6 @@ defmodule Hermit.Vpn.DnsConfig do
       {:error, changeset} ->
         {:error, changeset}
     end
-  end
-
-  def update_blocklists(config, blocklist_ids) do
-    import Ecto.Query
-    blocklists = Hermit.Repo.all(from(b in Hermit.Dns.Blocklist, where: b.id in ^blocklist_ids))
-
-    config
-    |> Hermit.Repo.preload(:blocklists)
-    |> Ecto.Changeset.change()
-    |> Ecto.Changeset.put_assoc(:blocklists, blocklists)
-    |> Hermit.Repo.update()
   end
 
   @doc """

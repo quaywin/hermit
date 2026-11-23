@@ -153,7 +153,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
 
     {:ok, {_, _server_pid}} = Hermit.Vpn.DnsSupervisor.start_dns(endpoint.id, inbound.id)
 
-    [{_, {initial_config, _, _}}] =
+    [{_, {initial_config, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert initial_config.id == p1.id
@@ -168,7 +168,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
       "dns_profile_id" => to_string(p2.id)
     })
 
-    [{_, {updated_config, _, _}}] =
+    [{_, {updated_config, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert updated_config.id == p2.id
@@ -188,7 +188,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     })
     |> render_submit()
 
-    [{_, {final_config, _, _}}] =
+    [{_, {final_config, _}}] =
       :ets.lookup(:inbound_profiles_cache, {:endpoint_config, endpoint.id})
 
     assert final_config.id == p1.id

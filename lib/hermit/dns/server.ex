@@ -40,7 +40,6 @@ defmodule Hermit.Dns.Server do
     if :erlang.whereis(Hermit.PubSub) != :undefined do
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config:#{endpoint_id}")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
-      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_blocklist")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "vpn_pairs")
     end
 
@@ -56,12 +55,11 @@ defmodule Hermit.Dns.Server do
       end
 
     custom_rules = Rules.precompile(config)
-    blocklist_meta = FastPath.precompute_blocklist_meta(config)
 
     if :ets.info(:inbound_profiles_cache) != :undefined do
       :ets.insert(
         :inbound_profiles_cache,
-        {{:endpoint_config, endpoint_id}, {config, custom_rules, blocklist_meta}}
+        {{:endpoint_config, endpoint_id}, {config, custom_rules}}
       )
     end
 
@@ -108,7 +106,6 @@ defmodule Hermit.Dns.Server do
       active_upstream: active_upstream,
       config: config,
       custom_rules: custom_rules,
-      blocklist_meta: blocklist_meta,
       next_tx_id: 0
     }
 
@@ -265,7 +262,6 @@ defmodule Hermit.Dns.Server do
 
   @impl true
   def handle_info({:dns_config_updated, updated_config}, state) do
-    updated_config = Hermit.Repo.preload(updated_config, :blocklists)
     upstreams = Upstream.parse_upstreams(updated_config.upstream_dns)
 
     Logger.info(
@@ -274,7 +270,6 @@ defmodule Hermit.Dns.Server do
 
     new_state = sync_upstreams_config(state, upstreams)
     custom_rules = Rules.precompile(updated_config)
-    blocklist_meta = FastPath.precompute_blocklist_meta(updated_config)
 
     if state.config && state.config.id != updated_config.id do
       if :erlang.whereis(Hermit.PubSub) != :undefined do
@@ -286,43 +281,18 @@ defmodule Hermit.Dns.Server do
     if :ets.info(:inbound_profiles_cache) != :undefined do
       :ets.insert(
         :inbound_profiles_cache,
-        {{:endpoint_config, state.endpoint_id}, {updated_config, custom_rules, blocklist_meta}}
+        {{:endpoint_config, state.endpoint_id}, {updated_config, custom_rules}}
       )
     end
 
     Cache.clear(state.profile_id)
-    Hermit.Dns.BlocklistLoader.clear_filter_cache()
 
     {:noreply,
      %{
        new_state
        | config: updated_config,
-         custom_rules: custom_rules,
-         blocklist_meta: blocklist_meta
+         custom_rules: custom_rules
      }}
-  end
-
-  @impl true
-  def handle_info({:blocklist_updated, blocklist_id}, state) do
-    blocklists =
-      case state.config.blocklists do
-        %Ecto.Association.NotLoaded{} -> []
-        nil -> []
-        list -> list
-      end
-
-    has_blocklist? = Enum.any?(blocklists, fn b -> b.id == blocklist_id end)
-
-    if has_blocklist? do
-      Logger.info(
-        "DNS Server (profile #{state.profile_id}): Blocklist #{blocklist_id} updated. Clearing cache."
-      )
-
-      Cache.clear(state.profile_id)
-      Hermit.Dns.BlocklistLoader.clear_filter_cache()
-    end
-
-    {:noreply, state}
   end
 
   @impl true
@@ -620,7 +590,6 @@ defmodule Hermit.Dns.Server do
            profile_id,
            config,
            state.custom_rules,
-           state.blocklist_meta,
            packet,
            query,
            ip
@@ -870,6 +839,11 @@ defmodule Hermit.Dns.Server do
                     state
                 end
             end
+
+          "bypass" ->
+            clean_upstreams = parse_upstreams(Hermit.Dns.Providers.clean_bypass_upstreams())
+            target = if clean_upstreams == [], do: upstreams, else: clean_upstreams
+            async_forward_to_upstream(socket, ip, port, packet, query, target, state)
 
           _ ->
             async_forward_to_upstream(socket, ip, port, packet, query, upstreams, state)

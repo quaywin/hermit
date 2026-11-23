@@ -73,147 +73,225 @@ defmodule HermitWeb.DnsProfileComponents do
   end
 
   attr :selected_profile, :map, required: true
-  attr :available_blocklists, :list, required: true
-
-  def blocklist_filters_card(assigns) do
-    ~H"""
-    <div class="bg-base-100 border border-base-300 rounded-[12px] p-4 shadow-sm">
-      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div class="flex items-center gap-2">
-          <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 shrink-0">
-            Security & Ad-Blocking Filters
-          </h2>
-          <.link
-            navigate={~p"/dns/blocklists"}
-            class="text-[10px] text-emerald-500 hover:text-emerald-600 font-semibold underline"
-          >
-            (Manage Sources)
-          </.link>
-        </div>
-        <div class="flex flex-wrap items-center gap-3">
-          <%= if @available_blocklists == [] do %>
-            <span class="text-xs text-base-content/40 italic">
-              No active blocklist filters configured.
-            </span>
-          <% else %>
-            <%= for blocklist <- @available_blocklists do %>
-              <% active =
-                Enum.any?(@selected_profile.blocklists || [], &(&1.id == blocklist.id)) %>
-              <div
-                class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
-                title={blocklist.description || "Blocks domains matching this filter source."}
-              >
-                <span class="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-base-content/85">
-                  {blocklist.name}
-                </span>
-                <button
-                  phx-click="toggle_profile_blocklist"
-                  phx-value-blocklist-id={blocklist.id}
-                  class={[
-                    "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
-                    if(active, do: "btn-primary", else: "btn-outline")
-                  ]}
-                >
-                  {if active, do: "Blocking", else: "Allowing"}
-                </button>
-              </div>
-            <% end %>
-          <% end %>
-
-          <!-- IPv6 (AAAA) Filter -->
-          <div
-            class="px-3 py-1.5 bg-base-200/30 rounded-[8px] border border-base-300/50 flex items-center gap-3 cursor-help transition-all hover:bg-base-200/50"
-            title="Blocks IPv6 AAAA requests. Improves speed and prevents IPv6 leaks."
-          >
-            <span class="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-base-content/85">
-              IPv6
-            </span>
-            <button
-              phx-click="toggle_block_ipv6"
-              class={[
-                "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
-                if(@selected_profile.block_ipv6, do: "btn-primary", else: "btn-outline")
-              ]}
-            >
-              {if @selected_profile.block_ipv6, do: "Blocking", else: "Allowing"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  attr :selected_profile, :map, required: true
+  attr :selected_provider, :string, required: true
+  attr :selected_preset, :string, default: nil
+  attr :selected_protocol, :atom, required: true
+  attr :upstream_input, :string, required: true
 
   def upstream_and_policies_card(assigns) do
+    providers = Hermit.Dns.Providers.all()
+    presets = Hermit.Dns.Providers.presets_for(assigns.selected_provider)
+    show_protocol = Hermit.Dns.Providers.supports_protocol_toggle?(assigns.selected_provider)
+
+    assigns =
+      assigns
+      |> assign(:providers, providers)
+      |> assign(:presets, presets)
+      |> assign(:show_protocol, show_protocol)
+
     ~H"""
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-      <!-- Upstream Servers -->
+      <!-- DNS Resolver & Cloud Filtering -->
       <div class="bg-base-100 border border-base-300 rounded-[12px] p-6 shadow-sm flex flex-col justify-between">
-        <div class="space-y-6">
-          <div>
-            <div class="flex items-center justify-between mb-1">
+        <div class="space-y-5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
               <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
-                Upstream DNS Servers
+                DNS Resolver &amp; Filtering
               </h3>
-              <!-- EDNS Client Subnet (ECS) Toggle -->
+              <p class="text-[11px] text-base-content/50 mt-0.5">
+                Cloud ad-blocking &amp; malware filtering via UDP or encrypted DoH.
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
               <button
+                type="button"
+                phx-click="toggle_block_ipv6"
+                class={[
+                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider cursor-pointer",
+                  if(@selected_profile.block_ipv6, do: "btn-primary", else: "btn-outline")
+                ]}
+                title="Blocks IPv6 AAAA requests. Improves speed and prevents IPv6 leaks."
+              >
+                {if @selected_profile.block_ipv6, do: "IPv6: Blocking", else: "IPv6: Allowed"}
+              </button>
+              <button
+                type="button"
                 phx-click="toggle_enable_ecs"
                 class={[
-                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider",
+                  "btn btn-xs rounded-[4px] font-semibold uppercase tracking-wider cursor-pointer",
                   if(@selected_profile.enable_ecs, do: "btn-primary", else: "btn-outline")
                 ]}
                 title="Sends EDNS Client Subnet to upstream DNS to optimize CDN routing (e.g. YouTube, Netflix)."
               >
-                {if @selected_profile.enable_ecs, do: "ECS Active", else: "ECS Inactive"}
+                {if @selected_profile.enable_ecs, do: "ECS Active", else: "ECS Off"}
               </button>
             </div>
-            <p class="text-[11px] text-base-content/50 mb-4">
-              Support legacy DNS IPs (53) or HTTPS DoH URLs (e.g. <code>https://cloudflare-dns.com/dns-query</code>).
-            </p>
-            <form id="save-upstream-dns-form" phx-submit="save_upstream_dns" class="space-y-4">
-              <input
-                type="text"
-                name="upstream_dns"
-                value={@selected_profile.upstream_dns}
-                placeholder="e.g. 1.1.1.1, 8.8.8.8, https://dns.google/dns-query"
-                class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
-              />
-              <button
-                type="submit"
-                class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px]"
-              >
-                Save Upstream
-              </button>
-            </form>
           </div>
+
+          <form
+            id="save-upstream-dns-form"
+            phx-change="resolver_form_changed"
+            phx-submit="save_upstream_dns"
+            class="space-y-4"
+          >
+            <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+              <div class={if(@presets != [], do: "sm:col-span-5", else: "sm:col-span-12")}>
+                <label class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50 block mb-1">
+                  Provider
+                </label>
+                <select
+                  name="provider"
+                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2.5 py-2 text-xs font-medium text-base-content focus:outline-none focus:border-primary"
+                >
+                  <%= for p <- @providers do %>
+                    <option value={p.id} selected={@selected_provider == p.id}>{p.name}</option>
+                  <% end %>
+                </select>
+              </div>
+
+              <%= if @presets != [] do %>
+                <div class={if(@show_protocol, do: "sm:col-span-4", else: "sm:col-span-7")}>
+                  <label class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50 block mb-1">
+                    Filter Preset
+                  </label>
+                  <select
+                    name="preset"
+                    class="w-full bg-base-200 border border-base-300 rounded-[6px] px-2.5 py-2 text-xs font-medium text-base-content focus:outline-none focus:border-primary"
+                  >
+                    <%= for preset <- @presets do %>
+                      <option value={preset.id} selected={@selected_preset == preset.id}>
+                        {preset.label}
+                      </option>
+                    <% end %>
+                  </select>
+                </div>
+              <% end %>
+
+              <%= if @show_protocol do %>
+                <div class="sm:col-span-3">
+                  <label class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50 block mb-1">
+                    Protocol
+                  </label>
+                  <div class="flex bg-base-200 p-0.5 rounded-[6px] border border-base-300/60 h-[34px]">
+                    <button
+                      type="button"
+                      phx-click="select_protocol"
+                      phx-value-protocol="udp"
+                      class={[
+                        "flex-1 text-[10px] font-semibold uppercase rounded-[4px] transition-all cursor-pointer",
+                        if(@selected_protocol == :udp,
+                          do: "bg-base-100 text-emerald-500 shadow-sm",
+                          else: "text-base-content/50 hover:text-base-content"
+                        )
+                      ]}
+                    >
+                      UDP
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="select_protocol"
+                      phx-value-protocol="doh"
+                      class={[
+                        "flex-1 text-[10px] font-semibold uppercase rounded-[4px] transition-all cursor-pointer",
+                        if(@selected_protocol == :doh,
+                          do: "bg-base-100 text-emerald-500 shadow-sm",
+                          else: "text-base-content/50 hover:text-base-content"
+                        )
+                      ]}
+                    >
+                      DoH
+                    </button>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+
+            <div>
+              <label class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50 block mb-1">
+                Upstream Endpoint
+              </label>
+              <div class="flex items-center gap-2">
+                <input
+                  type="text"
+                  name="upstream_dns"
+                  value={@upstream_input}
+                  placeholder="e.g. 76.76.2.2, 76.76.10.2 or https://freedns.controld.com/p2"
+                  class="flex-1 bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+                />
+                <button
+                  type="submit"
+                  class="btn btn-primary btn-xs uppercase tracking-wider px-4 h-[34px] rounded-[6px] cursor-pointer shrink-0"
+                >
+                  Save
+                </button>
+              </div>
+              <p class="text-[10px] text-base-content/45 mt-2">
+                Custom DoH builders:
+                <a
+                  href="https://controld.com/free-dns"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-emerald-500 hover:underline font-medium"
+                >
+                  Control D
+                </a>
+                &middot;
+                <a
+                  href="https://my.nextdns.io/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-emerald-500 hover:underline font-medium"
+                >
+                  NextDNS
+                </a>
+                &middot;
+                <a
+                  href="https://adguard-dns.io/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-emerald-500 hover:underline font-medium"
+                >
+                  AdGuard
+                </a>
+                &middot;
+                <a
+                  href="https://rethinkdns.com/configure"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-emerald-500 hover:underline font-medium"
+                >
+                  RethinkDNS
+                </a>
+              </p>
+            </div>
+          </form>
 
           <%= if @selected_profile.enable_ecs do %>
             <div class="border-t border-base-300/50 pt-4">
               <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 mb-1">
                 EDNS Client Subnet (ECS) Fallback IP
               </h3>
-              <p class="text-[11px] text-base-content/50 mb-4">
+              <p class="text-[11px] text-base-content/50 mb-3">
                 Optional. Used when the client IP is private (Tailscale, LAN). Allows public resolvers to locate CDNs in your target country (e.g. Vietnam).
               </p>
               <form
                 id="save-ecs-fallback-ip-form"
                 phx-submit="save_ecs_fallback_ip"
-                class="space-y-4"
+                class="flex items-center gap-2"
               >
                 <input
                   type="text"
                   name="ecs_fallback_ip"
                   value={@selected_profile.ecs_fallback_ip}
                   placeholder="e.g. 14.162.50.1 (FPT), 113.160.0.1 (VNPT)"
-                  class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
+                  class="flex-1 bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs font-mono placeholder:text-base-content/30 focus:outline-none focus:border-primary"
                 />
                 <button
                   type="submit"
-                  class="btn btn-primary btn-xs uppercase tracking-wider px-3 py-2 rounded-[4px]"
+                  class="btn btn-primary btn-xs uppercase tracking-wider px-3 h-[34px] rounded-[6px] shrink-0"
                 >
-                  Save Fallback IP
+                  Save Fallback
                 </button>
               </form>
             </div>
@@ -504,33 +582,20 @@ defmodule HermitWeb.DnsProfileComponents do
                 No blocking actions recorded.
               </p>
             <% else %>
-              <% total_blocked_in_blocklists =
-                Enum.sum(Map.values(@dns_metrics.blocklist_breakdown || %{})) %>
-              <!-- Dynamic Enabled Blocklists -->
-              <%= for blocklist <- @selected_profile.blocklists || [] do %>
-                <% name_lc = String.downcase(blocklist.name)
-                count = Map.get(@dns_metrics.blocklist_breakdown || %{}, blocklist.id, 0)
-
-                color =
-                  cond do
-                    String.contains?(name_lc, "goodbye") -> "bg-amber-500"
-                    String.contains?(name_lc, "adult") -> "bg-red-500"
-                    true -> "bg-emerald-500"
-                  end %>
-                <div class="space-y-1">
-                  <div class="flex items-center justify-between text-[10px]">
-                    <span class="text-base-content/70 font-medium">{blocklist.name}</span>
-                    <span class="font-bold font-mono">{count}</span>
-                  </div>
-                  <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
-                    <div
-                      class={["h-full rounded-full", color]}
-                      style={"width: #{if total_blocked_in_blocklists > 0, do: (count / total_blocked_in_blocklists * 100), else: 0}%"}
-                    >
-                    </div>
+              <!-- Upstream Cloud Filter -->
+              <div class="space-y-1">
+                <div class="flex items-center justify-between text-[10px]">
+                  <span class="text-base-content/70 font-medium">Upstream Filter</span>
+                  <span class="font-bold font-mono">{@dns_metrics.upstream_blocked_count}</span>
+                </div>
+                <div class="w-full bg-base-300/40 rounded-full h-1 overflow-hidden">
+                  <div
+                    class="bg-emerald-500 h-full rounded-full"
+                    style={"width: #{if @dns_metrics.blocked > 0, do: (@dns_metrics.upstream_blocked_count / @dns_metrics.blocked * 100), else: 0}%"}
+                  >
                   </div>
                 </div>
-              <% end %>
+              </div>
 
               <!-- Custom Block Rules -->
               <div class="space-y-1">
@@ -616,7 +681,7 @@ defmodule HermitWeb.DnsProfileComponents do
               </label>
               <.input
                 field={@create_form[:upstream_dns]}
-                placeholder="e.g. 1.1.1.1, 8.8.8.8"
+                placeholder="e.g. 76.76.2.2, 76.76.10.2 or https://freedns.controld.com/p2"
                 required
                 class="w-full bg-base-200 border border-base-300 rounded-[6px] px-3 py-2 text-xs focus:outline-none"
               />

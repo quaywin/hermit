@@ -1,12 +1,65 @@
 defmodule Hermit.Dns.Cache do
   @moduledoc """
-  Encapsulates DNS caching logic using the global `:dns_cache` ETS table.
+  Owns shared DNS ETS tables and encapsulates DNS caching logic using `:dns_cache`.
   """
+
+  use GenServer
 
   @dns_cache_table :dns_cache
   @max_entries 25_000
   @eviction_batch_size 2_500
   @delete_chunk_size 1_000
+  @prune_interval_ms 60_000
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    ensure_tables()
+    :erlang.send_after(@prune_interval_ms, self(), :prune_cache)
+    {:ok, %{}}
+  end
+
+  @impl true
+  def handle_info(:prune_cache, state) do
+    prune_expired()
+    :erlang.send_after(@prune_interval_ms, self(), :prune_cache)
+    {:noreply, state}
+  end
+
+  defp ensure_tables do
+    ensure_table(@dns_cache_table, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+
+    ensure_table(:inbound_profiles_cache, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+
+    ensure_table(:dns_proxy_cache, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: :auto
+    ])
+  end
+
+  defp ensure_table(name, opts) do
+    if :ets.info(name) == :undefined do
+      :ets.new(name, opts)
+    end
+  end
 
   @spec lookup(integer(), boolean(), String.t(), atom(), boolean()) ::
           {:ok, binary(), String.t(), String.t()}

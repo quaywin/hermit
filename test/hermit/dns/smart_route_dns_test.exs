@@ -160,38 +160,16 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
     assert Server.resolve_fast_path(endpoint.id, packet, {:tcp, {10, 200, 0, 2}, 54321}) == :miss
   end
 
-  test "blocklist takes precedence over wildcard Smart Route" do
-    blocklist_id = 105
-
-    if :ets.info(:dns_blocklist_entries) == :undefined do
-      :ets.new(:dns_blocklist_entries, [:set, :public, :named_table, read_concurrency: true])
-    end
-
-    if :ets.info(:dns_bloom_filter) != :undefined do
-      :ets.delete(:dns_bloom_filter, blocklist_id)
-    end
-
-    :ets.insert(:dns_blocklist_entries, {"ads.example.com", Bitwise.bsl(1, blocklist_id - 1)})
-    Hermit.Dns.BlocklistLoader.clear_filter_cache()
-
-    on_exit(fn ->
-      if :ets.info(:dns_blocklist_entries) != :undefined do
-        :ets.delete(:dns_blocklist_entries, "ads.example.com")
-      end
-
-      Hermit.Dns.BlocklistLoader.clear_filter_cache()
-    end)
-
+  test "explicit custom block rule takes precedence over wildcard Smart Route" do
     SniProxy.register_routes("us_pair", ["*.example.com"])
 
     config = %{id: 999, enable_query_logging: false, block_ipv6: false}
 
     custom_rules =
       Hermit.Dns.Rules.precompile([
-        %{"domain" => "*.example.com", "action" => "route_tunnel", "value" => "us_pair"}
+        %{"domain" => "*.example.com", "action" => "route_tunnel", "value" => "us_pair"},
+        %{"domain" => "ads.example.com", "action" => "block", "value" => nil}
       ])
-
-    blocklist_meta = {[blocklist_id], %{blocklist_id => "AdGuard"}}
 
     qname = <<3>> <> "ads" <> <<7>> <> "example" <> <<3>> <> "com" <> <<0>>
     query_record = qname <> <<0, 1, 0, 1>>
@@ -207,7 +185,6 @@ defmodule Hermit.Dns.SmartRouteDnsTest do
                999,
                config,
                custom_rules,
-               blocklist_meta,
                packet,
                query,
                {192, 168, 1, 50}

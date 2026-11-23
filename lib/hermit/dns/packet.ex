@@ -25,6 +25,11 @@ defmodule Hermit.Dns.Packet do
   )
 
   Record.defrecord(
+    :dns_opt_ede,
+    Record.extract(:dns_opt_ede, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(
     :dns_rrdata_a,
     Record.extract(:dns_rrdata_a, from_lib: "dns_erlang/include/dns.hrl")
   )
@@ -388,72 +393,129 @@ defmodule Hermit.Dns.Packet do
   defp parse_id_bin(_), do: 0
 
   @doc """
-  Parses metadata (minimum TTL and resolved IPs) from a DNS response packet in one pass.
+  Parses metadata and block-classification signals (minimum TTL, resolved IPs,
+  null-IP sinks `0.0.0.0`/`::`, and RFC 8914 EDNS Extended DNS Error block codes 15/16/17)
+  from an upstream DNS response packet in one pass.
   """
-  def parse_response_metadata(packet, extract_ips? \\ true) do
+  def classify_upstream_response(packet, extract_ips? \\ true) do
     case :dns.decode_message(packet) do
       msg when Record.is_record(msg, :dns_message) ->
         rcode = dns_message(msg, :rc)
         answers = dns_message(msg, :answers)
+        additional = dns_message(msg, :additional)
 
-        ttl =
-          cond do
-            rcode == 3 ->
-              5
-
-            rcode == 0 and length(answers) > 0 ->
-              ttls =
-                Enum.flat_map(answers, fn rr ->
-                  if Record.is_record(rr, :dns_rr) do
-                    [dns_rr(rr, :ttl)]
-                  else
-                    []
-                  end
-                end)
-
-              if ttls == [] do
-                10
-              else
-                min_ttl = Enum.min(ttls)
-                max(5, min(min_ttl, 3600))
-              end
-
-            true ->
-              5
-          end
+        ttl = extract_response_ttl(rcode, answers)
+        null_ip_type = detect_null_ip_type(rcode, answers)
+        ede_blocked? = has_blocked_ede?(additional)
+        has_answer_rr? = Enum.any?(answers, &Record.is_record(&1, :dns_rr))
 
         ips =
           if rcode == 0 and extract_ips? do
-            Enum.flat_map(answers, fn rr ->
-              if Record.is_record(rr, :dns_rr) do
-                type = dns_rr(rr, :type)
-                data = dns_rr(rr, :data)
-
-                case {type, data} do
-                  {1, rrdata} when Record.is_record(rrdata, :dns_rrdata_a) ->
-                    ip = dns_rrdata_a(rrdata, :ip)
-                    [ip_to_string(ip)]
-
-                  {28, rrdata} when Record.is_record(rrdata, :dns_rrdata_aaaa) ->
-                    ip = dns_rrdata_aaaa(rrdata, :ip)
-                    [ip_to_string(ip)]
-
-                  _ ->
-                    []
-                end
-              else
-                []
-              end
-            end)
+            extract_answer_ips(answers)
           else
             []
           end
 
-        {:ok, ttl, ips}
+        blocked? =
+          not is_nil(null_ip_type) or
+            (ede_blocked? and (rcode in [3, 5] or not has_answer_rr?))
+
+        {:ok,
+         %{
+           ttl: ttl,
+           ips: ips,
+           blocked?: blocked?,
+           rcode: rcode,
+           null_ip_type: null_ip_type
+         }}
 
       _ ->
         {:error, :invalid_packet}
     end
+  end
+
+  @doc """
+  Parses metadata (minimum TTL and resolved IPs) from a DNS response packet in one pass.
+  """
+  def parse_response_metadata(packet, extract_ips? \\ true) do
+    case classify_upstream_response(packet, extract_ips?) do
+      {:ok, %{ttl: ttl, ips: ips}} -> {:ok, ttl, ips}
+      error -> error
+    end
+  end
+
+  defp extract_response_ttl(rcode, answers) do
+    cond do
+      rcode == 3 ->
+        5
+
+      rcode == 0 and length(answers) > 0 ->
+        ttls =
+          Enum.flat_map(answers, fn rr ->
+            if Record.is_record(rr, :dns_rr), do: [dns_rr(rr, :ttl)], else: []
+          end)
+
+        if ttls == [] do
+          10
+        else
+          ttls |> Enum.min() |> min(3600) |> max(5)
+        end
+
+      true ->
+        5
+    end
+  end
+
+  defp extract_answer_ips(answers) do
+    Enum.flat_map(answers, fn rr ->
+      if Record.is_record(rr, :dns_rr) do
+        case {dns_rr(rr, :type), dns_rr(rr, :data)} do
+          {1, rrdata} when Record.is_record(rrdata, :dns_rrdata_a) ->
+            [ip_to_string(dns_rrdata_a(rrdata, :ip))]
+
+          {28, rrdata} when Record.is_record(rrdata, :dns_rrdata_aaaa) ->
+            [ip_to_string(dns_rrdata_aaaa(rrdata, :ip))]
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
+    end)
+  end
+
+  defp detect_null_ip_type(0, answers) do
+    Enum.find_value(answers, fn rr ->
+      if Record.is_record(rr, :dns_rr) do
+        case {dns_rr(rr, :type), dns_rr(rr, :data)} do
+          {1, rrdata} when Record.is_record(rrdata, :dns_rrdata_a) ->
+            if dns_rrdata_a(rrdata, :ip) == {0, 0, 0, 0}, do: :ipv4
+
+          {28, rrdata} when Record.is_record(rrdata, :dns_rrdata_aaaa) ->
+            if dns_rrdata_aaaa(rrdata, :ip) == {0, 0, 0, 0, 0, 0, 0, 0}, do: :ipv6
+
+          _ ->
+            nil
+        end
+      end
+    end)
+  end
+
+  defp detect_null_ip_type(_rcode, _answers), do: nil
+
+  defp has_blocked_ede?(additional) do
+    Enum.any?(additional, fn rr ->
+      if Record.is_record(rr, :dns_optrr) do
+        rr
+        |> dns_optrr(:data)
+        |> Enum.any?(fn opt ->
+          Record.is_record(opt, :dns_opt_ede) and dns_opt_ede(opt, :info_code) in [15, 16, 17]
+        end)
+      else
+        false
+      end
+    end)
   end
 
   @doc """

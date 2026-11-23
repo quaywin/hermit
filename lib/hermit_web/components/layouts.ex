@@ -252,13 +252,6 @@ defmodule HermitWeb.Layouts do
         >
           Profiles & Logs
         </.sidebar_link>
-        <.sidebar_link
-          navigate={~p"/dns/blocklists"}
-          active={@active == :dns_blocklists}
-          icon="hero-shield-check"
-        >
-          Blocklists
-        </.sidebar_link>
       </div>
 
       <!-- Group 4: System -->
@@ -315,7 +308,6 @@ defmodule HermitWeb.Layouts do
           HermitWeb.DnsServicesLive -> :dns_services
           HermitWeb.DnsRulesLive -> :dns_rules
           HermitWeb.DnsProfileLive -> :dns_profiles
-          HermitWeb.BlocklistLive -> :dns_blocklists
           HermitWeb.SystemLive -> :settings
           _ -> :dashboard
         end

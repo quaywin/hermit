@@ -17,6 +17,23 @@ defmodule Hermit.Dns.PacketTest do
     Record.extract(:dns_opt_ecs, from_lib: "dns_erlang/include/dns.hrl")
   )
 
+  Record.defrecord(
+    :dns_opt_ede,
+    Record.extract(:dns_opt_ede, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(:dns_rr, Record.extract(:dns_rr, from_lib: "dns_erlang/include/dns.hrl"))
+
+  Record.defrecord(
+    :dns_rrdata_a,
+    Record.extract(:dns_rrdata_a, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
+  Record.defrecord(
+    :dns_rrdata_aaaa,
+    Record.extract(:dns_rrdata_aaaa, from_lib: "dns_erlang/include/dns.hrl")
+  )
+
   test "parses a standard DNS query binary successfully" do
     # Transaction ID: 0x1234, Flags: 0x0100 (RD=1), Questions=1, Answer/Authority/Additional=0
     # Query: google.com (type A, class IN)
@@ -236,5 +253,57 @@ defmodule Hermit.Dns.PacketTest do
     opts_str = dns_optrr(opt_str, :data)
     assert [ecs_str] = Enum.filter(opts_str, &Record.is_record(&1, :dns_opt_ecs))
     assert dns_opt_ecs(ecs_str, :address) == <<14, 162, 50>>
+  end
+
+  test "classify_upstream_response/2 detects null IPs and EDNS EDE blocked responses" do
+    query_rec = dns_query(name: "ads.example.com", class: 1, type: 1)
+
+    # 1. Null IPv4 (0.0.0.0) -> blocked
+    resp_null_v4 = Packet.build_a_response(<<0x11, 0x22>>, query_rec, "0.0.0.0")
+    assert {:ok, info_v4} = Packet.classify_upstream_response(resp_null_v4, false)
+    assert info_v4.blocked? == true
+    assert info_v4.null_ip_type == :ipv4
+
+    # 2. Null IPv6 (::) -> blocked
+    query_aaaa = dns_query(name: "ads.example.com", class: 1, type: 28)
+    resp_null_v6 = Packet.build_a_response(<<0x11, 0x23>>, query_aaaa, "::")
+    assert {:ok, info_v6} = Packet.classify_upstream_response(resp_null_v6, false)
+    assert info_v6.blocked? == true
+    assert info_v6.null_ip_type == :ipv6
+
+    # 3. Normal IP (93.184.216.34) -> NOT blocked
+    resp_normal = Packet.build_a_response(<<0x11, 0x24>>, query_rec, "93.184.216.34")
+    assert {:ok, info_normal} = Packet.classify_upstream_response(resp_normal, true)
+    assert info_normal.blocked? == false
+    assert info_normal.ips == ["93.184.216.34"]
+
+    # 4. NXDOMAIN without EDE -> NOT blocked
+    resp_nx = Packet.build_nxdomain(<<0x11, 0x25>>, query_rec)
+    assert {:ok, info_nx} = Packet.classify_upstream_response(resp_nx, false)
+    assert info_nx.blocked? == false
+
+    # 5. NXDOMAIN with EDNS EDE code 15 (Blocked) and 17 (Filtered) -> blocked
+    for code <- [15, 17] do
+      ede_opt = dns_opt_ede(info_code: code, extra_text: "Filtered")
+      optrr = dns_optrr(udp_payload_size: 4096, data: [ede_opt])
+
+      msg =
+        dns_message(
+          id: 0x1126,
+          qr: true,
+          rd: true,
+          ra: true,
+          rc: 3,
+          qc: 1,
+          adc: 1,
+          questions: [query_rec],
+          additional: [optrr]
+        )
+
+      resp_ede = :dns.encode_message(msg)
+      assert {:ok, info_ede} = Packet.classify_upstream_response(resp_ede, false)
+      assert info_ede.blocked? == true
+      assert info_ede.rcode == 3
+    end
   end
 end

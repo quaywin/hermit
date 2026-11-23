@@ -11,6 +11,7 @@ defmodule Hermit.Dns.HourlyStat do
     field(:adguard_blocked_count, :integer, default: 0)
     field(:goodbyeads_blocked_count, :integer, default: 0)
     field(:adult_blocked_count, :integer, default: 0)
+    field(:upstream_blocked_count, :integer, default: 0)
     field(:custom_blocked_count, :integer, default: 0)
 
     timestamps()
@@ -27,6 +28,7 @@ defmodule Hermit.Dns.HourlyStat do
       :adguard_blocked_count,
       :goodbyeads_blocked_count,
       :adult_blocked_count,
+      :upstream_blocked_count,
       :custom_blocked_count
     ])
     |> validate_required([:dns_config_id, :hour_timestamp])

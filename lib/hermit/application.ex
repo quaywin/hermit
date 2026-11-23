@@ -21,7 +21,7 @@ defmodule Hermit.Application do
          [
            [
              {Task.Supervisor, name: Hermit.Dns.TaskSupervisor},
-             {Hermit.Dns.BlocklistLoader, []},
+             {Hermit.Dns.Cache, []},
              {Hermit.Dns.Telemetry, []},
              {Hermit.Vpn.DnsDeviceResolver, []}
            ],

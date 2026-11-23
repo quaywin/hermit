@@ -2,13 +2,14 @@ defmodule HermitWeb.DnsProfileLive do
   use HermitWeb, :live_view
   import HermitWeb.DnsProfileComponents
   import Ecto.Query
+  alias Hermit.Dns.Providers
   alias Hermit.Vpn.DnsConfig
 
   @impl true
   def mount(_params, _session, socket) do
     dns_profiles =
       Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-      |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+      |> Hermit.Repo.preload([:dns_endpoints])
 
     vpn_pairs =
       Hermit.Repo.all(
@@ -16,19 +17,13 @@ defmodule HermitWeb.DnsProfileLive do
       )
       |> Hermit.Repo.preload([:inbound_profile, :outbound_profile])
 
-    # Chọn profile đầu tiên làm mặc định nếu có, hoặc nil
     selected_profile = List.first(dns_profiles)
 
-    # Đăng ký nhận log truy vấn DNS nếu có selected_profile
     if selected_profile do
       if :erlang.whereis(Hermit.PubSub) != :undefined do
         Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_logs_profile:#{selected_profile.id}")
         Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{selected_profile.id}")
       end
-    end
-
-    if :erlang.whereis(Hermit.PubSub) != :undefined do
-      Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_blocklist")
     end
 
     dns_logs = if selected_profile, do: get_recent_logs(selected_profile.id), else: []
@@ -40,8 +35,8 @@ defmodule HermitWeb.DnsProfileLive do
      |> assign(has_logs: dns_logs != [])
      |> assign(dns_profiles: dns_profiles)
      |> assign(selected_profile: selected_profile)
+     |> assign_resolver_state(selected_profile)
      |> assign(vpn_pairs: vpn_pairs)
-     |> assign(available_blocklists: fetch_available_blocklists())
      |> assign(dns_metrics: dns_metrics)
      |> assign(time_range: "24h")
      |> assign(show_create_modal: false)
@@ -60,9 +55,8 @@ defmodule HermitWeb.DnsProfileLive do
     id = String.to_integer(id_str)
 
     profile =
-      Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+      Hermit.Repo.get!(DnsConfig, id) |> Hermit.Repo.preload([:dns_endpoints])
 
-    # Hủy đăng ký PubSub cũ
     if socket.assigns.selected_profile do
       if :erlang.whereis(Hermit.PubSub) != :undefined do
         Phoenix.PubSub.unsubscribe(
@@ -77,7 +71,6 @@ defmodule HermitWeb.DnsProfileLive do
       end
     end
 
-    # Đăng ký PubSub mới
     if :erlang.whereis(Hermit.PubSub) != :undefined do
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_logs_profile:#{profile.id}")
       Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{profile.id}")
@@ -88,7 +81,7 @@ defmodule HermitWeb.DnsProfileLive do
     {:noreply,
      socket
      |> assign(selected_profile: profile)
-     |> assign(available_blocklists: fetch_available_blocklists())
+     |> assign_resolver_state(profile)
      |> assign(editing_name: false)
      |> assign(has_logs: recent_logs != [])
      |> stream(:dns_logs, recent_logs, reset: true)
@@ -134,13 +127,11 @@ defmodule HermitWeb.DnsProfileLive do
 
           dns_profiles =
             Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-            |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+            |> Hermit.Repo.preload([:dns_endpoints])
 
           {:noreply,
            socket
-           |> assign(
-             selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
-           )
+           |> assign(selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints]))
            |> assign(dns_profiles: dns_profiles)
            |> assign(editing_name: false)
            |> assign_name_form()
@@ -200,7 +191,7 @@ defmodule HermitWeb.DnsProfileLive do
       {:ok, profile} ->
         dns_profiles =
           Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-          |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+          |> Hermit.Repo.preload([:dns_endpoints])
 
         {:noreply,
          socket
@@ -220,7 +211,6 @@ defmodule HermitWeb.DnsProfileLive do
     id = String.to_integer(id_str)
     profile = Hermit.Repo.get!(DnsConfig, id)
 
-    # Kiểm tra xem có Inbound Profile hoặc DNS Endpoint nào đang dùng không
     inbounds =
       Hermit.Repo.all(from(i in Hermit.Vpn.InboundProfile, where: i.dns_profile_id == ^id))
 
@@ -253,7 +243,7 @@ defmodule HermitWeb.DnsProfileLive do
           {:ok, _} ->
             dns_profiles =
               Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-              |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+              |> Hermit.Repo.preload([:dns_endpoints])
 
             next_profile = List.first(dns_profiles)
 
@@ -268,6 +258,7 @@ defmodule HermitWeb.DnsProfileLive do
               {:noreply,
                socket
                |> assign(selected_profile: nil, has_logs: false)
+               |> assign_resolver_state(nil)
                |> stream(:dns_logs, [], reset: true)}
             end
 
@@ -289,44 +280,6 @@ defmodule HermitWeb.DnsProfileLive do
       %{enabled: enabled},
       "DNS Filtering #{if enabled, do: "enabled", else: "disabled"}!"
     )
-  end
-
-  @impl true
-  def handle_event("toggle_profile_blocklist", %{"blocklist-id" => blocklist_id}, socket) do
-    profile = socket.assigns.selected_profile
-    blocklist_id = String.to_integer(blocklist_id)
-    current_ids = Enum.map(profile.blocklists || [], & &1.id)
-
-    new_ids =
-      if blocklist_id in current_ids do
-        List.delete(current_ids, blocklist_id)
-      else
-        [blocklist_id | current_ids]
-      end
-
-    case Hermit.Vpn.DnsConfig.update_blocklists(profile, new_ids) do
-      {:ok, updated_config} ->
-        if :erlang.whereis(Hermit.PubSub) != :undefined do
-          Phoenix.PubSub.broadcast(
-            Hermit.PubSub,
-            "dns_config_profile:#{updated_config.id}",
-            {:dns_config_updated, updated_config}
-          )
-        end
-
-        dns_profiles =
-          Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-          |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Filters updated successfully.")
-         |> assign(selected_profile: updated_config)
-         |> assign(dns_profiles: dns_profiles)}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to update profile filters.")}
-    end
   end
 
   @impl true
@@ -381,7 +334,94 @@ defmodule HermitWeb.DnsProfileLive do
     )
   end
 
-  # Upstream & Custom Rules
+  # Cloud DNS Resolver & Upstream Selection
+  @impl true
+  def handle_event("resolver_form_changed", %{"_target" => target} = params, socket) do
+    provider = Map.get(params, "provider", socket.assigns.selected_provider)
+    preset = Map.get(params, "preset")
+    upstream_dns = Map.get(params, "upstream_dns", socket.assigns.upstream_input)
+
+    case target do
+      ["provider"] ->
+        if provider == "custom" do
+          {:noreply,
+           socket
+           |> assign(selected_provider: "custom", selected_preset: nil)}
+        else
+          default_preset = Providers.default_preset_id(provider)
+
+          protocol =
+            if Providers.supports_protocol_toggle?(provider) do
+              socket.assigns.selected_protocol
+            else
+              Providers.default_protocol_for(provider)
+            end
+
+          new_upstream =
+            Providers.resolve_upstream(provider, default_preset, protocol) || upstream_dns
+
+          {:noreply,
+           socket
+           |> assign(
+             selected_provider: provider,
+             selected_preset: default_preset,
+             selected_protocol: protocol,
+             upstream_input: new_upstream
+           )}
+        end
+
+      ["preset"] ->
+        protocol =
+          if Providers.supports_protocol_toggle?(provider) do
+            socket.assigns.selected_protocol
+          else
+            Providers.default_protocol_for(provider)
+          end
+
+        new_upstream = Providers.resolve_upstream(provider, preset, protocol) || upstream_dns
+
+        {:noreply,
+         socket
+         |> assign(
+           selected_provider: provider,
+           selected_preset: preset,
+           selected_protocol: protocol,
+           upstream_input: new_upstream
+         )}
+
+      ["upstream_dns"] ->
+        {detected_provider, detected_preset, detected_protocol} = Providers.detect(upstream_dns)
+
+        {:noreply,
+         socket
+         |> assign(
+           selected_provider: detected_provider,
+           selected_preset: detected_preset,
+           selected_protocol: detected_protocol,
+           upstream_input: upstream_dns
+         )}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("resolver_form_changed", _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_event("select_protocol", %{"protocol" => proto_str}, socket) do
+    protocol = if proto_str == "doh", do: :doh, else: :udp
+    provider = socket.assigns.selected_provider
+    preset = socket.assigns.selected_preset || Providers.default_preset_id(provider)
+
+    new_upstream =
+      Providers.resolve_upstream(provider, preset, protocol) || socket.assigns.upstream_input
+
+    {:noreply,
+     socket
+     |> assign(selected_protocol: protocol, selected_preset: preset, upstream_input: new_upstream)}
+  end
+
   @impl true
   def handle_event("save_upstream_dns", %{"upstream_dns" => upstream}, socket) do
     profile = socket.assigns.selected_profile
@@ -544,35 +584,19 @@ defmodule HermitWeb.DnsProfileLive do
   @impl true
   def handle_info({:dns_config_updated, updated_config}, socket) do
     if socket.assigns.selected_profile && socket.assigns.selected_profile.id == updated_config.id do
-      # Đồng bộ lại state UI
-      updated_config = Hermit.Repo.preload(updated_config, [:dns_endpoints, :blocklists])
+      updated_config = Hermit.Repo.preload(updated_config, [:dns_endpoints])
 
       dns_profiles =
         Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-        |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+        |> Hermit.Repo.preload([:dns_endpoints])
 
-      {:noreply, assign(socket, selected_profile: updated_config, dns_profiles: dns_profiles)}
+      {:noreply,
+       socket
+       |> assign(selected_profile: updated_config, dns_profiles: dns_profiles)
+       |> assign_resolver_state(updated_config)}
     else
       {:noreply, socket}
     end
-  end
-
-  @impl true
-  def handle_info({:blocklist_updated, _blocklist_id}, socket) do
-    available_blocklists = fetch_available_blocklists()
-
-    selected_profile =
-      if socket.assigns.selected_profile,
-        do:
-          Hermit.Repo.preload(socket.assigns.selected_profile, [:dns_endpoints, :blocklists],
-            force: true
-          ),
-        else: nil
-
-    {:noreply,
-     socket
-     |> assign(available_blocklists: available_blocklists)
-     |> assign(selected_profile: selected_profile)}
   end
 
   def handle_info(_msg, socket) do
@@ -580,6 +604,24 @@ defmodule HermitWeb.DnsProfileLive do
   end
 
   # Helpers
+  defp assign_resolver_state(socket, nil) do
+    socket
+    |> assign(selected_provider: "controld")
+    |> assign(selected_preset: "p2")
+    |> assign(selected_protocol: :udp)
+    |> assign(upstream_input: "")
+  end
+
+  defp assign_resolver_state(socket, profile) do
+    {provider, preset, protocol} = Providers.detect(profile.upstream_dns)
+
+    socket
+    |> assign(selected_provider: provider)
+    |> assign(selected_preset: preset)
+    |> assign(selected_protocol: protocol)
+    |> assign(upstream_input: profile.upstream_dns || "")
+  end
+
   defp assign_create_form(socket) do
     changeset = DnsConfig.changeset(%DnsConfig{}, %{name: "", custom_rules: []})
     assign(socket, create_form: to_form(changeset))
@@ -597,7 +639,6 @@ defmodule HermitWeb.DnsProfileLive do
   defp update_profile(socket, profile, attrs, success_msg) do
     case DnsConfig.changeset(profile, attrs) |> Hermit.Repo.update() do
       {:ok, updated} ->
-        # Broadcast configuration update dynamically
         if :erlang.whereis(Hermit.PubSub) != :undefined do
           Phoenix.PubSub.broadcast(
             Hermit.PubSub,
@@ -608,13 +649,14 @@ defmodule HermitWeb.DnsProfileLive do
 
         dns_profiles =
           Hermit.Repo.all(from(d in DnsConfig, order_by: d.name))
-          |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
+          |> Hermit.Repo.preload([:dns_endpoints])
+
+        updated_preloaded = updated |> Hermit.Repo.preload([:dns_endpoints])
 
         {:noreply,
          socket
-         |> assign(
-           selected_profile: updated |> Hermit.Repo.preload([:dns_endpoints, :blocklists])
-         )
+         |> assign(selected_profile: updated_preloaded)
+         |> assign_resolver_state(updated_preloaded)
          |> assign(dns_profiles: dns_profiles)
          |> put_flash(:info, success_msg)}
 
@@ -634,7 +676,6 @@ defmodule HermitWeb.DnsProfileLive do
         []
 
       _table ->
-        # Lấy log của profile này + log fallback từ ETS
         pattern_profile = {{{profile_id, :_}, :"$1"}, [], [:"$1"]}
         pattern_fallback_str = {{{"fallback", :_}, :"$1"}, [], [:"$1"]}
 
@@ -723,29 +764,23 @@ defmodule HermitWeb.DnsProfileLive do
 
     cutoff_time = System.system_time(:second) - hours_limit * 3600
 
-    # Match spec to fetch hourly logs within last cutoff_time
-    # Key format: {{profile_id, hour_timestamp}, total, blocked, ipv6, adguard, goodbyeads, adult, custom}
-    head = {{profile_id, :"$1"}, :"$2", :"$3", :"$4", :"$5", :"$6", :"$7", :"$8"}
+    # Key format: {{profile_id, hour_timestamp}, total, blocked, ipv6, upstream, custom}
+    head = {{profile_id, :"$1"}, :"$2", :"$3", :"$4", :"$5", :"$6"}
     guard = [{:>=, :"$1", cutoff_time}]
-    result = [{{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6", :"$7", :"$8"}}]
+    result = [{{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6"}}]
     pattern = {head, guard, result}
 
     records =
       case :ets.whereis(:dns_hourly_metrics) do
-        :undefined ->
-          []
-
-        _ ->
-          :ets.select(:dns_hourly_metrics, [pattern])
+        :undefined -> []
+        _ -> :ets.select(:dns_hourly_metrics, [pattern])
       end
 
-    {total_queries, blocked_queries, ipv6_blocked_count, adguard_blocked, goodbyeads_blocked,
-     adult_blocked, custom_blocked} =
-      Enum.reduce(records, {0, 0, 0, 0, 0, 0, 0}, fn {_hour, t, b, i6, adg, gba, adt, cst},
-                                                     {acc_t, acc_b, acc_i6, acc_adg, acc_gba,
-                                                      acc_adt, acc_cst} ->
-        {acc_t + t, acc_b + b, acc_i6 + i6, acc_adg + adg, acc_gba + gba, acc_adt + adt,
-         acc_cst + cst}
+    {total_queries, blocked_queries, ipv6_blocked_count, upstream_blocked_count,
+     custom_blocked_count} =
+      Enum.reduce(records, {0, 0, 0, 0, 0}, fn {_hour, t, b, i6, up, cst},
+                                               {acc_t, acc_b, acc_i6, acc_up, acc_cst} ->
+        {acc_t + t, acc_b + b, acc_i6 + i6, acc_up + up, acc_cst + cst}
       end)
 
     block_rate =
@@ -754,12 +789,10 @@ defmodule HermitWeb.DnsProfileLive do
     data_saved_kb = blocked_queries * 50
 
     data_saved_str =
-      cond do
-        data_saved_kb >= 1024 -> "#{Float.round(data_saved_kb / 1024, 1)} MB"
-        true -> "#{data_saved_kb} KB"
-      end
+      if data_saved_kb >= 1024,
+        do: "#{Float.round(data_saved_kb / 1024, 1)} MB",
+        else: "#{data_saved_kb} KB"
 
-    # For Top Blocked trackers, scan the raw logs buffer (limit is 200, which is extremely fast)
     raw_logs = get_raw_logs_from_ets(profile_id)
 
     top_blocked =
@@ -770,24 +803,6 @@ defmodule HermitWeb.DnsProfileLive do
       |> Enum.take(3)
       |> Enum.map(fn {domain, count} -> %{domain: domain, count: count} end)
 
-    # Match spec to fetch blocklist stats: {{:blocklist, profile_id, blocklist_id, hour_timestamp}, count}
-    head_bl = {{:blocklist, profile_id, :"$1", :"$2"}, :"$3"}
-    guard_bl = [{:>=, :"$2", cutoff_time}]
-    result_bl = [{{:"$1", :"$3"}}]
-    pattern_bl = {head_bl, guard_bl, result_bl}
-
-    blocklist_records =
-      case :ets.whereis(:dns_hourly_metrics) do
-        :undefined -> []
-        _ -> :ets.select(:dns_hourly_metrics, [pattern_bl])
-      end
-
-    blocklist_breakdown =
-      blocklist_records
-      |> Enum.reduce(%{}, fn {blocklist_id, count}, acc ->
-        Map.update(acc, blocklist_id, count, &(&1 + count))
-      end)
-
     %{
       total: total_queries,
       blocked: blocked_queries,
@@ -795,11 +810,8 @@ defmodule HermitWeb.DnsProfileLive do
       data_saved: data_saved_str,
       top_blocked: top_blocked,
       ipv6_blocked_count: ipv6_blocked_count,
-      adguard_blocked_count: adguard_blocked,
-      goodbyeads_blocked_count: goodbyeads_blocked,
-      adult_blocked_count: adult_blocked,
-      custom_blocked_count: custom_blocked,
-      blocklist_breakdown: blocklist_breakdown
+      upstream_blocked_count: upstream_blocked_count,
+      custom_blocked_count: custom_blocked_count
     }
   end
 
@@ -815,9 +827,5 @@ defmodule HermitWeb.DnsProfileLive do
       end
 
     Enum.map(raw_logs, &to_log_struct/1)
-  end
-
-  defp fetch_available_blocklists do
-    Hermit.Repo.all(from(b in Hermit.Dns.Blocklist, where: b.enabled == true, order_by: b.name))
   end
 end

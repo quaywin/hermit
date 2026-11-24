@@ -76,11 +76,11 @@ Stop ads, trackers, and malicious domains across your entire Tailscale network w
 1. Open Hermit Web Dashboard $\rightarrow$ Go to **DNS** (`/dns`) and pick an upstream filtering provider:
    * Built-in presets: **Control D** (Ads & Tracking by default), **Control D Community Lists** (`HaGeZi`, `OISD`, `1Hosts`), **AdGuard DNS**, **Cloudflare**, or **Quad9** (UDP or DoH).
    * Or enter a **Custom** resolver (Control D Personal, NextDNS, RethinkDNS, or IP).
-2. Go to **DNS Endpoints** (`/dns/endpoints`) and activate a Tailscale DNS Endpoint linked to your Tailscale OAuth Inbound Profile.
-3. Click **`TS DNS`** (`TS DNS: ON`) and choose your Tailscale routing mode from the dropdown:
+2. Go to **Inbounds** (`/inbounds`) and set **Tailscale DNS Mode** on your Tailscale Inbound Profile:
    * **`Split DNS` (Default — Fastest)**: Tailscale Global Nameservers point directly to your upstream provider (e.g., Control D / AdGuard / NextDNS) so 99% of normal & ad-blocked traffic resolves in 1 hop without hitting your VPS, while Hermit automatically syncs your **Smart DNS / Block / Bypass / Redirect** domains to Tailscale **Split DNS** pointing to Hermit (`100.x.y.z`).
    * **`Global DNS`**: Routes all Tailnet DNS queries through Hermit (`100.x.y.z`) for full real-time query logs and telemetry.
    * **Automatic `DoH Fallback`**: If you use a community list or custom DoH URL not natively whitelisted by Tailscale (e.g., `freedns.controld.com/x-hagezi-pro`), Hermit automatically switches Tailscale sync to **Global DNS** so upstream filtering stays active.
+3. Go to **DNS Endpoints** (`/dns/endpoints`), activate the endpoint linked to your Tailscale Inbound Profile and DNS Profile, and click **`TS DNS`** (`TS DNS: ON`).
 
 ---
 
@@ -138,7 +138,7 @@ flowchart LR
    * **1-Click Smart DNS Services** (`/dns/services`): Select popular platforms (Netflix, OpenAI / ChatGPT, BBC iPlayer, etc.) and set action to **Route to Tunnel**, **Block**, or **Bypass**. All associated CDN and static asset domains are handled automatically.
    * **Custom Domain Rules** (`/dns/rules`): Add custom domain patterns (e.g. `*.openai.com`, `example.com`) with actions (**Route to Tunnel**, **Block**, **Bypass**, **Redirect**, **Forward DNS**, or **Forward Proxy**).
    * *(Optional)* **IP Subnet Routing**: To route private LAN or VPC subnets (e.g. `192.168.1.0/24`), enter them under **Advertised Subnets** in the tunnel's settings.
-3. On **DNS Endpoints** (`/dns/endpoints`), enable **`TS DNS`** (`Split DNS` or `Global DNS`). Hermit automatically normalizes domain suffixes (e.g., `*.netflix.com` $\rightarrow$ `netflix.com`, matching all subdomains on Tailscale Split DNS) and keeps Tailscale DNS synced automatically whenever you update services, rules, or upstream resolvers.
+3. Choose **Split DNS** or **Global DNS** on your **Tailscale Inbound Profile** (`/inbounds`) and enable **`TS DNS`** on **DNS Endpoints** (`/dns/endpoints`). Hermit automatically normalizes domain suffixes (e.g., `*.netflix.com` $\rightarrow$ `netflix.com`, matching all subdomains on Tailscale Split DNS) and keeps Tailscale DNS synced automatically whenever you update services, rules, or upstream resolvers.
 4. Enjoy transparent domain-level split tunneling with **zero client VPN apps** and **zero SSL certificate errors**!
 
 > [!TIP]

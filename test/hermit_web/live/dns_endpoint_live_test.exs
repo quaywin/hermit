@@ -113,30 +113,8 @@ defmodule HermitWeb.DnsEndpointLiveTest do
 
     updated_config = DnsConfig.get_for_endpoint(endpoint.id)
     assert updated_config.tailscale_override_dns == true
-    assert updated_config.tailscale_dns_mode == "split"
     assert Hermit.Vpn.DnsWorker.get_dns_sync_status(endpoint.id) in [:syncing, :synced]
-
-    html =
-      view
-      |> form("#tailscale-dns-mode-form-#{endpoint.id}")
-      |> render_change(%{
-        "endpoint_id" => to_string(endpoint.id),
-        "tailscale_dns_mode" => "global"
-      })
-
-    assert html =~ "Global DNS mode"
-    assert DnsConfig.get_for_endpoint(endpoint.id).tailscale_dns_mode == "global"
-
-    html =
-      view
-      |> form("#tailscale-dns-mode-form-#{endpoint.id}")
-      |> render_change(%{
-        "endpoint_id" => to_string(endpoint.id),
-        "tailscale_dns_mode" => "split"
-      })
-
-    assert html =~ "Split DNS mode"
-    assert DnsConfig.get_for_endpoint(endpoint.id).tailscale_dns_mode == "split"
+    assert html =~ "Split DNS (0 domains)"
 
     Hermit.Vpn.DnsSupervisor.stop_dns(endpoint.id)
   end

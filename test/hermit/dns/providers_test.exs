@@ -19,11 +19,19 @@ defmodule Hermit.Dns.ProvidersTest do
   test "resolves UDP and DoH upstream endpoints for providers" do
     assert Providers.resolve_upstream("controld", "p2", :udp) == "76.76.2.2, 76.76.10.2"
     assert Providers.resolve_upstream("controld", "p2", :doh) == "https://freedns.controld.com/p2"
+    assert Providers.resolve_upstream("controld", "family", :udp) == "76.76.2.4, 76.76.10.4"
+    assert Providers.resolve_upstream("controld", "uncensored", :udp) == "76.76.2.5, 76.76.10.5"
 
     assert Providers.resolve_upstream("controld_community", "x-hagezi-pro", :udp) ==
              "https://freedns.controld.com/x-hagezi-pro"
 
     assert Providers.resolve_upstream("adguard", "family", :udp) == "94.140.14.15, 94.140.15.16"
+
+    assert Providers.resolve_upstream("adguard", "family", :doh) ==
+             "https://family.adguard-dns.com/dns-query"
+
+    assert Providers.resolve_upstream("adguard", "unfiltered", :doh) ==
+             "https://unfiltered.adguard-dns.com/dns-query"
 
     assert Providers.resolve_upstream("cloudflare", "malware", :doh) ==
              "https://security.cloudflare-dns.com/dns-query"

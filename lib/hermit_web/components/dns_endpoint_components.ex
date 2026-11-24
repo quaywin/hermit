@@ -15,7 +15,7 @@ defmodule HermitWeb.DnsEndpointComponents do
 
     sync_plan =
       if config && config.tailscale_override_dns do
-        Hermit.Vpn.DnsWorker.build_sync_plan(config)
+        Hermit.Vpn.DnsWorker.build_sync_plan(config, nil, [], assigns.endpoint.inbound_profile)
       else
         nil
       end
@@ -131,23 +131,29 @@ defmodule HermitWeb.DnsEndpointComponents do
             <div class="flex flex-wrap items-center gap-1">
               <%= cond do %>
                 <% @sync_plan.mode == :split -> %>
-                  <span
-                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20"
-                    title={"Direct Upstream: #{Enum.join(@sync_plan.upstream_resolvers, ", ")}"}
+                  <.link
+                    navigate={~p"/inbounds/#{@endpoint.inbound_profile_id}?tab=config"}
+                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20 hover:bg-emerald-500/25 transition-colors"
+                    title={"Direct Upstream: #{Enum.join(@sync_plan.upstream_resolvers, ", ")} (Click to change DNS mode on Inbound Profile)"}
                   >
                     Split DNS ({length(@sync_plan.split_domains)} domains)
-                  </span>
+                  </.link>
                 <% @sync_plan.fallback_reason != nil -> %>
-                  <span
-                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/20"
+                  <.link
+                    navigate={~p"/inbounds/#{@endpoint.inbound_profile_id}?tab=config"}
+                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/20 hover:bg-amber-500/25 transition-colors"
                     title="Custom DoH upstream is not natively supported by Tailscale Global DNS; routing all queries via Hermit."
                   >
                     Global DNS (DoH Fallback)
-                  </span>
+                  </.link>
                 <% true -> %>
-                  <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
+                  <.link
+                    navigate={~p"/inbounds/#{@endpoint.inbound_profile_id}?tab=config"}
+                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20 hover:bg-emerald-500/25 transition-colors"
+                    title="All Tailnet DNS queries routed via Hermit (Click to change DNS mode on Inbound Profile)"
+                  >
                     Global DNS
-                  </span>
+                  </.link>
               <% end %>
 
               <%= case @dns_sync_status do %>
@@ -200,38 +206,6 @@ defmodule HermitWeb.DnsEndpointComponents do
             >
               {if @config && @config.tailscale_override_dns, do: "TS DNS: ON", else: "TS DNS"}
             </button>
-
-            <%= if @config && @config.tailscale_override_dns do %>
-              <form
-                phx-change="select_tailscale_dns_mode"
-                id={"tailscale-dns-mode-form-#{@endpoint.id}"}
-                class="inline-block"
-              >
-                <input type="hidden" name="endpoint_id" value={@endpoint.id} />
-                <select
-                  name="tailscale_dns_mode"
-                  disabled={@status != :running}
-                  title="Tailscale DNS routing mode"
-                  class={[
-                    "select select-bordered select-xs bg-base-100 border-base-300 text-[11px] font-semibold text-base-content rounded-[4px] focus:outline-none focus:border-primary",
-                    @status != :running && "opacity-40 cursor-not-allowed"
-                  ]}
-                >
-                  <option
-                    value="split"
-                    selected={(@config.tailscale_dns_mode || "split") == "split"}
-                  >
-                    Split DNS
-                  </option>
-                  <option
-                    value="global"
-                    selected={(@config.tailscale_dns_mode || "split") == "global"}
-                  >
-                    Global DNS
-                  </option>
-                </select>
-              </form>
-            <% end %>
           <% end %>
 
           <button

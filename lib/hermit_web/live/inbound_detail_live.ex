@@ -71,11 +71,24 @@ defmodule HermitWeb.InboundDetailLive do
       {:ok, updated_profile} ->
         InboundProfile.clear_cache()
 
-        # Reboot all active DNS endpoints linked to this Inbound Profile if credentials changed
-        reboot_linked_dns_endpoints(updated_profile.id)
+        old_config = Map.drop(profile.config || %{}, ["tailscale_dns_mode"])
+        new_config = Map.drop(updated_profile.config || %{}, ["tailscale_dns_mode"])
+        network_changed? = profile.type != updated_profile.type or old_config != new_config
 
-        # Synchronize and restart linked VPN pairs with updated inbound credentials
-        sync_and_restart_linked_vpn_pairs(updated_profile)
+        old_dns_mode = Map.get(profile.config || %{}, "tailscale_dns_mode") || "split"
+        new_dns_mode = Map.get(updated_profile.config || %{}, "tailscale_dns_mode") || "split"
+
+        if network_changed? do
+          # Reboot all active DNS endpoints linked to this Inbound Profile if credentials changed
+          reboot_linked_dns_endpoints(updated_profile.id)
+
+          # Synchronize and restart linked VPN pairs with updated inbound credentials
+          sync_and_restart_linked_vpn_pairs(updated_profile)
+        else
+          if old_dns_mode != new_dns_mode do
+            sync_linked_dns_endpoints(updated_profile.id)
+          end
+        end
 
         reloaded_profile = Hermit.Repo.get!(InboundProfile, updated_profile.id)
         changeset_new = InboundProfile.changeset(reloaded_profile, %{})
@@ -208,6 +221,17 @@ defmodule HermitWeb.InboundDetailLive do
     assign(socket, vpn_pairs: hermit_pairs)
   end
 
+  defp sync_linked_dns_endpoints(inbound_profile_id) do
+    endpoints =
+      Hermit.Repo.all(
+        from(e in Hermit.Vpn.DnsEndpoint, where: e.inbound_profile_id == ^inbound_profile_id)
+      )
+
+    Enum.each(endpoints, fn endpoint ->
+      DnsWorker.sync_state(endpoint.id)
+    end)
+  end
+
   defp reboot_linked_dns_endpoints(inbound_profile_id) do
     # Find all DNS endpoints using this Inbound Profile
     endpoints =
@@ -246,7 +270,8 @@ defmodule HermitWeb.InboundDetailLive do
       "ts_port",
       "port",
       "login_server",
-      "advertise_tags"
+      "advertise_tags",
+      "tailscale_dns_mode"
     ]
 
     Enum.each(pairs, fn pair ->
@@ -258,7 +283,8 @@ defmodule HermitWeb.InboundDetailLive do
           profile_keys ++ Enum.map(profile_keys, &String.to_atom/1)
         )
 
-      new_pair_config = Map.merge(cleaned_config, updated_profile.config || %{})
+      inbound_overrides = Map.delete(updated_profile.config || %{}, "tailscale_dns_mode")
+      new_pair_config = Map.merge(cleaned_config, inbound_overrides)
 
       pair
       |> Hermit.Vpn.VpnPair.changeset(%{

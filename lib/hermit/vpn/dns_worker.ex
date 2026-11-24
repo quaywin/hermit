@@ -174,11 +174,11 @@ defmodule Hermit.Vpn.DnsWorker do
               nil
             end
 
-          new_sig = dns_sync_signature(config)
+          new_sig = dns_sync_signature(config, profile)
 
           plan =
             if config.tailscale_override_dns,
-              do: build_sync_plan(config),
+              do: build_sync_plan(config, nil, [], profile),
               else: nil
 
           synced_upstreams =
@@ -382,7 +382,7 @@ defmodule Hermit.Vpn.DnsWorker do
          }}
 
       endpoint.enabled and state.status == :running ->
-        new_sig = dns_sync_signature(config)
+        new_sig = dns_sync_signature(config, profile)
 
         if state.tailscale_override_dns != config.tailscale_override_dns or
              state.last_dns_sync_signature != new_sig do
@@ -391,7 +391,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
           {next_upstreams, next_sync_status} =
             if config.tailscale_override_dns and profile do
-              plan = build_sync_plan(config, nil, extra_upstreams)
+              plan = build_sync_plan(config, nil, extra_upstreams, profile)
 
               spawn(fn ->
                 res = update_tailscale_dns_config(state.ts_ip, profile, config, extra_upstreams)
@@ -1124,12 +1124,35 @@ defmodule Hermit.Vpn.DnsWorker do
     end
   end
 
+  defp resolve_tailscale_dns_mode(dns_config, inbound_profile) do
+    inbound_mode =
+      case inbound_profile do
+        %{config: cfg} when is_map(cfg) ->
+          Map.get(cfg, "tailscale_dns_mode") || Map.get(cfg, :tailscale_dns_mode)
+
+        _ ->
+          nil
+      end
+
+    if inbound_mode in ["split", "global"] do
+      inbound_mode
+    else
+      (dns_config && Map.get(dns_config, :tailscale_dns_mode)) || "split"
+    end
+  end
+
   @doc """
-  Builds the effective Tailscale DNS sync plan for a `DnsConfig` profile.
+  Builds the effective Tailscale DNS sync plan for a `DnsConfig` profile and
+  optional `InboundProfile`.
   """
-  @spec build_sync_plan(map() | nil, [String.t()] | nil, [String.t()]) :: map()
-  def build_sync_plan(dns_config, extra_domains \\ nil, extra_upstreams \\ []) do
-    mode = (dns_config && Map.get(dns_config, :tailscale_dns_mode)) || "split"
+  @spec build_sync_plan(map() | nil, [String.t()] | nil, [String.t()], map() | nil) :: map()
+  def build_sync_plan(
+        dns_config,
+        extra_domains \\ nil,
+        extra_upstreams \\ [],
+        inbound_profile \\ nil
+      ) do
+    mode = resolve_tailscale_dns_mode(dns_config, inbound_profile)
 
     if mode == "global" do
       %{
@@ -1179,8 +1202,8 @@ defmodule Hermit.Vpn.DnsWorker do
     |> Enum.uniq()
   end
 
-  defp build_clear_strip_resolvers(dns_config, extra_upstreams) do
-    mode = (dns_config && Map.get(dns_config, :tailscale_dns_mode)) || "split"
+  defp build_clear_strip_resolvers(dns_config, extra_upstreams, inbound_profile) do
+    mode = resolve_tailscale_dns_mode(dns_config, inbound_profile)
     upstream = dns_config && Map.get(dns_config, :upstream_dns)
 
     current_resolvers =
@@ -1197,9 +1220,9 @@ defmodule Hermit.Vpn.DnsWorker do
     |> Enum.uniq()
   end
 
-  defp dns_sync_signature(config) do
+  defp dns_sync_signature(config, inbound_profile) do
     if Map.get(config, :tailscale_override_dns) do
-      plan = build_sync_plan(config)
+      plan = build_sync_plan(config, nil, [], inbound_profile)
       {:enabled, plan.mode, plan.upstream_resolvers, plan.split_domains}
     else
       :disabled
@@ -1386,7 +1409,7 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   def update_tailscale_dns_config(dns_ip, profile, dns_config, extra_upstreams) do
-    plan = build_sync_plan(dns_config, nil, extra_upstreams)
+    plan = build_sync_plan(dns_config, nil, extra_upstreams, profile)
 
     cond do
       mock?() ->
@@ -1680,7 +1703,7 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   def clear_tailscale_dns_config(profile, dns_config, dns_ip, extra_upstreams) do
-    strip_resolvers = build_clear_strip_resolvers(dns_config, extra_upstreams)
+    strip_resolvers = build_clear_strip_resolvers(dns_config, extra_upstreams, profile)
 
     cond do
       mock?() ->

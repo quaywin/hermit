@@ -44,9 +44,14 @@ defmodule Hermit.Vpn.InboundProfile do
 
     case type do
       "tailscale" ->
-        # ts_auth_key is optional since it falls back to global settings, but config should be a map
         if is_map(config) do
-          changeset
+          dns_mode = Map.get(config, "tailscale_dns_mode") || Map.get(config, :tailscale_dns_mode)
+
+          if is_nil(dns_mode) or dns_mode in ["", "split", "global"] do
+            changeset
+          else
+            add_error(changeset, :config, "Tailscale DNS mode must be 'split' or 'global'")
+          end
         else
           add_error(changeset, :config, "must be a map")
         end

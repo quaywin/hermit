@@ -298,6 +298,32 @@ defmodule Hermit.Vpn.DnsWorkerTailscaleApiTest do
       assert fb_plan.mode == :global
       assert fb_plan.fallback_reason == :unsupported_doh
     end
+
+    test "build_sync_plan prioritizes tailscale_dns_mode from InboundProfile over DnsConfig fallback" do
+      dns_config = %{
+        tailscale_dns_mode: "split",
+        upstream_dns: "76.76.2.2, 76.76.10.2",
+        services: %{},
+        custom_rules: [%{"domain" => "openai.com", "action" => "route_tunnel"}]
+      }
+
+      inbound_global = %{config: %{"tailscale_dns_mode" => "global"}}
+      plan_global = DnsWorker.build_sync_plan(dns_config, [], [], inbound_global)
+      assert plan_global.mode == :global
+
+      inbound_split = %{config: %{"tailscale_dns_mode" => "split"}}
+
+      plan_split =
+        DnsWorker.build_sync_plan(
+          %{dns_config | tailscale_dns_mode: "global"},
+          [],
+          [],
+          inbound_split
+        )
+
+      assert plan_split.mode == :split
+      assert plan_split.upstream_resolvers == ["76.76.2.2"]
+    end
   end
 
   describe "Split DNS /dns/configuration payload builders and sync" do

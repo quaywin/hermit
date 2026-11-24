@@ -16,8 +16,8 @@ defmodule Hermit.Dns.Providers do
     "https://dns.quad9.net/dns-query",
     "https://dns11.quad9.net/dns-query",
     "https://dns.adguard-dns.com/dns-query",
-    "https://dns-family.adguard-dns.com/dns-query",
-    "https://dns-nonfilter.adguard-dns.com/dns-query",
+    "https://family.adguard-dns.com/dns-query",
+    "https://unfiltered.adguard-dns.com/dns-query",
     "https://dns.google/dns-query",
     "https://doh.mullvad.net/dns-query"
   ]
@@ -49,13 +49,13 @@ defmodule Hermit.Dns.Providers do
         %{
           id: "family",
           label: "Family Friendly",
-          udp: "76.76.2.5, 76.76.10.5",
+          udp: "76.76.2.4, 76.76.10.4",
           doh: "https://freedns.controld.com/family"
         },
         %{
           id: "uncensored",
           label: "Uncensored",
-          udp: "76.76.2.4, 76.76.10.4",
+          udp: "76.76.2.5, 76.76.10.5",
           doh: "https://freedns.controld.com/uncensored"
         },
         %{
@@ -144,13 +144,13 @@ defmodule Hermit.Dns.Providers do
           id: "family",
           label: "Family Protection",
           udp: "94.140.14.15, 94.140.15.16",
-          doh: "https://dns-family.adguard-dns.com/dns-query"
+          doh: "https://family.adguard-dns.com/dns-query"
         },
         %{
           id: "unfiltered",
           label: "Non-Filtering",
           udp: "94.140.14.140, 94.140.14.141",
-          doh: "https://dns-nonfilter.adguard-dns.com/dns-query"
+          doh: "https://unfiltered.adguard-dns.com/dns-query"
         }
       ]
     },

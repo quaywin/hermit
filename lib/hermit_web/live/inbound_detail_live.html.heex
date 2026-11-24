@@ -149,6 +149,30 @@
                     class="w-full input input-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content font-mono text-sm rounded-[4px]"
                   />
                 </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-medium uppercase tracking-wider text-base-content/60">
+                    Tailscale DNS Mode
+                  </label>
+                  <% current_dns_mode =
+                    (Phoenix.HTML.Form.input_value(f, :config) || %{})["tailscale_dns_mode"] ||
+                      "split" %>
+                  <select
+                    name="inbound_profile[config][tailscale_dns_mode]"
+                    class="w-full select select-bordered bg-base-100 border-base-300 focus:border-[#3ecf8e] text-base-content text-sm rounded-[4px]"
+                  >
+                    <option value="split" selected={current_dns_mode == "split"}>
+                      Split DNS — Direct Upstream + Hermit Smart DNS (Recommended)
+                    </option>
+                    <option value="global" selected={current_dns_mode == "global"}>
+                      Global DNS — All Tailnet Queries via Hermit (Full Logs)
+                    </option>
+                  </select>
+                  <p class="text-[11px] text-base-content/50">
+                    Applies tailnet-wide when a linked DNS Endpoint has
+                    <span class="font-mono">TS DNS</span>
+                    enabled. Community lists &amp; custom DoH URLs not whitelisted by Tailscale automatically fall back to Global DNS.
+                  </p>
+                </div>
                 <details class="group border border-base-300 rounded-[6px] bg-base-100/60 transition-colors">
                   <summary class="flex items-center justify-between p-3 text-xs font-semibold cursor-pointer text-base-content/70 hover:text-base-content select-none">
                     <span class="flex items-center gap-1.5">

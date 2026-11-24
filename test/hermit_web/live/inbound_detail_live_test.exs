@@ -164,4 +164,40 @@ defmodule HermitWeb.InboundDetailLiveTest do
 
     assert html =~ "Routing overview refreshed."
   end
+
+  test "saves tailscale_dns_mode on tailscale inbound profile without wiping existing fields", %{
+    conn: conn
+  } do
+    {:ok, inbound_profile} =
+      Hermit.Repo.insert(%Hermit.Vpn.InboundProfile{
+        name: "dns_mode_test_ts",
+        type: "tailscale",
+        config: %{"ts_auth_key" => "tskey-client-123", "ts_tailnet" => "example.ts.net"}
+      })
+
+    {:ok, view, html} = live(conn, ~p"/inbounds/#{inbound_profile.id}?tab=config")
+    assert html =~ "Tailscale DNS Mode"
+
+    html =
+      view
+      |> form("#edit-inbound-profile-form", %{
+        "inbound_profile" => %{
+          "name" => "dns_mode_test_ts",
+          "type" => "tailscale",
+          "config" => %{
+            "ts_auth_key" => "tskey-client-123",
+            "ts_tailnet" => "example.ts.net",
+            "tailscale_dns_mode" => "global"
+          }
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Inbound Profile updated successfully"
+
+    updated = Hermit.Repo.get!(Hermit.Vpn.InboundProfile, inbound_profile.id)
+    assert updated.config["tailscale_dns_mode"] == "global"
+    assert updated.config["ts_auth_key"] == "tskey-client-123"
+    assert updated.config["ts_tailnet"] == "example.ts.net"
+  end
 end

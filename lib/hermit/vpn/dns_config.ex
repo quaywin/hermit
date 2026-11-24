@@ -10,6 +10,7 @@ defmodule Hermit.Vpn.DnsConfig do
     field(:custom_rules, {:array, :map}, default: [])
     field(:services, :map, default: %{})
     field(:tailscale_override_dns, :boolean, default: false)
+    field(:tailscale_dns_mode, :string, default: "split")
     field(:enable_query_logging, :boolean, default: false)
     field(:enable_ecs, :boolean, default: false)
     field(:ecs_fallback_ip, :string)
@@ -32,12 +33,14 @@ defmodule Hermit.Vpn.DnsConfig do
       :custom_rules,
       :services,
       :tailscale_override_dns,
+      :tailscale_dns_mode,
       :enable_query_logging,
       :enable_ecs,
       :ecs_fallback_ip,
       :dns_endpoint_id
     ])
     |> validate_required([:name, :upstream_dns, :custom_rules])
+    |> validate_inclusion(:tailscale_dns_mode, ["split", "global"])
     |> validate_upstream_dns()
     |> validate_custom_rules()
     |> validate_services()

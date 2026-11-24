@@ -132,6 +132,21 @@ defmodule Hermit.Vpn.SniProxy do
   end
 
   @doc """
+  Returns all domain patterns currently registered in the SNI Proxy ETS table.
+  """
+  @spec all_domains() :: [String.t()]
+  def all_domains do
+    init_table()
+
+    :ets.tab2list(@table)
+    |> Enum.flat_map(fn
+      {domain, pair_id} when is_binary(domain) and is_binary(pair_id) -> [domain]
+      _ -> []
+    end)
+    |> Enum.uniq()
+  end
+
+  @doc """
   Syncs all smart routes from database (Services + Custom Rules from all DNS profiles,
   plus legacy routing_targets from active tunnels) into the ETS table.
   """

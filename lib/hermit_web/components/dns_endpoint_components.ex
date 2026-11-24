@@ -12,12 +12,20 @@ defmodule HermitWeb.DnsEndpointComponents do
     {status, ip, err} = assigns.dns_status
     config = assigns.endpoint.dns_profile
 
+    sync_plan =
+      if config && config.tailscale_override_dns do
+        Hermit.Vpn.DnsWorker.build_sync_plan(config)
+      else
+        nil
+      end
+
     assigns =
       assigns
       |> assign(:status, status)
       |> assign(:ip, ip)
       |> assign(:err, err)
       |> assign(:config, config)
+      |> assign(:sync_plan, sync_plan)
 
     ~H"""
     <tr class="hover:bg-base-200/50 transition-colors">
@@ -118,10 +126,27 @@ defmodule HermitWeb.DnsEndpointComponents do
               />
             </div>
           <% end %>
-          <%= if @config && @config.tailscale_override_dns do %>
-            <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
-              HA Global DNS
-            </span>
+          <%= if @config && @config.tailscale_override_dns && @sync_plan do %>
+            <%= cond do %>
+              <% @sync_plan.mode == :split -> %>
+                <span
+                  class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20"
+                  title={"Direct Upstream: #{Enum.join(@sync_plan.upstream_resolvers, ", ")}"}
+                >
+                  Split DNS ({length(@sync_plan.split_domains)} domains)
+                </span>
+              <% @sync_plan.fallback_reason != nil -> %>
+                <span
+                  class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/20"
+                  title="Custom DoH upstream is not natively supported by Tailscale Global DNS; routing all queries via Hermit."
+                >
+                  Global DNS (DoH Fallback)
+                </span>
+              <% true -> %>
+                <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
+                  Global DNS
+                </span>
+            <% end %>
           <% end %>
         </div>
       </td>
@@ -143,12 +168,29 @@ defmodule HermitWeb.DnsEndpointComponents do
               ]}
               title={
                 if @config && @config.tailscale_override_dns,
-                  do: "Tailscale Global DNS: ON (Click to disable)",
-                  else: "Tailscale Global DNS: OFF (Click to enable)"
+                  do: "Tailscale DNS Sync: ON (Click to disable)",
+                  else: "Tailscale DNS Sync: OFF (Click to enable)"
               }
             >
-              Global DNS
+              {if @config && @config.tailscale_override_dns, do: "TS DNS: ON", else: "TS DNS"}
             </button>
+
+            <%= if @config && @config.tailscale_override_dns do %>
+              <button
+                phx-click="toggle_tailscale_dns_mode"
+                phx-value-id={@endpoint.id}
+                disabled={@status != :running}
+                class={[
+                  "btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-[11px] px-2 text-base-content/80",
+                  @status != :running && "opacity-40 cursor-not-allowed"
+                ]}
+                title="Switch between Split DNS (direct upstream + Smart DNS) and Global DNS (all queries via Hermit)"
+              >
+                {if (@config.tailscale_dns_mode || "split") == "split",
+                  do: "Mode: Split",
+                  else: "Mode: Global"}
+              </button>
+            <% end %>
           <% end %>
 
           <button

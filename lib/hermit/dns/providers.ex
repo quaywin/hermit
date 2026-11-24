@@ -7,6 +7,21 @@ defmodule Hermit.Dns.Providers do
   @default_upstream "76.76.2.2, 76.76.10.2"
   @default_clean_bypass "1.1.1.1, 76.76.2.0"
 
+  @tailscale_doh_prefixes [
+    "https://dns.nextdns.io/",
+    "https://dns.controld.com/",
+    "https://cloudflare-dns.com/dns-query",
+    "https://security.cloudflare-dns.com/dns-query",
+    "https://family.cloudflare-dns.com/dns-query",
+    "https://dns.quad9.net/dns-query",
+    "https://dns11.quad9.net/dns-query",
+    "https://dns.adguard-dns.com/dns-query",
+    "https://dns-family.adguard-dns.com/dns-query",
+    "https://dns-nonfilter.adguard-dns.com/dns-query",
+    "https://dns.google/dns-query",
+    "https://doh.mullvad.net/dns-query"
+  ]
+
   @providers [
     %{
       id: "controld",
@@ -281,6 +296,99 @@ defmodule Hermit.Dns.Providers do
       found ->
         found
     end
+  end
+
+  @doc """
+  Resolves an upstream DNS string into resolvers compatible with Tailscale
+  Global Nameservers (`/dns/configuration`), or `{:fallback_global, reason}`
+  when the upstream requires Hermit to intercept traffic globally.
+  """
+  @spec tailscale_global_resolvers(String.t() | nil) ::
+          {:ok, [String.t()]} | {:fallback_global, atom()}
+  def tailscale_global_resolvers(nil), do: {:fallback_global, :empty_upstream}
+
+  def tailscale_global_resolvers(upstream_str) when is_binary(upstream_str) do
+    trimmed = String.trim(upstream_str)
+
+    if trimmed == "" do
+      {:fallback_global, :empty_upstream}
+    else
+      case detect(trimmed) do
+        {provider_id, preset_id, _proto}
+        when provider_id != "custom" and not is_nil(preset_id) ->
+          with %{presets: presets} <- get_provider(provider_id),
+               preset when not is_nil(preset) <- Enum.find(presets, &(&1.id == preset_id)),
+               udp when is_binary(udp) and udp != "" <- Map.get(preset, :udp) do
+            {:ok, normalize_tokens(udp)}
+          else
+            _ -> {:fallback_global, :unsupported_doh}
+          end
+
+        _custom ->
+          tokens = normalize_tokens(trimmed)
+          parsed = Enum.map(tokens, &parse_tailscale_compatible_resolver/1)
+
+          if parsed != [] and Enum.all?(parsed, &match?({:ok, _}, &1)) do
+            resolvers =
+              parsed
+              |> Enum.map(fn {:ok, val} -> val end)
+              |> Enum.uniq()
+
+            {:ok, resolvers}
+          else
+            {:fallback_global, :unsupported_upstream}
+          end
+      end
+    end
+  end
+
+  defp parse_tailscale_compatible_resolver(token) do
+    cond do
+      match?({:ok, _}, :inet.parse_address(String.to_charlist(token))) ->
+        {:ok, token}
+
+      String.ends_with?(token, ":53") ->
+        case Regex.run(~r/^\[([^\]]+)\]:53$/, token) do
+          [_, ip_str] ->
+            if match?({:ok, _}, :inet.parse_address(String.to_charlist(ip_str))),
+              do: {:ok, ip_str},
+              else: :error
+
+          nil ->
+            case String.split(token, ":") do
+              [ip_str, "53"] ->
+                if match?({:ok, _}, :inet.parse_address(String.to_charlist(ip_str))),
+                  do: {:ok, ip_str},
+                  else: :error
+
+              _ ->
+                :error
+            end
+        end
+
+      Enum.any?(@tailscale_doh_prefixes, &String.starts_with?(token, &1)) ->
+        {:ok, token}
+
+      true ->
+        :error
+    end
+  end
+
+  @doc """
+  Returns all IP addresses used by built-in provider presets for Tailscale Global Nameservers.
+  Used to cleanly strip previously synced provider IPs when switching from Split DNS to Global DNS.
+  """
+  @spec all_preset_global_resolvers() :: [String.t()]
+  def all_preset_global_resolvers do
+    @providers
+    |> Enum.flat_map(& &1.presets)
+    |> Enum.flat_map(fn preset ->
+      case Map.get(preset, :udp) do
+        udp when is_binary(udp) and udp != "" -> normalize_tokens(udp)
+        _ -> []
+      end
+    end)
+    |> Enum.uniq()
   end
 
   defp normalize_tokens(str) do

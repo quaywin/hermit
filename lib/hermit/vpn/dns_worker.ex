@@ -17,7 +17,10 @@ defmodule Hermit.Vpn.DnsWorker do
             ts_ip: nil,
             ts_port: nil,
             mock_timer: nil,
-            tailscale_override_dns: false
+            tailscale_override_dns: false,
+            last_dns_sync_signature: nil,
+            last_synced_upstreams: [],
+            subscribed_profile_id: nil
 
   # --- Client API ---
 
@@ -63,21 +66,30 @@ defmodule Hermit.Vpn.DnsWorker do
     endpoint_id = opts[:endpoint_id]
     inbound_profile_id = opts[:inbound_profile_id]
 
-    if :erlang.whereis(Hermit.PubSub) != :undefined do
-      try do
-        config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
+    subscribed_profile_id =
+      if :erlang.whereis(Hermit.PubSub) != :undefined do
+        try do
+          Phoenix.PubSub.subscribe(Hermit.PubSub, "smart_routes")
+          config = Hermit.Vpn.DnsConfig.get_for_endpoint(endpoint_id)
 
-        if config.id do
-          Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
+          if config.id do
+            Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{config.id}")
+            config.id
+          end
+        rescue
+          _ -> nil
         end
-      rescue
-        _ -> :ok
       end
-    end
 
     # Perform initial sync on startup
     send(self(), :initial_sync)
-    {:ok, %__MODULE__{endpoint_id: endpoint_id, inbound_profile_id: inbound_profile_id}}
+
+    {:ok,
+     %__MODULE__{
+       endpoint_id: endpoint_id,
+       inbound_profile_id: inbound_profile_id,
+       subscribed_profile_id: subscribed_profile_id
+     }}
   end
 
   @impl true
@@ -104,12 +116,19 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   @impl true
+  def handle_info({:smart_routes_updated, _all_pairs}, state) do
+    {_, new_state} = do_sync_state(state)
+    {:noreply, new_state}
+  end
+
+  @impl true
   def handle_info({:dns_node_start_result, result}, state) do
     if state.status == :starting do
       case result do
         {:ok, ip, port} ->
           # Get current config to check if override is enabled
           config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
+          state = maybe_sync_profile_subscription(state, config.id)
 
           profile =
             if state.inbound_profile_id,
@@ -122,6 +141,18 @@ defmodule Hermit.Vpn.DnsWorker do
               nil
             end
 
+          new_sig = dns_sync_signature(config)
+
+          plan =
+            if config.tailscale_override_dns,
+              do: build_sync_plan(config),
+              else: nil
+
+          synced_upstreams =
+            if plan && plan.mode == :split,
+              do: plan.upstream_resolvers,
+              else: []
+
           new_state = %{
             state
             | status: :running,
@@ -129,7 +160,9 @@ defmodule Hermit.Vpn.DnsWorker do
               ts_port: port,
               error_reason: nil,
               mock_timer: mock_timer,
-              tailscale_override_dns: config.tailscale_override_dns
+              tailscale_override_dns: config.tailscale_override_dns,
+              last_dns_sync_signature: new_sig,
+              last_synced_upstreams: synced_upstreams
           }
 
           if config.tailscale_override_dns and profile do
@@ -211,7 +244,8 @@ defmodule Hermit.Vpn.DnsWorker do
 
       if profile do
         ts_ip = state.ts_ip
-        Task.start(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
+        extra_upstreams = state.last_synced_upstreams
+        Task.start(fn -> clear_tailscale_dns_config(profile, config, ts_ip, extra_upstreams) end)
       end
     end
 
@@ -226,6 +260,7 @@ defmodule Hermit.Vpn.DnsWorker do
         do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, state.inbound_profile_id)
 
     config = Hermit.Vpn.DnsConfig.get_for_endpoint(state.endpoint_id)
+    state = maybe_sync_profile_subscription(state, config.id)
     endpoint = Hermit.Repo.get!(Hermit.Vpn.DnsEndpoint, state.endpoint_id)
 
     cond do
@@ -258,29 +293,55 @@ defmodule Hermit.Vpn.DnsWorker do
         )
 
         ts_ip = state.ts_ip
+        extra_upstreams = state.last_synced_upstreams
         new_state = stop_dns_node(state)
 
         if (config.tailscale_override_dns or state.tailscale_override_dns == true) and profile do
-          spawn(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
+          spawn(fn -> clear_tailscale_dns_config(profile, config, ts_ip, extra_upstreams) end)
         end
 
-        {{:ok, :stopped}, %{new_state | tailscale_override_dns: false}}
+        {{:ok, :stopped},
+         %{
+           new_state
+           | tailscale_override_dns: false,
+             last_dns_sync_signature: :disabled,
+             last_synced_upstreams: []
+         }}
 
       endpoint.enabled and state.status == :running ->
-        if state.tailscale_override_dns != config.tailscale_override_dns do
-          if config.tailscale_override_dns and profile do
-            spawn(fn -> update_tailscale_dns_config(state.ts_ip, profile, config) end)
-          else
-            if profile do
-              ts_ip = state.ts_ip
-              spawn(fn -> clear_tailscale_dns_config(profile, config, ts_ip) end)
+        new_sig = dns_sync_signature(config)
+
+        if state.tailscale_override_dns != config.tailscale_override_dns or
+             state.last_dns_sync_signature != new_sig do
+          extra_upstreams = state.last_synced_upstreams
+
+          next_upstreams =
+            if config.tailscale_override_dns and profile do
+              plan = build_sync_plan(config, nil, extra_upstreams)
+
+              spawn(fn ->
+                update_tailscale_dns_config(state.ts_ip, profile, config, extra_upstreams)
+              end)
+
+              if plan.mode == :split, do: plan.upstream_resolvers, else: []
+            else
+              if state.tailscale_override_dns and profile do
+                ts_ip = state.ts_ip
+
+                spawn(fn ->
+                  clear_tailscale_dns_config(profile, config, ts_ip, extra_upstreams)
+                end)
+              end
+
+              []
             end
-          end
 
           {{:ok, :updated_dns_integration},
            %{
              state
-             | tailscale_override_dns: config.tailscale_override_dns and not is_nil(profile)
+             | tailscale_override_dns: config.tailscale_override_dns and not is_nil(profile),
+               last_dns_sync_signature: new_sig,
+               last_synced_upstreams: next_upstreams
            }}
         else
           {{:ok, :already_synced}, state}
@@ -288,6 +349,26 @@ defmodule Hermit.Vpn.DnsWorker do
 
       true ->
         {{:ok, :already_synced}, state}
+    end
+  end
+
+  defp maybe_sync_profile_subscription(state, new_profile_id) do
+    if new_profile_id != state.subscribed_profile_id and
+         :erlang.whereis(Hermit.PubSub) != :undefined do
+      if state.subscribed_profile_id do
+        Phoenix.PubSub.unsubscribe(
+          Hermit.PubSub,
+          "dns_config_profile:#{state.subscribed_profile_id}"
+        )
+      end
+
+      if new_profile_id do
+        Phoenix.PubSub.subscribe(Hermit.PubSub, "dns_config_profile:#{new_profile_id}")
+      end
+
+      %{state | subscribed_profile_id: new_profile_id}
+    else
+      state
     end
   end
 
@@ -869,18 +950,256 @@ defmodule Hermit.Vpn.DnsWorker do
 
   def remove_config_resolver(resolvers, _), do: if(is_list(resolvers), do: resolvers, else: [])
 
+  @fqdn_regex ~r/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/
+  @split_service_actions ["route_tunnel", "block", "bypass"]
+  @split_rule_actions [
+    "route_tunnel",
+    "smart_route",
+    "block",
+    "bypass",
+    "redirect",
+    "forward_dns",
+    "forward_proxy"
+  ]
+
+  @doc """
+  Collects all domains managed by Hermit (Services, Custom Rules, and SNI Proxy routes)
+  that must be sent to the Hermit DNS Endpoint when Tailscale Split DNS is enabled.
+  """
+  @spec collect_split_dns_domains(map() | nil, [String.t()] | nil) :: [String.t()]
+  def collect_split_dns_domains(dns_config, extra_domains \\ nil) do
+    service_domains =
+      case Map.get(dns_config || %{}, :services) do
+        services when is_map(services) ->
+          Enum.flat_map(services, fn {svc_id, cfg} ->
+            action = is_map(cfg) && (Map.get(cfg, "action") || Map.get(cfg, :action))
+
+            if action in @split_service_actions do
+              Hermit.Services.Catalog.domains_for_service(to_string(svc_id))
+            else
+              []
+            end
+          end)
+
+        _ ->
+          []
+      end
+
+    rule_domains =
+      case Map.get(dns_config || %{}, :custom_rules) do
+        rules when is_list(rules) ->
+          Enum.flat_map(rules, fn rule ->
+            action = is_map(rule) && (Map.get(rule, "action") || Map.get(rule, :action))
+            domain = is_map(rule) && (Map.get(rule, "domain") || Map.get(rule, :domain))
+
+            if action in @split_rule_actions and is_binary(domain) do
+              String.split(domain, [",", "\n", "\r", " "], trim: true)
+            else
+              []
+            end
+          end)
+
+        _ ->
+          []
+      end
+
+    sni_domains =
+      if is_list(extra_domains) do
+        extra_domains
+      else
+        try do
+          Hermit.Vpn.SniProxy.all_domains()
+        rescue
+          _ -> []
+        end
+      end
+
+    domain_set =
+      (service_domains ++ rule_domains ++ sni_domains)
+      |> Enum.map(&normalize_split_domain/1)
+      |> Enum.filter(&(is_binary(&1) and Regex.match?(@fqdn_regex, &1)))
+      |> MapSet.new()
+
+    domain_set
+    |> Enum.reject(&has_parent_in_set?(&1, domain_set))
+    |> Enum.sort()
+  end
+
+  defp normalize_split_domain(domain) when is_binary(domain) do
+    domain
+    |> String.trim()
+    |> String.downcase()
+    |> String.trim_leading("*.")
+    |> String.trim_leading(".")
+    |> String.trim_trailing(".")
+  end
+
+  defp normalize_split_domain(_), do: nil
+
+  defp has_parent_in_set?(domain, set) do
+    case :binary.match(domain, ".") do
+      {idx, _} ->
+        parent = binary_part(domain, idx + 1, byte_size(domain) - idx - 1)
+        MapSet.member?(set, parent) or has_parent_in_set?(parent, set)
+
+      :nomatch ->
+        false
+    end
+  end
+
+  @doc """
+  Builds the effective Tailscale DNS sync plan for a `DnsConfig` profile.
+  """
+  @spec build_sync_plan(map() | nil, [String.t()] | nil, [String.t()]) :: map()
+  def build_sync_plan(dns_config, extra_domains \\ nil, extra_upstreams \\ []) do
+    mode = (dns_config && Map.get(dns_config, :tailscale_dns_mode)) || "split"
+
+    if mode == "global" do
+      %{
+        mode: :global,
+        fallback_reason: nil,
+        upstream_resolvers: [],
+        split_domains: [],
+        strip_resolvers: build_global_strip_resolvers(dns_config, extra_upstreams)
+      }
+    else
+      upstream = dns_config && Map.get(dns_config, :upstream_dns)
+
+      case Hermit.Dns.Providers.tailscale_global_resolvers(upstream) do
+        {:ok, resolvers} ->
+          %{
+            mode: :split,
+            fallback_reason: nil,
+            upstream_resolvers: resolvers,
+            split_domains: collect_split_dns_domains(dns_config, extra_domains),
+            strip_resolvers: []
+          }
+
+        {:fallback_global, reason} ->
+          %{
+            mode: :global,
+            fallback_reason: reason,
+            upstream_resolvers: [],
+            split_domains: [],
+            strip_resolvers: build_global_strip_resolvers(dns_config, extra_upstreams)
+          }
+      end
+    end
+  end
+
+  defp build_global_strip_resolvers(dns_config, extra_upstreams) do
+    upstream = dns_config && Map.get(dns_config, :upstream_dns)
+
+    current_resolvers =
+      case Hermit.Dns.Providers.tailscale_global_resolvers(upstream) do
+        {:ok, list} -> list
+        _ -> []
+      end
+
+    (current_resolvers ++
+       Hermit.Dns.Providers.all_preset_global_resolvers() ++
+       List.wrap(extra_upstreams))
+    |> Enum.uniq()
+  end
+
+  defp build_clear_strip_resolvers(dns_config, extra_upstreams) do
+    mode = (dns_config && Map.get(dns_config, :tailscale_dns_mode)) || "split"
+    upstream = dns_config && Map.get(dns_config, :upstream_dns)
+
+    current_resolvers =
+      if mode == "split" do
+        case Hermit.Dns.Providers.tailscale_global_resolvers(upstream) do
+          {:ok, list} -> list
+          _ -> []
+        end
+      else
+        []
+      end
+
+    (current_resolvers ++ List.wrap(extra_upstreams))
+    |> Enum.uniq()
+  end
+
+  defp dns_sync_signature(config) do
+    if Map.get(config, :tailscale_override_dns) do
+      plan = build_sync_plan(config)
+      {:enabled, plan.mode, plan.upstream_resolvers, plan.split_domains}
+    else
+      :disabled
+    end
+  end
+
   @doc """
   Builds an updated `/dns/configuration` payload that registers `dns_ip` with
-  `useWithExitNode: true` and enables `overrideLocalDNS: true`, preserving all
-  other fields (such as `splitDNS`, `searchPaths`, and `magicDNS`).
+  `useWithExitNode: true` and enables `overrideLocalDNS: true`, strips any
+  stale Split DNS `strip_resolvers` from `nameservers`, removes `dns_ip` from
+  `splitDNS`, and preserves other fields (such as `searchPaths` and `magicDNS`).
   """
-  def build_updated_dns_configuration(current_config, dns_ip)
-      when is_map(current_config) and is_binary(dns_ip) and dns_ip != "" do
+  def build_updated_dns_configuration(current_config, dns_ip, strip_resolvers \\ [])
+      when is_map(current_config) and is_binary(dns_ip) and dns_ip != "" and
+             is_list(strip_resolvers) do
     existing_nameservers =
       case Map.get(current_config, "nameservers") do
         list when is_list(list) -> list
         _ -> []
       end
+
+    cleaned_nameservers =
+      strip_resolvers
+      |> Enum.reject(&(&1 == dns_ip))
+      |> Enum.reduce(existing_nameservers, fn addr, acc ->
+        remove_config_resolver(acc, addr)
+      end)
+
+    existing_prefs =
+      case Map.get(current_config, "preferences") do
+        prefs when is_map(prefs) -> prefs
+        _ -> %{}
+      end
+
+    updated =
+      current_config
+      |> Map.put("nameservers", upsert_config_resolver(cleaned_nameservers, dns_ip))
+      |> Map.put("preferences", Map.put(existing_prefs, "overrideLocalDNS", true))
+
+    if is_map(Map.get(current_config, "splitDNS")) do
+      Map.put(updated, "splitDNS", remove_split_dns_ip(current_config["splitDNS"], dns_ip))
+    else
+      updated
+    end
+  end
+
+  @doc """
+  Builds an updated `/dns/configuration` payload for Split DNS mode:
+  sets global `nameservers` directly to `upstream_resolvers`, routes `split_domains`
+  to `hermit_dns_ip`, removes stale `hermit_dns_ip` entries, and preserves other settings.
+  """
+  def build_split_dns_configuration(
+        current_config,
+        hermit_dns_ip,
+        upstream_resolvers,
+        split_domains
+      )
+      when is_map(current_config) and is_binary(hermit_dns_ip) and hermit_dns_ip != "" and
+             is_list(upstream_resolvers) and is_list(split_domains) do
+    existing_split_dns =
+      case Map.get(current_config, "splitDNS") do
+        split when is_map(split) -> split
+        _ -> %{}
+      end
+
+    cleaned_split_dns = remove_split_dns_ip(existing_split_dns, hermit_dns_ip)
+
+    updated_split_dns =
+      Enum.reduce(split_domains, cleaned_split_dns, fn domain, acc ->
+        existing_domain_resolvers = Map.get(acc, domain, [])
+        Map.put(acc, domain, upsert_config_resolver(existing_domain_resolvers, hermit_dns_ip))
+      end)
+
+    nameservers =
+      Enum.map(upstream_resolvers, fn addr ->
+        %{"address" => addr, "useWithExitNode" => true}
+      end)
 
     existing_prefs =
       case Map.get(current_config, "preferences") do
@@ -889,23 +1208,44 @@ defmodule Hermit.Vpn.DnsWorker do
       end
 
     current_config
-    |> Map.put("nameservers", upsert_config_resolver(existing_nameservers, dns_ip))
+    |> Map.put("nameservers", nameservers)
+    |> Map.put("splitDNS", updated_split_dns)
     |> Map.put("preferences", Map.put(existing_prefs, "overrideLocalDNS", true))
   end
 
+  defp remove_split_dns_ip(split_dns, target_ip) when is_map(split_dns) do
+    Enum.reduce(split_dns, %{}, fn {domain, resolvers}, acc ->
+      remaining = remove_config_resolver(resolvers, target_ip)
+
+      if Enum.empty?(remaining) do
+        acc
+      else
+        Map.put(acc, domain, remaining)
+      end
+    end)
+  end
+
+  defp remove_split_dns_ip(_, _), do: %{}
+
   @doc """
-  Builds an updated `/dns/configuration` payload that removes `target_ip` from
-  `nameservers` and disables `overrideLocalDNS` when no nameservers remain.
+  Builds an updated `/dns/configuration` payload that removes `target_ip` and any
+  `strip_resolvers` from `nameservers` (plus `target_ip` from `splitDNS` when present)
+  and disables `overrideLocalDNS` when no nameservers remain.
   """
-  def build_cleared_dns_configuration(current_config, target_ip)
-      when is_map(current_config) and is_binary(target_ip) do
+  def build_cleared_dns_configuration(current_config, target_ip, strip_resolvers \\ [])
+      when is_map(current_config) and is_binary(target_ip) and is_list(strip_resolvers) do
     existing_nameservers =
       case Map.get(current_config, "nameservers") do
         list when is_list(list) -> list
         _ -> []
       end
 
-    remaining = remove_config_resolver(existing_nameservers, target_ip)
+    remaining =
+      [target_ip | strip_resolvers]
+      |> Enum.uniq()
+      |> Enum.reduce(existing_nameservers, fn addr, acc ->
+        remove_config_resolver(acc, addr)
+      end)
 
     existing_prefs =
       case Map.get(current_config, "preferences") do
@@ -920,9 +1260,16 @@ defmodule Hermit.Vpn.DnsWorker do
         existing_prefs
       end
 
-    current_config
-    |> Map.put("nameservers", remaining)
-    |> Map.put("preferences", updated_prefs)
+    cleared =
+      current_config
+      |> Map.put("nameservers", remaining)
+      |> Map.put("preferences", updated_prefs)
+
+    if is_map(Map.get(current_config, "splitDNS")) do
+      Map.put(cleared, "splitDNS", remove_split_dns_ip(current_config["splitDNS"], target_ip))
+    else
+      cleared
+    end
   end
 
   defp normalize_config_resolver(%{"address" => addr} = map)
@@ -954,16 +1301,27 @@ defmodule Hermit.Vpn.DnsWorker do
 
   defp normalize_config_resolver(_), do: nil
 
-  def update_tailscale_dns_config(_dns_ip, profile, _dns_config) when is_nil(profile) do
+  def update_tailscale_dns_config(dns_ip, profile, dns_config, extra_upstreams \\ [])
+
+  def update_tailscale_dns_config(_dns_ip, profile, _dns_config, _extra_upstreams)
+      when is_nil(profile) do
     {:ok, :noop}
   end
 
-  def update_tailscale_dns_config(dns_ip, profile, _dns_config) do
+  def update_tailscale_dns_config(dns_ip, profile, dns_config, extra_upstreams) do
+    plan = build_sync_plan(dns_config, nil, extra_upstreams)
+
     cond do
       mock?() ->
-        Logger.info(
-          "Mock: Registering Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}"
-        )
+        if plan.mode == :split do
+          Logger.info(
+            "Mock: Syncing Tailscale Split DNS (Global: #{Enum.join(plan.upstream_resolvers, ", ")}, #{length(plan.split_domains)} split domains -> #{dns_ip})"
+          )
+        else
+          Logger.info(
+            "Mock: Registering Tailscale global nameserver to Dedicated DNS IP: #{dns_ip}"
+          )
+        end
 
         {:ok, :updated}
 
@@ -972,7 +1330,7 @@ defmodule Hermit.Vpn.DnsWorker do
 
         with {:ok, token} <- Hermit.Vpn.Inbound.Tailscale.get_api_token(auth_key),
              true <- is_binary(dns_ip) and dns_ip != "" do
-          sync_tailscale_dns_via_api(dns_ip, tailnet, token)
+          sync_tailscale_dns_via_api(dns_ip, tailnet, token, plan: plan)
         else
           {:error, reason} ->
             Logger.warning("Cannot update Tailscale DNS config: #{inspect(reason)}")
@@ -986,17 +1344,53 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   @doc false
-  def sync_tailscale_dns_via_api(dns_ip, tailnet, token, req_opts \\ []) do
-    Logger.info(
-      "Registering #{dns_ip} into Tailscale global nameservers with useWithExitNode=true (tailnet: #{tailnet})..."
-    )
+  def sync_tailscale_dns_via_api(dns_ip, tailnet, token, opts \\ []) do
+    plan =
+      Keyword.get(opts, :plan, %{
+        mode: :global,
+        fallback_reason: nil,
+        upstream_resolvers: [],
+        split_domains: [],
+        strip_resolvers: []
+      })
+
+    req_opts = Keyword.delete(opts, :plan)
+
+    if plan.mode == :split do
+      Logger.info(
+        "Syncing Tailscale Split DNS (Global: #{Enum.join(plan.upstream_resolvers, ", ")}, #{length(plan.split_domains)} domains -> #{dns_ip}, tailnet: #{tailnet})..."
+      )
+    else
+      fallback_note =
+        if plan.fallback_reason,
+          do: " (fallback: #{plan.fallback_reason})",
+          else: ""
+
+      Logger.info(
+        "Registering #{dns_ip} into Tailscale global nameservers with useWithExitNode=true#{fallback_note} (tailnet: #{tailnet})..."
+      )
+    end
 
     headers = [{"authorization", "Bearer #{token}"}]
     config_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/configuration"
 
     case Req.get(config_url, Keyword.merge([headers: headers], req_opts)) do
       {:ok, %{status: 200, body: current_config}} when is_map(current_config) ->
-        updated_config = build_updated_dns_configuration(current_config, dns_ip)
+        updated_config =
+          if plan.mode == :split do
+            build_split_dns_configuration(
+              current_config,
+              dns_ip,
+              plan.upstream_resolvers,
+              plan.split_domains
+            )
+          else
+            build_updated_dns_configuration(
+              current_config,
+              dns_ip,
+              Map.get(plan, :strip_resolvers, [])
+            )
+          end
 
         case Req.post(
                config_url,
@@ -1004,7 +1398,7 @@ defmodule Hermit.Vpn.DnsWorker do
              ) do
           {:ok, %{status: 200}} ->
             Logger.info(
-              "Successfully registered Dedicated DNS Node (#{dns_ip}) on Tailscale via /dns/configuration (useWithExitNode: true)."
+              "Successfully synced Tailscale DNS via /dns/configuration (mode: #{plan.mode}, node: #{dns_ip})."
             )
 
             {:ok, :updated}
@@ -1018,10 +1412,10 @@ defmodule Hermit.Vpn.DnsWorker do
 
           other ->
             Logger.warning(
-              "Tailscale /dns/configuration POST returned #{inspect(other)}; falling back to legacy /dns/nameservers API."
+              "Tailscale /dns/configuration POST returned #{inspect(other)}; falling back to legacy DNS API."
             )
 
-            sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts)
+            sync_tailscale_legacy_for_plan(dns_ip, plan, tailnet, headers, req_opts)
         end
 
       {:ok, %{status: 403, body: body}} ->
@@ -1033,14 +1427,91 @@ defmodule Hermit.Vpn.DnsWorker do
 
       other ->
         Logger.warning(
-          "Tailscale /dns/configuration GET unavailable (#{inspect(other)}); falling back to legacy /dns/nameservers API."
+          "Tailscale /dns/configuration GET unavailable (#{inspect(other)}); falling back to legacy DNS API."
         )
 
-        sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts)
+        sync_tailscale_legacy_for_plan(dns_ip, plan, tailnet, headers, req_opts)
     end
   end
 
-  defp sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts) do
+  defp sync_tailscale_legacy_for_plan(dns_ip, %{mode: :split} = plan, tailnet, headers, req_opts) do
+    sync_tailscale_split_dns_legacy(dns_ip, plan, tailnet, headers, req_opts)
+  end
+
+  defp sync_tailscale_legacy_for_plan(dns_ip, plan, tailnet, headers, req_opts) do
+    sync_tailscale_dns_legacy(
+      dns_ip,
+      tailnet,
+      headers,
+      req_opts,
+      Map.get(plan, :strip_resolvers, [])
+    )
+  end
+
+  defp sync_tailscale_split_dns_legacy(dns_ip, plan, tailnet, headers, req_opts) do
+    dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
+    split_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/split-dns"
+
+    case Req.post(
+           dns_url,
+           Keyword.merge([json: %{"dns" => plan.upstream_resolvers}, headers: headers], req_opts)
+         ) do
+      {:ok, %{status: 200}} ->
+        prefs_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/preferences"
+
+        _ =
+          Req.post(
+            prefs_url,
+            Keyword.merge([json: %{"overrideLocalDNS" => true}, headers: headers], req_opts)
+          )
+
+        current_split =
+          case Req.get(split_url, Keyword.merge([headers: headers], req_opts)) do
+            {:ok, %{status: 200, body: body}} when is_map(body) -> body
+            _ -> %{}
+          end
+
+        cleaned_split =
+          Enum.reduce(current_split, %{}, fn {domain, resolvers}, acc ->
+            remaining =
+              if is_list(resolvers), do: remove_resolver(resolvers, dns_ip), else: []
+
+            if Enum.empty?(remaining), do: acc, else: Map.put(acc, domain, remaining)
+          end)
+
+        updated_split =
+          Enum.reduce(plan.split_domains, cleaned_split, fn domain, acc ->
+            existing = Map.get(acc, domain, [])
+            Map.put(acc, domain, append_resolver(existing, dns_ip))
+          end)
+
+        case Req.put(split_url, Keyword.merge([json: updated_split, headers: headers], req_opts)) do
+          {:ok, %{status: 200}} ->
+            Logger.info("Successfully synced Tailscale Split DNS via legacy API.")
+            {:ok, :updated}
+
+          {:ok, %{status: 403, body: body}} ->
+            {:error, {:http_error, 403, body}}
+
+          {:ok, %{status: status, body: body}} ->
+            {:error, {:http_error, status, body}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:ok, %{status: 403, body: body}} ->
+        {:error, {:http_error, 403, body}}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:http_error, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp sync_tailscale_dns_legacy(dns_ip, tailnet, headers, req_opts, strip_resolvers) do
     dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
 
     current_resolvers =
@@ -1052,7 +1523,12 @@ defmodule Hermit.Vpn.DnsWorker do
           []
       end
 
-    new_resolvers = append_resolver(current_resolvers, dns_ip)
+    cleaned_resolvers =
+      strip_resolvers
+      |> Enum.reject(&(&1 == dns_ip))
+      |> Enum.reduce(current_resolvers, fn addr, acc -> remove_resolver(acc, addr) end)
+
+    new_resolvers = append_resolver(cleaned_resolvers, dns_ip)
     payload = %{"dns" => new_resolvers}
 
     case Req.post(dns_url, Keyword.merge([json: payload, headers: headers], req_opts)) do
@@ -1091,18 +1567,23 @@ defmodule Hermit.Vpn.DnsWorker do
     endpoint = if endpoint_id, do: Hermit.Repo.get(Hermit.Vpn.DnsEndpoint, endpoint_id)
     profile_id = endpoint && endpoint.inbound_profile_id
     profile = if profile_id, do: Hermit.Repo.get(Hermit.Vpn.InboundProfile, profile_id)
-    clear_tailscale_dns_config(profile, dns_config, nil)
+    clear_tailscale_dns_config(profile, dns_config, nil, [])
   end
 
   def clear_tailscale_dns_config(profile, dns_config) do
-    clear_tailscale_dns_config(profile, dns_config, nil)
+    clear_tailscale_dns_config(profile, dns_config, nil, [])
   end
 
-  def clear_tailscale_dns_config(profile, _dns_config, _dns_ip) when is_nil(profile) do
+  def clear_tailscale_dns_config(profile, dns_config, dns_ip, extra_upstreams \\ [])
+
+  def clear_tailscale_dns_config(profile, _dns_config, _dns_ip, _extra_upstreams)
+      when is_nil(profile) do
     {:ok, :noop}
   end
 
-  def clear_tailscale_dns_config(profile, dns_config, dns_ip) do
+  def clear_tailscale_dns_config(profile, dns_config, dns_ip, extra_upstreams) do
+    strip_resolvers = build_clear_strip_resolvers(dns_config, extra_upstreams)
+
     cond do
       mock?() ->
         Logger.info("Mock: Removing #{inspect(dns_ip)} from Tailscale global nameservers")
@@ -1116,7 +1597,9 @@ defmodule Hermit.Vpn.DnsWorker do
             target_ip = dns_ip || resolve_endpoint_tailscale_ip(dns_config, token, tailnet)
 
             if target_ip && target_ip != "" do
-              clear_tailscale_dns_via_api(target_ip, tailnet, token)
+              clear_tailscale_dns_via_api(target_ip, tailnet, token,
+                strip_resolvers: strip_resolvers
+              )
             else
               Logger.info(
                 "No active Tailscale IP resolved for endpoint, skipping DNS deregistration."
@@ -1133,7 +1616,10 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   @doc false
-  def clear_tailscale_dns_via_api(target_ip, tailnet, token, req_opts \\ []) do
+  def clear_tailscale_dns_via_api(target_ip, tailnet, token, opts \\ []) do
+    strip_resolvers = Keyword.get(opts, :strip_resolvers, [])
+    req_opts = Keyword.delete(opts, :strip_resolvers)
+
     Logger.info(
       "Deregistering #{target_ip} from Tailscale global nameservers (tailnet: #{tailnet})..."
     )
@@ -1143,7 +1629,8 @@ defmodule Hermit.Vpn.DnsWorker do
 
     case Req.get(config_url, Keyword.merge([headers: headers], req_opts)) do
       {:ok, %{status: 200, body: current_config}} when is_map(current_config) ->
-        updated_config = build_cleared_dns_configuration(current_config, target_ip)
+        updated_config =
+          build_cleared_dns_configuration(current_config, target_ip, strip_resolvers)
 
         case Req.post(
                config_url,
@@ -1168,7 +1655,7 @@ defmodule Hermit.Vpn.DnsWorker do
               "Tailscale /dns/configuration POST returned #{inspect(other)}; falling back to legacy /dns/nameservers API."
             )
 
-            clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts)
+            clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts, strip_resolvers)
         end
 
       {:ok, %{status: 403, body: body}} ->
@@ -1183,11 +1670,17 @@ defmodule Hermit.Vpn.DnsWorker do
           "Tailscale /dns/configuration GET unavailable (#{inspect(other)}); falling back to legacy /dns/nameservers API."
         )
 
-        clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts)
+        clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts, strip_resolvers)
     end
   end
 
-  defp clear_tailscale_dns_legacy(target_ip, tailnet, headers, req_opts) do
+  defp clear_tailscale_dns_legacy(
+         target_ip,
+         tailnet,
+         headers,
+         req_opts,
+         strip_resolvers
+       ) do
     dns_url = "https://api.tailscale.com/api/v2/tailnet/#{tailnet}/dns/nameservers"
 
     current_resolvers =
@@ -1199,7 +1692,11 @@ defmodule Hermit.Vpn.DnsWorker do
           []
       end
 
-    remaining_resolvers = remove_resolver(current_resolvers, target_ip)
+    remaining_resolvers =
+      [target_ip | strip_resolvers]
+      |> Enum.uniq()
+      |> Enum.reduce(current_resolvers, fn addr, acc -> remove_resolver(acc, addr) end)
+
     payload = %{"dns" => remaining_resolvers}
 
     case Req.post(dns_url, Keyword.merge([json: payload, headers: headers], req_opts)) do

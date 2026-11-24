@@ -114,6 +114,7 @@ defmodule HermitWeb.DnsEndpointLiveTest do
     updated_config = DnsConfig.get_for_endpoint(endpoint.id)
     assert updated_config.tailscale_override_dns == true
     assert updated_config.tailscale_dns_mode == "split"
+    assert Hermit.Vpn.DnsWorker.get_dns_sync_status(endpoint.id) in [:syncing, :synced]
 
     html =
       view

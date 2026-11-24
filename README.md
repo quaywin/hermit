@@ -25,7 +25,7 @@
 
 **Hermit** turns any Linux machine or cheap VPS (Debian, Ubuntu, Raspberry Pi OS 64-bit) into a private, high-performance security hub for all your personal devices:
 
-1. 🛡️ **Tailscale Mesh DNS & Ad-Blocking Control Plane**: Filter ads, malware, and trackers across your private Tailnet with built-in blocklists (AdGuard, GoodbyeAds, Adult filters) and custom domain routing rules running inside isolated network namespaces.
+1. 🛡️ **Cloud DNS Filtering & Tailscale Split DNS Auto-Sync**: Block ads, malware, and trackers across your Tailnet using upstream filtering presets (**Control D**, **Control D Community Lists**, **AdGuard DNS**, **Cloudflare**, **Quad9**) or custom DoH/UDP resolvers, paired with HTTP/2 DoH pooling, optimistic caching, and automatic **Tailscale Split DNS** / **Global DNS** syncing.
 2. 🌐 **Multi-Tunnel VPN Orchestrator**: Pair incoming connections (**Tailscale nodes**, **SOCKS5/HTTP proxies**) with outgoing VPN gateways (**WireGuard**, **Host Direct**) running in completely **isolated Linux network namespaces (`netns`)**. Zero port conflicts, zero route leaks, and zero impact on your host network.
 3. 🔀 **Domain-Based Split Tunneling (Smart DNS & SNI Proxy)**: Route specific geo-restricted domains (`netflix.com`, `*.openai.com`, etc.) through designated VPN tunnels automatically without needing an Exit Node or installing VPN clients on your device. Zero SSL certificate errors, zero battery drain.
 4. 📊 **Real-Time Web Dashboard**: Built with Phoenix LiveView. Monitor 24-hour DNS telemetry, query volume, blocked threats, throughput, ping latencies, and device status with real-time updates and zero polling overhead.
@@ -69,17 +69,18 @@ curl -fsSL https://raw.githubusercontent.com/quaywin/hermit/main/install.sh | su
 
 ## 🎯 Common Use Cases & How It Works
 
-### Use Case 1: Tailnet-Wide Ad-Blocking DNS
+### Use Case 1: Tailnet-Wide Cloud DNS Filtering & Auto-Sync
 
-Stop ads, trackers, and malicious domains across your entire Tailscale network without configuring individual devices or dealing with SSL certificates:
+Stop ads, trackers, and malicious domains across your entire Tailscale network with zero manual Tailscale DNS tweaks and zero device-side SSL certificates:
 
-1. Open Hermit Web Dashboard $\rightarrow$ Click **Endpoints** in the sidebar.
-2. An Endpoint is pre-created with default ad-blocking filters enabled. Assign it a Tailscale Auth Key.
-3. Hermit boots an isolated Tailscale node (e.g. `100.x.y.z`) running Smart Ad-Blocking DNS.
-4. In your [Tailscale Admin Console → DNS](https://login.tailscale.com/admin/dns):
-   * Under **Nameservers**, add Hermit's Tailscale IP as a Global Nameserver.
-   * Enable **Override local DNS** if you want all devices in your tailnet protected automatically.
-5. Watch blocked queries appear in real-time on your **Dashboard**!
+1. Open Hermit Web Dashboard $\rightarrow$ Go to **DNS** (`/dns`) and pick an upstream filtering provider:
+   * Built-in presets: **Control D** (Ads & Tracking by default), **Control D Community Lists** (`HaGeZi`, `OISD`, `1Hosts`), **AdGuard DNS**, **Cloudflare**, or **Quad9** (UDP or DoH).
+   * Or enter a **Custom** resolver (Control D Personal, NextDNS, RethinkDNS, or IP).
+2. Go to **DNS Endpoints** (`/dns/endpoints`) and activate a Tailscale DNS Endpoint linked to your Tailscale OAuth Inbound Profile.
+3. Click **`TS DNS`** (`TS DNS: ON`) and choose your Tailscale routing mode from the dropdown:
+   * **`Split DNS` (Default — Fastest)**: Tailscale Global Nameservers point directly to your upstream provider (e.g., Control D / AdGuard / NextDNS) so 99% of normal & ad-blocked traffic resolves in 1 hop without hitting your VPS, while Hermit automatically syncs your **Smart DNS / Block / Bypass / Redirect** domains to Tailscale **Split DNS** pointing to Hermit (`100.x.y.z`).
+   * **`Global DNS`**: Routes all Tailnet DNS queries through Hermit (`100.x.y.z`) for full real-time query logs and telemetry.
+   * **Automatic `DoH Fallback`**: If you use a community list or custom DoH URL not natively whitelisted by Tailscale (e.g., `freedns.controld.com/x-hagezi-pro`), Hermit automatically switches Tailscale sync to **Global DNS** so upstream filtering stays active.
 
 ---
 
@@ -109,34 +110,35 @@ flowchart LR
 
 ### Use Case 3: Domain-Based Split Tunneling (Smart DNS & SNI Proxy)
 
-Stream geo-restricted media (e.g. Netflix US, BBC iPlayer) or unblock services (e.g. OpenAI) on your Smart TV, phone, or laptop without routing all your computer's traffic through a full VPN exit node:
+Stream geo-restricted media (e.g., Netflix US, BBC iPlayer) or unblock services (e.g., OpenAI) on your Smart TV, phone, or laptop without routing all your traffic through a full VPN exit node:
 
 ```mermaid
 flowchart LR
-    Client["Client (Phone / TV / PC)\n(Only sets Hermit DNS)"] -->|1. Query netflix.com| DNS["Hermit Smart DNS\n(Tailscale Mesh Node)"]
-    DNS -->|2. Returns Hermit IP| Client
-    Client -->|"3. HTTPS port 443\n(TLS ClientHello)"| SNI["Transparent SNI Proxy\n(Ports 443 / 80)"]
+    Client["Client (Phone / TV / PC)"] -->|"Split DNS match (e.g. netflix.com)"| DNS["Hermit DNS Endpoint (100.x.y.z)"]
+    DNS -->|"Returns Hermit Tunnel IP"| Client
+    Client -->|"HTTPS 443 (TLS ClientHello)"| SNI["Transparent SNI Proxy (443 / 80)"]
     subgraph Tunnel ["Isolated Tunnel Netns"]
-        SNI -->|4. SOCKS5 Relay| SOCKS["3proxy Daemon"]
-        SOCKS -->|5. WireGuard Outbound| Target["US WireGuard Gateway\n(netflix.com)"]
+        SNI -->|"SOCKS5 Relay"| SOCKS["3proxy Daemon"]
+        SOCKS -->|"Encrypted WireGuard"| Target["Target Country Internet"]
     end
-    Client -.->|"Normal traffic (e.g. google.com)\nDirect local ISP connection"| Internet["Direct Internet"]
+    Client -.->|"Normal DNS queries (Split DNS mode)"| Upstream["Direct Upstream (Control D / AdGuard / Cloudflare)"]
+    Client -.->|"Normal web traffic"| Internet["Direct ISP Internet"]
 ```
 
 #### Why Smart DNS is Faster & Better than a Full Exit Node:
-* ⚡ **Traffic Offloading (Max Speed)**: 98% of your everyday browsing (YouTube, banking, gaming, local sites) stays on your direct ISP connection with 1 Gbps speed and 2–5ms latency. Only specified domains are routed through VPN tunnels.
+* ⚡ **Zero VPS DNS Hop in Split DNS Mode**: Normal DNS lookups go straight from your devices to your chosen Cloud DNS provider, while Tailscale **Split DNS** automatically forwards only configured Smart DNS / Block / Bypass domains to Hermit. Normal browsing stays on your direct ISP connection at full speed.
 * 🚀 **Low Latency Handshake**: TLS ClientHello connections to Hermit occur over fast Tailscale P2P / LAN (1–5ms RTT), avoiding round-trip penalties across the globe on initial connection.
 * 🛡️ **Bypasses ISP IP & DPI Blocks**: Because DNS returns Hermit's IP, your device never attempts to connect directly to the target server's IP. All web content (HTML, media, video streams) is fetched through the WireGuard tunnel at the destination country and proxied back to you.
 * 🚫 **No CAPTCHAs**: Normal browsing retains your clean residential ISP IP, preventing annoying Cloudflare/Google robot checks.
-* 🔋 **Zero Battery Drain & Zero Client Apps**: Smart TVs, Apple TVs, gaming consoles, and mobile devices only need Hermit DNS configured (or Tailscale connected with Exit Node **OFF**).
+* 🔋 **Zero Battery Drain & Zero Client Apps**: Smart TVs, Apple TVs, gaming consoles, and mobile devices only need Tailscale connected (with Exit Node **OFF**) or Hermit set as DNS.
 
 #### How to Configure:
 1. Deploy your Tunnel pair (e.g. Tailscale Inbound + WireGuard Outbound) on the **Dashboard** (`/`).
 2. Route domains or streaming services through the tunnel:
-   * **1-Click Smart DNS Services** (`/dns/services`): Select popular platforms (Netflix, OpenAI / ChatGPT, BBC iPlayer, etc.) and set action to **Route to Tunnel** $\rightarrow$ select your tunnel pair. All associated CDN and static asset domains are routed automatically.
-   * **Custom Domain Rules** (`/dns/rules`): Add custom domain patterns (e.g. `*.openai.com`, `example.com`) and choose **Route to Tunnel** $\rightarrow$ select your tunnel pair.
+   * **1-Click Smart DNS Services** (`/dns/services`): Select popular platforms (Netflix, OpenAI / ChatGPT, BBC iPlayer, etc.) and set action to **Route to Tunnel**, **Block**, or **Bypass**. All associated CDN and static asset domains are handled automatically.
+   * **Custom Domain Rules** (`/dns/rules`): Add custom domain patterns (e.g. `*.openai.com`, `example.com`) with actions (**Route to Tunnel**, **Block**, **Bypass**, **Redirect**, **Forward DNS**, or **Forward Proxy**).
    * *(Optional)* **IP Subnet Routing**: To route private LAN or VPC subnets (e.g. `192.168.1.0/24`), enter them under **Advertised Subnets** in the tunnel's settings.
-3. Set Hermit's Tailscale DNS Endpoint IP as your Tailscale Nameserver (MagicDNS) or device DNS.
+3. On **DNS Endpoints** (`/dns/endpoints`), enable **`TS DNS`** (`Split DNS` or `Global DNS`). Hermit automatically normalizes domain suffixes (e.g., `*.netflix.com` $\rightarrow$ `netflix.com`, matching all subdomains on Tailscale Split DNS) and keeps Tailscale DNS synced automatically whenever you update services, rules, or upstream resolvers.
 4. Enjoy transparent domain-level split tunneling with **zero client VPN apps** and **zero SSL certificate errors**!
 
 > [!TIP]
@@ -146,7 +148,7 @@ flowchart LR
 > * **OpenAI / ChatGPT**: `*.openai.com, *.chatgpt.com, *.oaistatic.com, *.oaiusercontent.com`.
 > * **Netflix**: `*.netflix.com, *.nflxvideo.net, *.nflximg.net, *.nflxext.com`.
 > 
-> Changes apply **instantly (0s delay)** without restarting tunnels — Hermit automatically clears its internal DNS cache and refreshes routing rules in real-time.
+> Changes apply **instantly (0s delay)** without restarting tunnels — Hermit automatically invalidates stale cache entries and syncs Tailscale Split DNS rules in real-time.
 
 ---
 
@@ -227,6 +229,9 @@ When registering Tailscale Inbound nodes or DNS Endpoints with OAuth client keys
      }
    }
    ```
+
+3. **OAuth Scopes for Automatic DNS Sync (`Split DNS` / `Global DNS`)**:
+   To let Hermit automatically sync Global Nameservers and Split DNS rules via the Tailscale API, ensure your OAuth Client (`tskey-client-...`) includes the **`dns` (Read/Write)** scope in addition to **`devices:core` (Write)** and **`auth_keys` (Write)**.
 </details>
 
 <details>
@@ -273,6 +278,6 @@ Hermit is open-source software licensed under the [MIT License](LICENSE).
 
 Built with appreciation for:
 * **[WireGuard](https://www.wireguard.com/)** - Modern, secure, and fast VPN protocol.
-* **[Tailscale](https://tailscale.com/)** - Effortless private overlay mesh networking.
-* **[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)** & **[GoodbyeAds](https://github.com/jerryn70/GoodbyeAds)** - Comprehensive ad-blocking filter lists.
+* **[Tailscale](https://tailscale.com/)** - Effortless private overlay mesh networking & Split DNS control plane.
+* **[Control D](https://controld.com/)**, **[AdGuard DNS](https://adguard-dns.io/)**, **[Cloudflare](https://one.one.one.one/)**, & **[Quad9](https://www.quad9.net/)** - High-speed upstream DNS filtering providers.
 * **[Elixir](https://elixir-lang.org/)** & **[Phoenix LiveView](https://phoenixframework.org/)** - For enabling real-time reactivity with minimal footprint.

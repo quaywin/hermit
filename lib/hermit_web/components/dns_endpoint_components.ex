@@ -6,6 +6,7 @@ defmodule HermitWeb.DnsEndpointComponents do
 
   attr :endpoint, :map, required: true
   attr :dns_status, :any, required: true
+  attr :dns_sync_status, :any, default: :idle
   attr :dns_profiles, :list, required: true
 
   def endpoint_row(assigns) do
@@ -127,25 +128,50 @@ defmodule HermitWeb.DnsEndpointComponents do
             </div>
           <% end %>
           <%= if @config && @config.tailscale_override_dns && @sync_plan do %>
-            <%= cond do %>
-              <% @sync_plan.mode == :split -> %>
-                <span
-                  class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20"
-                  title={"Direct Upstream: #{Enum.join(@sync_plan.upstream_resolvers, ", ")}"}
-                >
-                  Split DNS ({length(@sync_plan.split_domains)} domains)
-                </span>
-              <% @sync_plan.fallback_reason != nil -> %>
-                <span
-                  class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/20"
-                  title="Custom DoH upstream is not natively supported by Tailscale Global DNS; routing all queries via Hermit."
-                >
-                  Global DNS (DoH Fallback)
-                </span>
-              <% true -> %>
-                <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
-                  Global DNS
-                </span>
+            <div class="flex flex-wrap items-center gap-1">
+              <%= cond do %>
+                <% @sync_plan.mode == :split -> %>
+                  <span
+                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20"
+                    title={"Direct Upstream: #{Enum.join(@sync_plan.upstream_resolvers, ", ")}"}
+                  >
+                    Split DNS ({length(@sync_plan.split_domains)} domains)
+                  </span>
+                <% @sync_plan.fallback_reason != nil -> %>
+                  <span
+                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/20"
+                    title="Custom DoH upstream is not natively supported by Tailscale Global DNS; routing all queries via Hermit."
+                  >
+                    Global DNS (DoH Fallback)
+                  </span>
+                <% true -> %>
+                  <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 border border-emerald-500/20">
+                    Global DNS
+                  </span>
+              <% end %>
+
+              <%= case @dns_sync_status do %>
+                <% :syncing -> %>
+                  <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                    Syncing...
+                  </span>
+                <% {:error, msg} -> %>
+                  <span
+                    class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/15 text-red-500 border border-red-500/20 cursor-help"
+                    title={msg}
+                  >
+                    Sync failed
+                  </span>
+                <% _ -> %>
+              <% end %>
+            </div>
+            <%= if match?({:error, _}, @dns_sync_status) do %>
+              <p
+                class="text-[10px] text-red-500 max-w-[220px] truncate cursor-help"
+                title={elem(@dns_sync_status, 1)}
+              >
+                {elem(@dns_sync_status, 1)}
+              </p>
             <% end %>
           <% end %>
         </div>

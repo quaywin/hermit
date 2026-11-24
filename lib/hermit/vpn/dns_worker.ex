@@ -20,7 +20,8 @@ defmodule Hermit.Vpn.DnsWorker do
             tailscale_override_dns: false,
             last_dns_sync_signature: nil,
             last_synced_upstreams: [],
-            subscribed_profile_id: nil
+            subscribed_profile_id: nil,
+            dns_sync_status: :idle
 
   # --- Client API ---
 
@@ -55,6 +56,20 @@ defmodule Hermit.Vpn.DnsWorker do
 
       [] ->
         {:stopped, nil, nil}
+    end
+  end
+
+  def get_dns_sync_status(endpoint_id) do
+    case Registry.lookup(Hermit.Vpn.Registry, {:dns_worker, endpoint_id}) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, :get_dns_sync_status)
+        catch
+          :exit, _ -> :idle
+        end
+
+      [] ->
+        :idle
     end
   end
 
@@ -104,6 +119,11 @@ defmodule Hermit.Vpn.DnsWorker do
   end
 
   @impl true
+  def handle_call(:get_dns_sync_status, _from, state) do
+    {:reply, state.dns_sync_status, state}
+  end
+
+  @impl true
   def handle_info(:initial_sync, state) do
     {_, new_state} = do_sync_state(state)
     {:noreply, new_state}
@@ -119,6 +139,19 @@ defmodule Hermit.Vpn.DnsWorker do
   def handle_info({:smart_routes_updated, _all_pairs}, state) do
     {_, new_state} = do_sync_state(state)
     {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info({:dns_sync_result, result}, state) do
+    new_sync_status =
+      case result do
+        {:ok, :updated} -> :synced
+        {:ok, :cleared} -> :idle
+        {:ok, :noop} -> :idle
+        {:error, reason} -> {:error, format_dns_sync_error(reason)}
+      end
+
+    {:noreply, %{state | dns_sync_status: new_sync_status}}
   end
 
   @impl true
@@ -153,6 +186,8 @@ defmodule Hermit.Vpn.DnsWorker do
               do: plan.upstream_resolvers,
               else: []
 
+          sync_started? = config.tailscale_override_dns and not is_nil(profile)
+
           new_state = %{
             state
             | status: :running,
@@ -162,11 +197,17 @@ defmodule Hermit.Vpn.DnsWorker do
               mock_timer: mock_timer,
               tailscale_override_dns: config.tailscale_override_dns,
               last_dns_sync_signature: new_sig,
-              last_synced_upstreams: synced_upstreams
+              last_synced_upstreams: synced_upstreams,
+              dns_sync_status: if(sync_started?, do: :syncing, else: :idle)
           }
 
-          if config.tailscale_override_dns and profile do
-            spawn(fn -> update_tailscale_dns_config(ip, profile, config) end)
+          if sync_started? do
+            parent = self()
+
+            spawn(fn ->
+              res = update_tailscale_dns_config(ip, profile, config)
+              send(parent, {:dns_sync_result, res})
+            end)
           end
 
           {:noreply, new_state}
@@ -252,6 +293,37 @@ defmodule Hermit.Vpn.DnsWorker do
     stop_dns_node(state)
   end
 
+  @doc false
+  def format_dns_sync_error({:http_error, 403, _}),
+    do: "HTTP 403: OAuth key missing 'dns' (read/write) scope"
+
+  def format_dns_sync_error({:http_error, status, %{"message" => msg}}) when is_binary(msg),
+    do: "HTTP #{status}: #{msg}"
+
+  def format_dns_sync_error({:http_error, status, _}),
+    do: "HTTP #{status} from Tailscale API"
+
+  def format_dns_sync_error(:unsupported_auth_key),
+    do: "Pre-auth key (tskey-auth-) cannot update Tailscale DNS API; use OAuth (tskey-client-)"
+
+  def format_dns_sync_error(:empty_key),
+    do: "Tailscale API/OAuth key is not configured"
+
+  def format_dns_sync_error(:unknown_key_format),
+    do: "Unrecognized Tailscale key format"
+
+  def format_dns_sync_error({:oauth_failed, status, _}),
+    do: "Tailscale OAuth token exchange failed (HTTP #{status})"
+
+  def format_dns_sync_error(:empty_dns_ip),
+    do: "Endpoint Tailscale IP is not ready"
+
+  def format_dns_sync_error(%{__exception__: true} = exc),
+    do: Exception.message(exc)
+
+  def format_dns_sync_error(other),
+    do: inspect(other)
+
   # --- Internal Lifecycle Management ---
 
   defp do_sync_state(state) do
@@ -305,7 +377,8 @@ defmodule Hermit.Vpn.DnsWorker do
            new_state
            | tailscale_override_dns: false,
              last_dns_sync_signature: :disabled,
-             last_synced_upstreams: []
+             last_synced_upstreams: [],
+             dns_sync_status: :idle
          }}
 
       endpoint.enabled and state.status == :running ->
@@ -314,26 +387,29 @@ defmodule Hermit.Vpn.DnsWorker do
         if state.tailscale_override_dns != config.tailscale_override_dns or
              state.last_dns_sync_signature != new_sig do
           extra_upstreams = state.last_synced_upstreams
+          parent = self()
 
-          next_upstreams =
+          {next_upstreams, next_sync_status} =
             if config.tailscale_override_dns and profile do
               plan = build_sync_plan(config, nil, extra_upstreams)
 
               spawn(fn ->
-                update_tailscale_dns_config(state.ts_ip, profile, config, extra_upstreams)
+                res = update_tailscale_dns_config(state.ts_ip, profile, config, extra_upstreams)
+                send(parent, {:dns_sync_result, res})
               end)
 
-              if plan.mode == :split, do: plan.upstream_resolvers, else: []
+              {if(plan.mode == :split, do: plan.upstream_resolvers, else: []), :syncing}
             else
               if state.tailscale_override_dns and profile do
                 ts_ip = state.ts_ip
 
                 spawn(fn ->
-                  clear_tailscale_dns_config(profile, config, ts_ip, extra_upstreams)
+                  res = clear_tailscale_dns_config(profile, config, ts_ip, extra_upstreams)
+                  send(parent, {:dns_sync_result, res})
                 end)
               end
 
-              []
+              {[], :idle}
             end
 
           {{:ok, :updated_dns_integration},
@@ -341,7 +417,8 @@ defmodule Hermit.Vpn.DnsWorker do
              state
              | tailscale_override_dns: config.tailscale_override_dns and not is_nil(profile),
                last_dns_sync_signature: new_sig,
-               last_synced_upstreams: next_upstreams
+               last_synced_upstreams: next_upstreams,
+               dns_sync_status: next_sync_status
            }}
         else
           {{:ok, :already_synced}, state}

@@ -612,4 +612,21 @@ defmodule Hermit.Vpn.DnsWorkerTailscaleApiTest do
       assert payload["preferences"] == %{"magicDNS" => true, "overrideLocalDNS" => false}
     end
   end
+
+  describe "format_dns_sync_error/1" do
+    test "formats common Tailscale API and auth key errors cleanly" do
+      assert DnsWorker.format_dns_sync_error({:http_error, 403, %{"message" => "forbidden"}}) ==
+               "HTTP 403: OAuth key missing 'dns' (read/write) scope"
+
+      assert DnsWorker.format_dns_sync_error({:http_error, 400, %{"message" => "invalid IP"}}) ==
+               "HTTP 400: invalid IP"
+
+      assert DnsWorker.format_dns_sync_error(:unsupported_auth_key) =~ "tskey-auth-"
+
+      assert DnsWorker.format_dns_sync_error({:oauth_failed, 401, %{}}) ==
+               "Tailscale OAuth token exchange failed (HTTP 401)"
+
+      assert DnsWorker.format_dns_sync_error(%RuntimeError{message: "timeout"}) == "timeout"
+    end
+  end
 end

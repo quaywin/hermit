@@ -33,6 +33,7 @@ defmodule HermitWeb.DnsEndpointLive do
      |> assign(show_new_modal: false)
      |> assign(show_edit_modal: false)
      |> assign(dns_statuses: %{})
+     |> assign(dns_sync_statuses: %{})
      |> update_all_dns_statuses()}
   end
 
@@ -333,7 +334,8 @@ defmodule HermitWeb.DnsEndpointLive do
           {:noreply,
            socket
            |> put_flash(:info, flash_msg)
-           |> assign(endpoints: get_endpoints())}
+           |> assign(endpoints: get_endpoints())
+           |> update_all_dns_statuses()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to toggle DNS override.")}
@@ -383,7 +385,8 @@ defmodule HermitWeb.DnsEndpointLive do
             {:noreply,
              socket
              |> put_flash(:info, flash_msg)
-             |> assign(endpoints: get_endpoints())}
+             |> assign(endpoints: get_endpoints())
+             |> update_all_dns_statuses()}
 
           {:error, _} ->
             {:noreply, put_flash(socket, :error, "Failed to switch Tailscale DNS mode.")}
@@ -430,7 +433,8 @@ defmodule HermitWeb.DnsEndpointLive do
           {:noreply,
            socket
            |> put_flash(:info, "DNS Profile for '#{updated_endpoint.name}' updated successfully.")
-           |> assign(endpoints: get_endpoints())}
+           |> assign(endpoints: get_endpoints())
+           |> update_all_dns_statuses()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to update DNS profile.")}
@@ -445,18 +449,18 @@ defmodule HermitWeb.DnsEndpointLive do
   end
 
   defp update_all_dns_statuses(socket) do
-    statuses =
-      Enum.reduce(socket.assigns.endpoints, %{}, fn endpoint, acc ->
-        status_info =
+    {statuses, sync_statuses} =
+      Enum.reduce(socket.assigns.endpoints, {%{}, %{}}, fn endpoint, {st_acc, sync_acc} ->
+        {status_info, sync_info} =
           if endpoint.inbound_profile_id do
-            DnsWorker.get_status(endpoint.id)
+            {DnsWorker.get_status(endpoint.id), DnsWorker.get_dns_sync_status(endpoint.id)}
           else
-            {:stopped, nil, nil}
+            {{:stopped, nil, nil}, :idle}
           end
 
-        Map.put(acc, endpoint.id, status_info)
+        {Map.put(st_acc, endpoint.id, status_info), Map.put(sync_acc, endpoint.id, sync_info)}
       end)
 
-    assign(socket, dns_statuses: statuses)
+    assign(socket, dns_statuses: statuses, dns_sync_statuses: sync_statuses)
   end
 end

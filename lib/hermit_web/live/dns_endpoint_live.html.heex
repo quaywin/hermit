@@ -55,6 +55,7 @@
               :for={endpoint <- @endpoints}
               endpoint={endpoint}
               dns_status={Map.get(@dns_statuses, endpoint.id, {:stopped, nil, nil})}
+              dns_sync_status={Map.get(@dns_sync_statuses, endpoint.id, :idle)}
               dns_profiles={@dns_profiles}
             />
           <% end %>

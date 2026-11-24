@@ -323,7 +323,7 @@ defmodule Hermit.Updater do
          :ok <- verify_tarball_checksum(tmp_tar, arch),
          {:ok, release_dir} <- extract_release(tmp_tar),
          :ok <- switch_current_symlink(release_dir),
-         :ok <- prune_old_releases(),
+         :ok <- prune_old_releases(release_dir),
          :ok <- sync_runtime_binaries(arch),
          :ok <- restart_systemd_service() do
       {:ok, :upgrading}
@@ -448,11 +448,22 @@ defmodule Hermit.Updater do
     File.mkdir_p!(release_dir)
 
     try do
-      case System.cmd("tar", ["-xzf", tmp_tar, "-C", release_dir], stderr_to_stdout: true) do
+      case System.cmd(
+             "tar",
+             ["--no-same-owner", "-xzf", tmp_tar, "-C", release_dir],
+             stderr_to_stdout: true
+           ) do
         {_, 0} ->
-          _ = File.chmod(Path.join([release_dir, "bin", "server"]), 0o755)
-          _ = File.chmod(Path.join([release_dir, "bin", "hermit"]), 0o755)
-          {:ok, release_dir}
+          server_bin = Path.join([release_dir, "bin", "server"])
+
+          if File.regular?(server_bin) do
+            _ = File.chmod(server_bin, 0o755)
+            _ = File.chmod(Path.join([release_dir, "bin", "hermit"]), 0o755)
+            {:ok, release_dir}
+          else
+            File.rm_rf(release_dir)
+            {:error, "Extracted release archive is missing bin/server"}
+          end
 
         {err, code} ->
           File.rm_rf(release_dir)
@@ -476,16 +487,40 @@ defmodule Hermit.Updater do
     e -> {:error, Exception.message(e)}
   end
 
-  defp prune_old_releases do
-    releases_dir = Path.join(@install_root, "releases")
+  defp prune_old_releases(keep_release_dir) do
+    prune_old_releases_in(@install_root, keep_release_dir)
+  end
+
+  @doc false
+  def prune_old_releases_in(install_root, keep_release_dir \\ nil) do
+    releases_dir = Path.join(install_root, "releases")
+
+    current_target =
+      case File.read_link(Path.join(install_root, "current")) do
+        {:ok, target} -> Path.expand(target, install_root)
+        _ -> nil
+      end
+
+    protected =
+      [keep_release_dir, current_target]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&Path.expand/1)
+      |> MapSet.new()
 
     case File.ls(releases_dir) do
       {:ok, entries} ->
-        entries
-        |> Enum.sort(:desc)
-        |> Enum.drop(2)
-        |> Enum.each(fn old ->
-          File.rm_rf(Path.join(releases_dir, old))
+        {protected_entries, other_entries} =
+          entries
+          |> Enum.map(fn entry -> {entry, Path.expand(Path.join(releases_dir, entry))} end)
+          |> Enum.split_with(fn {_entry, full_path} -> MapSet.member?(protected, full_path) end)
+
+        keep_others = max(2 - length(protected_entries), 0)
+
+        other_entries
+        |> Enum.sort_by(fn {entry, _full_path} -> entry end, :desc)
+        |> Enum.drop(keep_others)
+        |> Enum.each(fn {_entry, full_path} ->
+          File.rm_rf(full_path)
         end)
 
         :ok

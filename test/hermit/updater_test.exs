@@ -77,4 +77,50 @@ defmodule Hermit.UpdaterTest do
                Updater.verify_sha256_against_sums(tmp, "hermit-linux-arm64.tar.gz", sums)
     end
   end
+
+  describe "prune_old_releases_in/2" do
+    test "never deletes the active current release even when local-time release IDs sort higher than UTC ID" do
+      root =
+        Path.join(System.tmp_dir!(), "hermit-prune-utc-#{System.unique_integer([:positive])}")
+
+      releases_dir = Path.join(root, "releases")
+      old_local = Path.join(releases_dir, "20261124090000")
+      newer_local = Path.join(releases_dir, "20261124100000")
+      new_utc = Path.join(releases_dir, "20261124035140")
+
+      File.mkdir_p!(old_local)
+      File.mkdir_p!(newer_local)
+      File.mkdir_p!(new_utc)
+      File.ln_s!(new_utc, Path.join(root, "current"))
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      assert :ok = Updater.prune_old_releases_in(root, new_utc)
+
+      assert File.dir?(new_utc)
+      assert File.dir?(newer_local)
+      refute File.exists?(old_local)
+    end
+
+    test "keeps the two newest releases under normal descending order" do
+      root =
+        Path.join(System.tmp_dir!(), "hermit-prune-norm-#{System.unique_integer([:positive])}")
+
+      releases_dir = Path.join(root, "releases")
+      r1 = Path.join(releases_dir, "20261124010000")
+      r2 = Path.join(releases_dir, "20261124020000")
+      r3 = Path.join(releases_dir, "20261124030000")
+
+      File.mkdir_p!(r1)
+      File.mkdir_p!(r2)
+      File.mkdir_p!(r3)
+      File.ln_s!(r3, Path.join(root, "current"))
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      assert :ok = Updater.prune_old_releases_in(root, r3)
+
+      assert File.dir?(r3)
+      assert File.dir?(r2)
+      refute File.exists?(r1)
+    end
+  end
 end

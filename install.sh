@@ -297,7 +297,7 @@ EOF
 fi
 
 # 5. Download & extract release tarball atomically
-RELEASE_ID=$(date +%Y%m%d%H%M%S)
+RELEASE_ID=$(date -u +%Y%m%d%H%M%S)
 RELEASE_DIR="$INSTALL_ROOT/releases/$RELEASE_ID"
 mkdir -p "$RELEASE_DIR"
 
@@ -335,6 +335,12 @@ else
   fi
   tar --no-same-owner -xzf "$TMP_TAR" -C "$RELEASE_DIR"
   rm -f "$TMP_TAR" "$TMP_SUMS"
+fi
+
+if [ ! -f "$RELEASE_DIR/bin/server" ]; then
+  rm -rf "$RELEASE_DIR"
+  echo "❌ Extracted release archive is missing bin/server."
+  exit 1
 fi
 
 touch "$RELEASE_DIR"

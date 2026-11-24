@@ -319,7 +319,7 @@ defmodule Hermit.Dns.Providers do
           with %{presets: presets} <- get_provider(provider_id),
                preset when not is_nil(preset) <- Enum.find(presets, &(&1.id == preset_id)),
                udp when is_binary(udp) and udp != "" <- Map.get(preset, :udp) do
-            {:ok, normalize_tokens(udp)}
+            {:ok, udp |> normalize_tokens() |> dedupe_single_instance_providers()}
           else
             _ -> {:fallback_global, :unsupported_doh}
           end
@@ -333,12 +333,49 @@ defmodule Hermit.Dns.Providers do
               parsed
               |> Enum.map(fn {:ok, val} -> val end)
               |> Enum.uniq()
+              |> dedupe_single_instance_providers()
 
             {:ok, resolvers}
           else
             {:fallback_global, :unsupported_upstream}
           end
       end
+    end
+  end
+
+  defp dedupe_single_instance_providers(resolvers) do
+    {result, _seen} =
+      Enum.reduce(resolvers, {[], MapSet.new()}, fn resolver, {acc, seen} ->
+        case provider_singleton_key(resolver) do
+          nil ->
+            {[resolver | acc], seen}
+
+          key ->
+            if MapSet.member?(seen, key) do
+              {acc, seen}
+            else
+              {[resolver | acc], MapSet.put(seen, key)}
+            end
+        end
+      end)
+
+    Enum.reverse(result)
+  end
+
+  defp provider_singleton_key(resolver) do
+    cond do
+      String.starts_with?(resolver, "https://dns.controld.com/") or
+        String.starts_with?(resolver, "76.76.2.") or
+          String.starts_with?(resolver, "76.76.10.") ->
+        :controld
+
+      String.starts_with?(resolver, "https://dns.nextdns.io/") or
+        String.starts_with?(resolver, "45.90.28.") or
+          String.starts_with?(resolver, "45.90.30.") ->
+        :nextdns
+
+      true ->
+        nil
     end
   end
 

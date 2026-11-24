@@ -1491,22 +1491,43 @@ defmodule Hermit.Vpn.DnsWorker do
             {:ok, :updated}
 
           {:ok, %{status: 403, body: body}} ->
+            Logger.error(
+              "Failed to update Tailscale Split DNS (HTTP 403 Forbidden): #{inspect(body)}."
+            )
+
             {:error, {:http_error, 403, body}}
 
           {:ok, %{status: status, body: body}} ->
+            Logger.error(
+              "Failed to update Tailscale Split DNS (HTTP #{status}): #{inspect(body)}"
+            )
+
             {:error, {:http_error, status, body}}
 
           {:error, reason} ->
+            Logger.error("Failed calling Tailscale Split DNS API: #{inspect(reason)}")
             {:error, reason}
         end
 
       {:ok, %{status: 403, body: body}} ->
+        Logger.error(
+          "Failed to update Tailscale nameservers for Split DNS (HTTP 403 Forbidden): #{inspect(body)}."
+        )
+
         {:error, {:http_error, 403, body}}
 
       {:ok, %{status: status, body: body}} ->
+        Logger.error(
+          "Failed to update Tailscale nameservers for Split DNS (HTTP #{status}): #{inspect(body)}"
+        )
+
         {:error, {:http_error, status, body}}
 
       {:error, reason} ->
+        Logger.error(
+          "Failed calling Tailscale DNS nameservers API for Split DNS: #{inspect(reason)}"
+        )
+
         {:error, reason}
     end
   end

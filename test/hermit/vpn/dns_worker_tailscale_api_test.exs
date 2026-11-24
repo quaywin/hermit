@@ -209,26 +209,27 @@ defmodule Hermit.Vpn.DnsWorkerTailscaleApiTest do
   describe "Providers.tailscale_global_resolvers/1" do
     alias Hermit.Dns.Providers
 
-    test "maps Control D UDP and DoH presets to direct Control D Anycast IPs" do
+    test "maps Control D UDP and DoH presets to a single Control D IP while preserving dual-IP for other providers" do
       assert Providers.tailscale_global_resolvers("76.76.2.2, 76.76.10.2") ==
-               {:ok, ["76.76.2.2", "76.76.10.2"]}
+               {:ok, ["76.76.2.2"]}
 
       assert Providers.tailscale_global_resolvers("https://freedns.controld.com/p2") ==
-               {:ok, ["76.76.2.2", "76.76.10.2"]}
+               {:ok, ["76.76.2.2"]}
 
       assert Providers.tailscale_global_resolvers("https://dns.adguard-dns.com/dns-query") ==
                {:ok, ["94.140.14.14", "94.140.15.15"]}
     end
 
-    test "accepts custom IPs, IP:53, and Tailscale-supported custom DoH URLs" do
+    test "accepts custom IPs, IP:53, and Tailscale-supported custom DoH URLs (deduping NextDNS/Control D)" do
       assert Providers.tailscale_global_resolvers("1.1.1.1:53, 8.8.8.8") ==
                {:ok, ["1.1.1.1", "8.8.8.8"]}
 
       assert Providers.tailscale_global_resolvers("https://dns.controld.com/abc123") ==
                {:ok, ["https://dns.controld.com/abc123"]}
 
-      assert Providers.tailscale_global_resolvers("https://dns.nextdns.io/f00bar") ==
-               {:ok, ["https://dns.nextdns.io/f00bar"]}
+      assert Providers.tailscale_global_resolvers(
+               "https://dns.nextdns.io/f00bar, https://dns.nextdns.io/bazqux"
+             ) == {:ok, ["https://dns.nextdns.io/f00bar"]}
     end
 
     test "triggers fallback_global for Control D Community Lists and unsupported custom DoH URLs" do
@@ -285,7 +286,7 @@ defmodule Hermit.Vpn.DnsWorkerTailscaleApiTest do
       plan = DnsWorker.build_sync_plan(split_config, [])
       assert plan.mode == :split
       assert plan.fallback_reason == nil
-      assert plan.upstream_resolvers == ["76.76.2.2", "76.76.10.2"]
+      assert plan.upstream_resolvers == ["76.76.2.2"]
       assert plan.split_domains == ["openai.com"]
 
       fallback_config = %{

@@ -117,20 +117,22 @@ defmodule HermitWeb.DnsEndpointLiveTest do
 
     html =
       view
-      |> element(
-        "button[phx-click=\"toggle_tailscale_dns_mode\"][phx-value-id=\"#{endpoint.id}\"]"
-      )
-      |> render_click()
+      |> form("#tailscale-dns-mode-form-#{endpoint.id}")
+      |> render_change(%{
+        "endpoint_id" => to_string(endpoint.id),
+        "tailscale_dns_mode" => "global"
+      })
 
     assert html =~ "Global DNS mode"
     assert DnsConfig.get_for_endpoint(endpoint.id).tailscale_dns_mode == "global"
 
     html =
       view
-      |> element(
-        "button[phx-click=\"toggle_tailscale_dns_mode\"][phx-value-id=\"#{endpoint.id}\"]"
-      )
-      |> render_click()
+      |> form("#tailscale-dns-mode-form-#{endpoint.id}")
+      |> render_change(%{
+        "endpoint_id" => to_string(endpoint.id),
+        "tailscale_dns_mode" => "split"
+      })
 
     assert html =~ "Split DNS mode"
     assert DnsConfig.get_for_endpoint(endpoint.id).tailscale_dns_mode == "split"

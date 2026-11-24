@@ -176,20 +176,35 @@ defmodule HermitWeb.DnsEndpointComponents do
             </button>
 
             <%= if @config && @config.tailscale_override_dns do %>
-              <button
-                phx-click="toggle_tailscale_dns_mode"
-                phx-value-id={@endpoint.id}
-                disabled={@status != :running}
-                class={[
-                  "btn btn-xs btn-outline-custom rounded-[4px] cursor-pointer font-medium text-[11px] px-2 text-base-content/80",
-                  @status != :running && "opacity-40 cursor-not-allowed"
-                ]}
-                title="Switch between Split DNS (direct upstream + Smart DNS) and Global DNS (all queries via Hermit)"
+              <form
+                phx-change="select_tailscale_dns_mode"
+                id={"tailscale-dns-mode-form-#{@endpoint.id}"}
+                class="inline-block"
               >
-                {if (@config.tailscale_dns_mode || "split") == "split",
-                  do: "Mode: Split",
-                  else: "Mode: Global"}
-              </button>
+                <input type="hidden" name="endpoint_id" value={@endpoint.id} />
+                <select
+                  name="tailscale_dns_mode"
+                  disabled={@status != :running}
+                  title="Tailscale DNS routing mode"
+                  class={[
+                    "select select-bordered select-xs bg-base-100 border-base-300 text-[11px] font-semibold text-base-content rounded-[4px] focus:outline-none focus:border-primary",
+                    @status != :running && "opacity-40 cursor-not-allowed"
+                  ]}
+                >
+                  <option
+                    value="split"
+                    selected={(@config.tailscale_dns_mode || "split") == "split"}
+                  >
+                    Split DNS
+                  </option>
+                  <option
+                    value="global"
+                    selected={(@config.tailscale_dns_mode || "split") == "global"}
+                  >
+                    Global DNS
+                  </option>
+                </select>
+              </form>
             <% end %>
           <% end %>
 

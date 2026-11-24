@@ -342,7 +342,12 @@ defmodule HermitWeb.DnsEndpointLive do
   end
 
   @impl true
-  def handle_event("toggle_tailscale_dns_mode", %{"id" => id_str}, socket) do
+  def handle_event(
+        "select_tailscale_dns_mode",
+        %{"endpoint_id" => id_str, "tailscale_dns_mode" => new_mode},
+        socket
+      )
+      when new_mode in ["split", "global"] do
     endpoint_id = String.to_integer(id_str)
     {status, _, _} = DnsWorker.get_status(endpoint_id)
 
@@ -352,37 +357,42 @@ defmodule HermitWeb.DnsEndpointLive do
     else
       config = DnsConfig.get_for_endpoint(endpoint_id)
       current_mode = config.tailscale_dns_mode || "split"
-      new_mode = if current_mode == "split", do: "global", else: "split"
 
-      case DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_dns_mode: new_mode}) do
-        {:ok, _} ->
-          DnsWorker.sync_state(endpoint_id)
+      if new_mode == current_mode do
+        {:noreply, socket}
+      else
+        case DnsConfig.update_for_endpoint(endpoint_id, %{tailscale_dns_mode: new_mode}) do
+          {:ok, _} ->
+            DnsWorker.sync_state(endpoint_id)
 
-          flash_msg =
-            cond do
-              new_mode == "global" ->
-                "Switched to Global DNS mode (all traffic via Hermit with full logs). Syncing with Tailscale..."
+            flash_msg =
+              cond do
+                new_mode == "global" ->
+                  "Switched to Global DNS mode (all traffic via Hermit with full logs). Syncing with Tailscale..."
 
-              match?(
-                {:fallback_global, _},
-                Hermit.Dns.Providers.tailscale_global_resolvers(config.upstream_dns)
-              ) ->
-                "Split DNS mode saved, but your custom DoH upstream automatically falls back to Global DNS on Tailscale."
+                match?(
+                  {:fallback_global, _},
+                  Hermit.Dns.Providers.tailscale_global_resolvers(config.upstream_dns)
+                ) ->
+                  "Split DNS mode saved, but your custom DoH upstream automatically falls back to Global DNS on Tailscale."
 
-              true ->
-                "Switched to Split DNS mode (direct upstream + Hermit Smart DNS). Syncing with Tailscale..."
-            end
+                true ->
+                  "Switched to Split DNS mode (direct upstream + Hermit Smart DNS). Syncing with Tailscale..."
+              end
 
-          {:noreply,
-           socket
-           |> put_flash(:info, flash_msg)
-           |> assign(endpoints: get_endpoints())}
+            {:noreply,
+             socket
+             |> put_flash(:info, flash_msg)
+             |> assign(endpoints: get_endpoints())}
 
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to switch Tailscale DNS mode.")}
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Failed to switch Tailscale DNS mode.")}
+        end
       end
     end
   end
+
+  def handle_event("select_tailscale_dns_mode", _params, socket), do: {:noreply, socket}
 
   @impl true
   def handle_event(

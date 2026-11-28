@@ -38,8 +38,16 @@
         <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
           Total Rules
         </div>
-        <div class="text-xl font-bold font-mono text-base-content mt-0.5">
-          {length(all_rules)}
+        <div class="flex items-baseline gap-2 mt-0.5">
+          <div class="text-xl font-bold font-mono text-base-content">
+            {length(all_rules)}
+          </div>
+          <% disabled_count = count_action(all_rules, "disabled") %>
+          <%= if disabled_count > 0 do %>
+            <span class="text-[10px] font-mono text-base-content/50">
+              {count_enabled(all_rules)} active · {disabled_count} off
+            </span>
+          <% end %>
         </div>
       </div>
       <div class="size-8 rounded-[6px] bg-base-200 text-base-content/60 flex items-center justify-center">
@@ -120,7 +128,8 @@
           {"block", "Blocked", "block"},
           {"bypass", "Bypass", "bypass"},
           {"redirect", "Redirect IP", "redirect"},
-          {"forward_dns", "Forward DNS", "forward_dns"}
+          {"forward_dns", "Forward DNS", "forward_dns"},
+          {"disabled", "Disabled", "disabled"}
         ] do %>
           <% count = count_action(all_rules, action_name) %>
           <button
@@ -317,8 +326,21 @@
                 <td class="py-3 px-4 font-mono text-xs">
                   <%= case action do %>
                     <% "route_tunnel" -> %>
-                      <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <span class="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <div class={[
+                        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] border font-semibold",
+                        if(enabled,
+                          do:
+                            "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+                          else: "bg-base-200 border-base-300 text-base-content/50"
+                        )
+                      ]}>
+                        <span class={[
+                          "size-1.5 rounded-full",
+                          if(enabled,
+                            do: "bg-emerald-500 animate-pulse",
+                            else: "bg-base-content/30"
+                          )
+                        ]} />
                         <span>{value}</span>
                       </div>
                     <% "redirect" -> %>

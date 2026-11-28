@@ -173,7 +173,7 @@ defmodule HermitWeb.DnsRulesLive do
       Enum.map_reduce(existing_rules, nil, fn rule, acc ->
         if (rule["domain"] || rule[:domain]) == domain do
           next_state = not DnsConfig.rule_enabled?(rule)
-          {Map.put(rule, "enabled", next_state), next_state}
+          {put_rule_enabled(rule, next_state), next_state}
         else
           {rule, acc}
         end
@@ -262,15 +262,28 @@ defmodule HermitWeb.DnsRulesLive do
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # Helpers
+  defp put_rule_enabled(rule, enabled) when is_map(rule) do
+    if Map.has_key?(rule, :domain) and not Map.has_key?(rule, "domain") do
+      Map.put(rule, :enabled, enabled)
+    else
+      Map.put(rule, "enabled", enabled)
+    end
+  end
+
   def filter_rules(rules, filter_action, query) do
     rules = rules || []
 
-    # 1. Action filter
+    # 1. Action / Status filter
     rules =
-      if filter_action == "all" do
-        rules
-      else
-        Enum.filter(rules, fn r -> (r["action"] || r[:action]) == filter_action end)
+      case filter_action do
+        "all" ->
+          rules
+
+        "disabled" ->
+          Enum.filter(rules, &(not DnsConfig.rule_enabled?(&1)))
+
+        action ->
+          Enum.filter(rules, fn r -> (r["action"] || r[:action]) == action end)
       end
 
     # 2. Text query filter
@@ -289,8 +302,16 @@ defmodule HermitWeb.DnsRulesLive do
 
   def count_action(rules, "all"), do: length(rules || [])
 
+  def count_action(rules, "disabled") do
+    Enum.count(rules || [], &(not DnsConfig.rule_enabled?(&1)))
+  end
+
   def count_action(rules, action) do
     Enum.count(rules || [], fn r -> (r["action"] || r[:action]) == action end)
+  end
+
+  def count_enabled(rules) do
+    Enum.count(rules || [], &DnsConfig.rule_enabled?/1)
   end
 
   def format_tunnel_label(pair) do

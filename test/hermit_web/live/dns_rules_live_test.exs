@@ -49,7 +49,7 @@ defmodule HermitWeb.DnsRulesLiveTest do
     assert updated_html =~ "internal.corp"
     assert updated_html =~ "Route Tunnel"
     assert updated_html =~ "wg_sg"
-    refute updated_html =~ "Disabled"
+    refute has_element?(view, "tbody span", "Disabled")
 
     # Disable rule via toggle without deleting it
     view
@@ -59,16 +59,42 @@ defmodule HermitWeb.DnsRulesLiveTest do
     assert :nomatch = SniProxy.match("api.internal.corp")
     disabled_html = render(view)
     assert disabled_html =~ "internal.corp"
-    assert disabled_html =~ "Disabled"
+    assert has_element?(view, "tbody span", "Disabled")
+    assert disabled_html =~ "0 active · 1 off"
+    refute disabled_html =~ "animate-pulse"
 
-    # Re-enable rule via toggle
+    # Disabled filter tab shows the disabled rule
+    view
+    |> element("button[phx-click='filter_action'][phx-value-action='disabled']")
+    |> render_click()
+
+    assert render(view) =~ "internal.corp"
+
+    # Reset back to All Rules and re-enable rule via toggle
+    view
+    |> element("button[phx-click='filter_action'][phx-value-action='all']", "All Rules")
+    |> render_click()
+
     view
     |> element("input[phx-click='toggle_custom_rule'][phx-value-domain='*.internal.corp']")
     |> render_click()
 
     assert {:ok, "wg_sg"} = SniProxy.match("api.internal.corp")
     assert {:ok, "wg_sg"} = SniProxy.match("internal.corp")
-    refute render(view) =~ "Disabled"
+    enabled_html = render(view)
+    assert enabled_html =~ "animate-pulse"
+    refute enabled_html =~ "0 active · 1 off"
+
+    # Disabled filter tab now shows empty state
+    view
+    |> element("button[phx-click='filter_action'][phx-value-action='disabled']")
+    |> render_click()
+
+    assert render(view) =~ "No rules match your search or filter"
+
+    view
+    |> element("button[phx-click='filter_action'][phx-value-action='all']", "All Rules")
+    |> render_click()
 
     # Delete rule
     view

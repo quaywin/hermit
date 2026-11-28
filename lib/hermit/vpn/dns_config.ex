@@ -163,18 +163,41 @@ defmodule Hermit.Vpn.DnsConfig do
 
   defp valid_service_entry?(_), do: false
 
+  @doc """
+  Returns true if a custom domain rule is enabled.
+  Rules without an explicit `"enabled"` / `:enabled` flag default to `true`.
+  """
+  def rule_enabled?(rule) when is_map(rule) do
+    enabled =
+      case Map.fetch(rule, "enabled") do
+        {:ok, val} -> val
+        :error -> Map.get(rule, :enabled, true)
+      end
+
+    enabled != false
+  end
+
+  def rule_enabled?(_), do: false
+
   defp valid_rule?(rule) when is_map(rule) do
     domain = Map.get(rule, "domain") || Map.get(rule, :domain)
     action = Map.get(rule, "action") || Map.get(rule, :action)
     proxy_pair_id = Map.get(rule, "proxy_pair_id") || Map.get(rule, :proxy_pair_id)
+
+    enabled =
+      case Map.fetch(rule, "enabled") do
+        {:ok, val} -> val
+        :error -> Map.get(rule, :enabled, true)
+      end
 
     action_valid? =
       action in ["block", "bypass", "redirect", "forward_proxy", "forward_dns", "route_tunnel"]
 
     domain_valid? = is_binary(domain) and domain != ""
     proxy_valid? = is_nil(proxy_pair_id) or is_binary(proxy_pair_id)
+    enabled_valid? = is_boolean(enabled) or is_nil(enabled)
 
-    action_valid? and domain_valid? and proxy_valid?
+    action_valid? and domain_valid? and proxy_valid? and enabled_valid?
   end
 
   defp valid_rule?(_), do: false

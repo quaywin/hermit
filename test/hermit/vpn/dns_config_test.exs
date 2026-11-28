@@ -32,6 +32,31 @@ defmodule Hermit.Vpn.DnsConfigTest do
     invalid_changeset = DnsConfig.changeset(%DnsConfig{}, invalid_attrs)
     refute invalid_changeset.valid?
     assert "contains invalid service configurations" in errors_on(invalid_changeset).services
+
+    invalid_rule_attrs = %{
+      name: "Bad Rule Enabled Flag",
+      upstream_dns: "1.1.1.1",
+      custom_rules: [
+        %{"domain" => "example.com", "action" => "block", "enabled" => "yes"}
+      ]
+    }
+
+    invalid_rule_changeset = DnsConfig.changeset(%DnsConfig{}, invalid_rule_attrs)
+    refute invalid_rule_changeset.valid?
+    assert "contains invalid custom rules" in errors_on(invalid_rule_changeset).custom_rules
+  end
+
+  test "rule_enabled?/1 defaults to true and respects explicit false" do
+    assert DnsConfig.rule_enabled?(%{"domain" => "a.com", "action" => "block"})
+    assert DnsConfig.rule_enabled?(%{"domain" => "a.com", "action" => "block", "enabled" => true})
+
+    refute DnsConfig.rule_enabled?(%{
+             "domain" => "a.com",
+             "action" => "block",
+             "enabled" => false
+           })
+
+    refute DnsConfig.rule_enabled?(%{domain: "a.com", action: "block", enabled: false})
   end
 
   defp errors_on(changeset) do

@@ -49,6 +49,26 @@ defmodule HermitWeb.DnsRulesLiveTest do
     assert updated_html =~ "internal.corp"
     assert updated_html =~ "Route Tunnel"
     assert updated_html =~ "wg_sg"
+    refute updated_html =~ "Disabled"
+
+    # Disable rule via toggle without deleting it
+    view
+    |> element("input[phx-click='toggle_custom_rule'][phx-value-domain='*.internal.corp']")
+    |> render_click()
+
+    assert :nomatch = SniProxy.match("api.internal.corp")
+    disabled_html = render(view)
+    assert disabled_html =~ "internal.corp"
+    assert disabled_html =~ "Disabled"
+
+    # Re-enable rule via toggle
+    view
+    |> element("input[phx-click='toggle_custom_rule'][phx-value-domain='*.internal.corp']")
+    |> render_click()
+
+    assert {:ok, "wg_sg"} = SniProxy.match("api.internal.corp")
+    assert {:ok, "wg_sg"} = SniProxy.match("internal.corp")
+    refute render(view) =~ "Disabled"
 
     # Delete rule
     view

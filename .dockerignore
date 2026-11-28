@@ -1,0 +1,32 @@
+# Exclude non-runtime files from Docker build context
+.dockerignore
+.git
+.github
+.env
+PROMPT.md
+
+# Mix / Elixir build artifacts & tests
+/_build/
+/deps/
+/cover/
+/doc/
+/test/
+/tmp/
+.elixir_ls
+.playwright-mcp
+*.ez
+erl_crash.dump
+hermit-*.tar
+hermit-*.tar.gz
+scratch_*.exs
+
+# Static assets (rebuilt inside builder stage)
+/assets/node_modules/
+/priv/static/assets/
+/priv/static/cache_manifest.json
+
+# Local state, databases, certificates, and Fly config
+/storage/
+config/certs/*.key
+*.key
+fly.toml

@@ -508,7 +508,8 @@ defmodule HermitWeb.DnsProfileLive do
               "domain" => d,
               "action" => action,
               "value" => value,
-              "proxy_pair_id" => proxy_pair_id
+              "proxy_pair_id" => proxy_pair_id,
+              "enabled" => true
             }
           end)
 

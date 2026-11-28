@@ -135,7 +135,8 @@ defmodule HermitWeb.DnsRulesLive do
               "domain" => d,
               "action" => action,
               "value" => if(action in ["block", "bypass"], do: nil, else: value),
-              "proxy_pair_id" => if(action == "forward_dns", do: proxy_pair_id, else: nil)
+              "proxy_pair_id" => if(action == "forward_dns", do: proxy_pair_id, else: nil),
+              "enabled" => true
             }
           end)
 
@@ -160,6 +161,44 @@ defmodule HermitWeb.DnsRulesLive do
                "Failed to save rule: #{inspect(changeset.errors)}"
              )}
         end
+    end
+  end
+
+  @impl true
+  def handle_event("toggle_custom_rule", %{"domain" => domain}, socket) do
+    config = socket.assigns.config
+    existing_rules = config.custom_rules || []
+
+    {updated_rules, new_enabled} =
+      Enum.map_reduce(existing_rules, nil, fn rule, acc ->
+        if (rule["domain"] || rule[:domain]) == domain do
+          next_state = not DnsConfig.rule_enabled?(rule)
+          {Map.put(rule, "enabled", next_state), next_state}
+        else
+          {rule, acc}
+        end
+      end)
+
+    if is_nil(new_enabled) do
+      {:noreply, put_flash(socket, :error, "Rule for #{domain} not found.")}
+    else
+      case DnsConfig.update_global_rules(updated_rules) do
+        {:ok, updated_config} ->
+          status_label = if new_enabled, do: "enabled", else: "disabled"
+
+          {:noreply,
+           socket
+           |> assign(config: updated_config)
+           |> put_flash(:info, "Rule for #{domain} #{status_label}.")}
+
+        {:error, changeset} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "Failed to update rule: #{inspect(changeset.errors)}"
+           )}
+      end
     end
   end
 

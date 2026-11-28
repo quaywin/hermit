@@ -183,7 +183,7 @@
             <th class="py-3.5 px-4 min-w-[100px]">Pattern Type</th>
             <th class="py-3.5 px-4 min-w-[140px]">Action</th>
             <th class="py-3.5 px-4 min-w-[220px]">Destination / Target</th>
-            <th class="py-3.5 px-4 text-right w-20">Actions</th>
+            <th class="py-3.5 px-4 text-right w-28">Actions</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300/50">
@@ -228,16 +228,25 @@
               <% domain = rule["domain"] || rule[:domain] %>
               <% value = rule["value"] || rule[:value] %>
               <% proxy_pair = rule["proxy_pair_id"] || rule[:proxy_pair_id] %>
+              <% enabled = Hermit.Vpn.DnsConfig.rule_enabled?(rule) %>
               <% is_wildcard = String.starts_with?(to_string(domain), "*.") %>
-              <tr class="hover:bg-base-200/40 transition-colors">
+              <tr class={[
+                "hover:bg-base-200/40 transition-colors",
+                !enabled && "opacity-55"
+              ]}>
                 <!-- Domain Pattern -->
                 <td class="py-3 px-4 font-mono font-medium text-base-content">
-                  <div class="flex items-center gap-1.5">
+                  <div class="flex items-center gap-1.5 flex-wrap">
                     <%= if is_wildcard do %>
                       <span class="text-purple-400 font-bold">*.</span>
                       <span>{String.slice(to_string(domain), 2..-1//1)}</span>
                     <% else %>
                       <span>{domain}</span>
+                    <% end %>
+                    <%= if !enabled do %>
+                      <span class="px-1.5 py-0.5 rounded-[4px] text-[10px] font-semibold font-sans uppercase tracking-wider bg-base-200 text-base-content/60 border border-base-300">
+                        Disabled
+                      </span>
                     <% end %>
                   </div>
                 </td>
@@ -340,16 +349,27 @@
 
                 <!-- Actions -->
                 <td class="py-3 px-4 text-right">
-                  <button
-                    type="button"
-                    phx-click="delete_custom_rule"
-                    phx-value-domain={domain}
-                    data-confirm={"Are you sure you want to delete rule for #{domain}?"}
-                    class="p-1.5 rounded-[6px] text-base-content/40 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
-                    title="Delete Rule"
-                  >
-                    <.icon name="hero-trash" class="size-4" />
-                  </button>
+                  <div class="inline-flex items-center justify-end gap-2">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      phx-click="toggle_custom_rule"
+                      phx-value-domain={domain}
+                      class="toggle toggle-xs toggle-success cursor-pointer"
+                      title={if enabled, do: "Disable Rule", else: "Enable Rule"}
+                      aria-label={"Toggle rule for #{domain}"}
+                    />
+                    <button
+                      type="button"
+                      phx-click="delete_custom_rule"
+                      phx-value-domain={domain}
+                      data-confirm={"Are you sure you want to delete rule for #{domain}?"}
+                      class="p-1.5 rounded-[6px] text-base-content/40 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+                      title="Delete Rule"
+                    >
+                      <.icon name="hero-trash" class="size-4" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             <% end %>

@@ -1069,7 +1069,8 @@ defmodule Hermit.Vpn.DnsWorker do
             action = is_map(rule) && (Map.get(rule, "action") || Map.get(rule, :action))
             domain = is_map(rule) && (Map.get(rule, "domain") || Map.get(rule, :domain))
 
-            if action in @split_rule_actions and is_binary(domain) do
+            if Hermit.Vpn.DnsConfig.rule_enabled?(rule) and action in @split_rule_actions and
+                 is_binary(domain) do
               String.split(domain, [",", "\n", "\r", " "], trim: true)
             else
               []

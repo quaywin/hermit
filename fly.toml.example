@@ -1,0 +1,58 @@
+# Optional Fly.io configuration template for Hermit.
+# Copy to `fly.toml` before deploying (`fly.toml` is gitignored):
+#   cp fly.toml.example fly.toml
+
+app = 'your-hermit-app'
+primary_region = 'sin'
+
+[build]
+  dockerfile = 'Dockerfile.fly'
+
+[vm]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[swap]
+  size_mb = 512
+
+[env]
+  MIX_ENV = 'prod'
+  PORT = '3000'
+  STORAGE_BASE_PATH = '/var/lib/hermit'
+  ERL_AFLAGS = '+S 1:1'
+  ERL_CRASH_DUMP_SECONDS = '0'
+  GOMEMLIMIT = '32MiB'
+  GOGC = '50'
+  POOL_SIZE = '2'
+
+[[mounts]]
+  source = 'hermit_data'
+  destination = '/var/lib/hermit'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 800
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'get'
+    path = '/up'
+
+# Note on Tailscale Direct P2P:
+# Hermit uses port-preserving SNAT (41642-41700) combined with Fly.io's endpoint-independent
+# egress NAT, so Tailscale negotiates direct UDP P2P via STUN/hole-punching automatically
+# without Dedicated IPv4 or [[services]] UDP blocks (falling back to DERP relays only if
+# the client itself is behind strict/symmetric Hard NAT).
+

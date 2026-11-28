@@ -1,0 +1,107 @@
+# Optional Fly.io container build for Hermit.
+# Native Linux + systemd (install.sh) remains the primary deployment target.
+
+ARG ELIXIR_VERSION=1.20.4
+ARG OTP_VERSION=28.5.0.8
+ARG DEBIAN_VERSION=trixie-20261005-slim
+
+ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
+ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
+
+# ==========================================
+# Production Builder Stage
+# ==========================================
+FROM ${BUILDER_IMAGE} AS builder
+
+ARG TAILSCALE_VERSION=1.98.4
+ARG THREEPROXY_VERSION=1.0.3
+ARG HERMIT_VERSION=""
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends build-essential curl tar ca-certificates \
+  && ARCH=$(dpkg --print-architecture) \
+  && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz" -o /tmp/tailscale.tgz \
+  && tar -xzf /tmp/tailscale.tgz -C /tmp \
+  && install -m 0755 "/tmp/tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscale" /usr/local/bin/tailscale \
+  && install -m 0755 "/tmp/tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscaled" /usr/local/bin/tailscaled \
+  && rm -rf /tmp/tailscale* \
+  && case "${ARCH}" in \
+       amd64) THREEPROXY_ARCH="x86_64" ;; \
+       arm64) THREEPROXY_ARCH="arm64" ;; \
+       *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://github.com/3proxy/3proxy/releases/download/${THREEPROXY_VERSION}/3proxy-${THREEPROXY_VERSION}.${THREEPROXY_ARCH}.deb" -o /tmp/3proxy.deb \
+  && dpkg-deb -x /tmp/3proxy.deb /tmp/3proxy_extracted \
+  && THREEPROXY_BIN=$(find /tmp/3proxy_extracted -type f \( -path "*/bin/3proxy" -o -path "*/sbin/3proxy" \) | head -n1) \
+  && test -n "${THREEPROXY_BIN}" \
+  && install -m 0755 "${THREEPROXY_BIN}" /usr/local/bin/3proxy \
+  && rm -rf /tmp/3proxy.deb /tmp/3proxy_extracted
+
+WORKDIR /app
+
+RUN mix local.hex --force \
+  && mix local.rebar --force
+
+ENV MIX_ENV="prod"
+ENV HERMIT_VERSION="${HERMIT_VERSION}"
+
+COPY mix.exs mix.lock ./
+RUN mix deps.get --only $MIX_ENV
+RUN mkdir config
+
+COPY config/config.exs config/${MIX_ENV}.exs config/
+RUN mix deps.compile
+
+RUN mix assets.setup
+
+COPY priv priv
+COPY lib lib
+RUN mix compile
+
+COPY assets assets
+RUN mix assets.deploy
+
+COPY config/runtime.exs config/
+COPY rel rel
+RUN mix release --overwrite && cp -r _build/${MIX_ENV}/rel/hermit /app/hermit_release
+
+# ==========================================
+# Production Runner Stage
+# ==========================================
+FROM ${RUNNER_IMAGE} AS final
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+     libstdc++6 openssl libncurses6 locales ca-certificates \
+     iproute2 iptables nftables wireguard-tools curl procps \
+     ethtool iputils-ping dnsutils \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=builder /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=builder /usr/local/bin/3proxy /usr/local/bin/3proxy
+
+RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+  && locale-gen
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
+
+RUN mkdir -p /var/lib/hermit
+
+WORKDIR /app
+
+ENV MIX_ENV="prod" \
+    PHX_SERVER="true" \
+    PORT="3000" \
+    STORAGE_BASE_PATH="/var/lib/hermit" \
+    ERL_AFLAGS="+S 1:1" \
+    ERL_CRASH_DUMP_SECONDS="0" \
+    GOMEMLIMIT="32MiB" \
+    GOGC="50" \
+    POOL_SIZE="2"
+
+COPY --from=builder /app/hermit_release ./
+
+CMD ["/app/bin/server"]

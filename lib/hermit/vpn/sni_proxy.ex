@@ -190,7 +190,8 @@ defmodule Hermit.Vpn.SniProxy do
                 action = Map.get(rule, "action") || Map.get(rule, :action)
                 domain = Map.get(rule, "domain") || Map.get(rule, :domain)
 
-                if is_binary(domain) and String.trim(domain) != "" do
+                if Hermit.Vpn.DnsConfig.rule_enabled?(rule) and is_binary(domain) and
+                     String.trim(domain) != "" do
                   domain_items =
                     domain
                     |> String.split([",", "\n", "\r", " "], trim: true)

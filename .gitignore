@@ -50,3 +50,6 @@ npm-debug.log
 config/certs/*.key
 *.key
 scratch_*.exs
+
+# Local Fly.io app configuration (copied from fly.toml.example)
+fly.toml

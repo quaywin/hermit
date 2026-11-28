@@ -1,4 +1,8 @@
-# Deploying Hermit on Fly.io
+# Deploying Hermit on Fly.io (Optional / Auxiliary)
+
+> [!NOTE]
+> Hermit's primary deployment method is **Native Linux + `systemd`** via `install.sh`.
+> Fly.io support is provided as an **auxiliary option** using `Dockerfile.fly` and `fly.toml.example` and does not affect native Linux installations.
 
 This guide provides step-by-step instructions for deploying Hermit to **Fly.io** using Firecracker MicroVMs.
 
@@ -18,65 +22,61 @@ This guide provides step-by-step instructions for deploying Hermit to **Fly.io**
 
 ## Step-by-Step Deployment
 
-### 1. Launch the Application
+### 1. Prepare `fly.toml` & Register the App
 
-From the root directory of the Hermit repository, initialize your Fly app:
+Copy the template (`fly.toml` is gitignored so your personal app settings stay out of git):
 
 ```bash
-fly launch --no-deploy
+cp fly.toml.example fly.toml
 ```
 
-This command will register your app name and generate/verify the `fly.toml` configuration.
+Edit `fly.toml` and replace `app = 'your-hermit-app'` (and `primary_region = 'sin'` if desired) with your unique Fly.io app name, then initialize the app without deploying yet:
+
+```bash
+fly launch --no-deploy --copy-config --dockerfile Dockerfile.fly
+```
 
 ### 2. Create a Persistent Storage Volume
 
-Hermit uses SQLite (`hermit_prod.db`) and persistent secrets located at `/app/storage`. Because Fly.io containers are ephemeral by default, you **must create a persistent volume**:
+Hermit stores its SQLite database (`hermit_prod.db`), WireGuard/WARP configs, Tailscale state, and generated `.secret_key_base` under `/var/lib/hermit`. Because Fly.io containers are ephemeral by default, create a persistent volume in the same region as `primary_region`:
 
 ```bash
 fly volumes create hermit_data --size 1 --region sin
 ```
 
 > [!NOTE]
-> Make sure the region (e.g. `hkg`, `sin`, `nrt`, `iad`) matches the `primary_region` specified in your `fly.toml`.
+> Make sure the volume region (e.g. `hkg`, `sin`, `nrt`, `iad`) matches `primary_region` in `fly.toml`.
 
 ### 3. Configure Secrets & Environment Variables
 
-Set a strong `SECRET_KEY_BASE` and set `PHX_HOST` to your app's Fly domain:
+Set `PHX_HOST` to your Fly domain and generate a `SECRET_KEY_BASE`:
 
 ```bash
-# Set your application host domain
-fly secrets set PHX_HOST="your-app-name.fly.dev"
-
-# Generate and set a secure Secret Key Base
-fly secrets set SECRET_KEY_BASE=$(openssl rand -base64 48)
+fly secrets set PHX_HOST="your-hermit-app.fly.dev"
+fly secrets set SECRET_KEY_BASE="$(openssl rand -base64 48)"
 ```
 
-*(Optional)* If you wish to protect the web dashboard with HTTP Basic Authentication, set the following secrets:
+*(Recommended)* Protect the web dashboard with HTTP Basic Authentication:
 
 ```bash
 fly secrets set HERMIT_BASIC_AUTH_USER="admin" HERMIT_BASIC_AUTH_PASS="your_secure_password"
 ```
 
-### 4. Scale Memory Resources & Auto-Swap
+### 4. Deploy to Fly.io
 
-Hermit is optimized to run on **512MB RAM** paired with an automated **512MB Swap space** (creating a 1GB combined virtual memory pool for $0/month):
-
-```bash
-fly scale memory 512
-```
-
-> [!TIP]
-> The server entrypoint script automatically initializes and mounts a 512MB `/swapfile` inside the container if RAM pressure increases, protecting the process from Out-Of-Memory (OOM) termination.
-
-### 5. Deploy to Fly.io
-
-Deploy the app to Fly.io:
+Deploy using `Dockerfile.fly` (referenced automatically by `fly.toml`):
 
 ```bash
 fly deploy
 ```
 
-Once deployment completes, open your application in the browser:
+*(Optional)* Pass the current git tag so the dashboard displays the exact release version instead of the fallback version:
+
+```bash
+fly deploy --build-arg HERMIT_VERSION="$(git describe --tags --abbrev=0)"
+```
+
+Once deployment completes, open the web UI:
 
 ```bash
 fly open
@@ -100,11 +100,19 @@ fly open
   ip netns list
   free -m
   ```
+- **Upgrading**:
+  Pull the latest code and re-run `fly deploy`.
 
 ---
 
-## Important Architectural Notes for Fly.io
+## Architectural Notes & Limitations on Fly.io
 
-- **Firecracker MicroVM Privileges**: Fly.io runs containers inside isolated microVMs with full root privileges and kernel access (`CAP_NET_ADMIN`), enabling `ip netns`, `wireguard-tools`, `tailscale`, and `nftables` without requiring Sysbox or Docker-in-Docker setups.
-- **Dedicated Unauthenticated Health Check Endpoint (`/up`)**: A lightweight `/up` health check route bypasses Basic Authentication to ensure smooth, zero-downtime rolling deployments on Fly.io when `HERMIT_BASIC_AUTH_USER` is configured.
-- **DoH / HTTPS Endpoints**: The Phoenix HTTP server runs on port `8080` internally, while `fly-proxy` handles public TLS termination on port `443`. Secure DoH URLs (`/dns-query/:token`) work natively over Fly.io HTTPS endpoints.
+- **Firecracker MicroVM Privileges**: Fly.io runs containers inside isolated microVMs with root privileges and `CAP_NET_ADMIN`, enabling `ip netns`, `nftables`, `tailscaled`, `3proxy`, and `wireguard-tools` without Sysbox or Docker-in-Docker. *(Kernel WireGuard depends on `ip link add ... type wireguard` support in the Fly.io VM kernel; verify tunnel startup in `fly logs` after your first deploy.)*
+- **Port Isolation (`3000` vs `8080`/`8443`)**: The Phoenix Web Dashboard listens on internal port `3000` (`PORT=3000`) so it never conflicts with Hermit's internal SNI Proxy (`8080`/`8443`), while `fly-proxy` terminates public HTTPS on port `443`.
+- **Unauthenticated Health Check (`/up`)**: `GET /up` bypasses Basic Auth so Fly.io HTTP checks succeed when `HERMIT_BASIC_AUTH_USER` is configured.
+- **Always-On Machine (`auto_stop_machines = 'off'`)**: `fly.toml.example` disables auto-stop so active Tailscale nodes, DNS endpoints, and WireGuard tunnels stay connected 24/7.
+- **512MB RAM + 512MB Swap**: `fly.toml.example` configures 512MB RAM + 512MB swap, and `bin/server` automatically activates `/swapfile` when `FLY_APP_NAME` is present if swap is not already active.
+- **Tailscale DNS Endpoints**: DNS filtering and Smart DNS operate inside isolated Tailscale DNS Endpoint namespaces (`100.x.y.z`); legacy public Port 53 and `/dns-query/:token` DoH endpoints are no longer used.
+- **1-Click Web Upgrade Unavailable**: Because containers do not run `/opt/hermit/releases` or `systemd`, the 1-Click Web Upgrade button in Settings (`/settings`) and the `hermit` CLI are unavailable on Fly.io — deploy updates via `fly deploy`.
+- **Tailscale Direct P2P vs. DERP Relay**: Hermit allocates UDP ports in `41642–41700` per Tailscale node and configures port-preserving SNAT + policy routing (`Hermit.Vpn.Nat`). Combined with Fly.io's endpoint-independent egress NAT, Tailscale can establish **direct UDP P2P** connections via STUN hole-punching without Dedicated IPv4 or `[[services]]` UDP blocks when the client is on an easy/cone NAT network. If the client is behind strict/symmetric Hard NAT (e.g., certain 4G/5G CGNAT networks), Tailscale automatically falls back to encrypted DERP relays (you can verify via `tailscale ping <node>`).
+- **Proxy Inbound Ports (`10000–29999`)**: Proxy Inbound listeners bind dynamically allocated TCP ports (`10000–29999`) unless a fixed port is configured; access them over Tailscale / Fly private networking, or assign a fixed port and expose an explicit TCP `[[services]]` block in `fly.toml` if public access is needed.

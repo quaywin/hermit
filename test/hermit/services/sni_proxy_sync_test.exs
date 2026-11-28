@@ -153,4 +153,54 @@ defmodule Hermit.Services.SniProxySyncTest do
     assert {"route_tunnel", "wg_uk", _} = Rules.match("bbc.co.uk", rules_map)
     assert {"route_tunnel", "wg_uk", _} = Rules.match("www.bbc.co.uk", rules_map)
   end
+
+  test "disabled custom domain rules are ignored by Rules.precompile and SniProxy.sync_all_routes" do
+    _profile =
+      %DnsConfig{}
+      |> DnsConfig.changeset(%{
+        name: "Disabled Override Profile",
+        upstream_dns: "1.1.1.1",
+        services: %{
+          "netflix" => %{"action" => "route_tunnel", "pair_id" => "wg_us"}
+        },
+        custom_rules: [
+          %{
+            "domain" => "*.netflix.com",
+            "action" => "route_tunnel",
+            "value" => "wg_uk",
+            "enabled" => false
+          },
+          %{
+            "domain" => "blocked.example.com",
+            "action" => "block",
+            "value" => nil,
+            "enabled" => false
+          },
+          %{
+            "domain" => "active.example.com",
+            "action" => "block",
+            "value" => nil,
+            "enabled" => true
+          }
+        ]
+      })
+      |> Hermit.Repo.insert!()
+
+    on_exit(fn ->
+      SniProxy.unregister_pair("wg_us")
+      SniProxy.unregister_pair("wg_uk")
+    end)
+
+    SniProxy.sync_all_routes()
+
+    # Disabled override does not replace service preset in SniProxy
+    assert {:ok, "wg_us"} = SniProxy.match("www.netflix.com")
+    refute SniProxy.has_routes?("wg_uk")
+
+    # Disabled rules are omitted from precompiled DNS rules while active ones remain
+    compiled = Rules.precompile(Hermit.Repo.get_by!(DnsConfig, name: "Disabled Override Profile"))
+    assert {"route_tunnel", "wg_us", nil} = Rules.match("www.netflix.com", compiled)
+    assert {nil, nil, nil} = Rules.match("blocked.example.com", compiled)
+    assert {"block", nil, nil} = Rules.match("active.example.com", compiled)
+  end
 end
